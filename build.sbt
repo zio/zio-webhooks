@@ -3,7 +3,7 @@ import BuildHelper._
 inThisBuild(
   List(
     organization := "dev.zio",
-    homepage := Some(url("https://zio.github.io/zio-actors/")),
+    homepage := Some(url("https://zio.github.io/zio-webhooks/")),
     licenses := List("Apache-2.0" -> url("http://www.apache.org/licenses/LICENSE-2.0")),
     developers := List(
       Developer(
@@ -23,7 +23,7 @@ inThisBuild(
     pgpPublicRing := file("/tmp/public.asc"),
     pgpSecretRing := file("/tmp/secret.asc"),
     scmInfo := Some(
-      ScmInfo(url("https://github.com/zio/zio-actors/"), "scm:git:git@github.com:zio/zio-actors.git")
+      ScmInfo(url("https://github.com/zio/zio-webhooks/"), "scm:git:git@github.com:zio/zio-webhooks.git")
     )
   )
 )
@@ -31,62 +31,30 @@ inThisBuild(
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
-val zioVersion            = "1.0.4"
-val zioNioVersion         = "1.0.0-RC9"
-val zioConfigVersion      = "1.0.0-RC30-1"
-val zioInteropCatsVersion = "2.4.1.0"
-val akkaActorTypedVersion = "2.6.14"
-val doobieVersion         = "0.13.1"
+val zioVersion = "1.0.4"
 
 lazy val root =
   project
     .in(file("."))
     .settings(skip in publish := true)
-    .aggregate(zioActors, zioActorsPersistence, zioActorsPersistenceJDBC, examples, zioActorsAkkaInterop)
+    .aggregate(zioWebhooks)
 
-lazy val zioActors = module("zio-actors", "actors")
+lazy val zioWebhooks = module("zio-webhooks", "webhooks")
   .enablePlugins(BuildInfoPlugin)
-  .settings(buildInfoSettings("zio.actors"))
+  .settings(buildInfoSettings("zio.webhooks"))
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio"       %% "zio"                 % zioVersion,
-      "dev.zio"       %% "zio-test"            % zioVersion % "test",
-      "dev.zio"       %% "zio-test-sbt"        % zioVersion % "test",
-      "dev.zio"       %% "zio-nio"             % zioNioVersion,
-      "dev.zio"       %% "zio-config-typesafe" % zioConfigVersion,
-      "org.scala-lang" % "scala-reflect"       % scalaVersion.value
-    ),
-    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
-  )
-  .settings(
-    stdSettings("zio-actors")
-  )
-
-lazy val zioActorsPersistence = module("zio-actors-persistence", "persistence")
-  .settings(
-    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio"          % zioVersion,
       "dev.zio" %% "zio-test"     % zioVersion % "test",
       "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioActors)
-
-lazy val zioActorsPersistenceJDBC = module("zio-actors-persistence-jdbc", "persistence-jdbc")
   .settings(
-    libraryDependencies ++= Seq(
-      "dev.zio"      %% "zio-test"         % zioVersion % "test",
-      "dev.zio"      %% "zio-test-sbt"     % zioVersion % "test",
-      "dev.zio"      %% "zio-interop-cats" % zioInteropCatsVersion,
-      "org.tpolecat" %% "doobie-core"      % doobieVersion,
-      "org.tpolecat" %% "doobie-hikari"    % doobieVersion,
-      "org.tpolecat" %% "doobie-postgres"  % doobieVersion
-    ),
-    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
+    stdSettings("zio-webhooks")
   )
-  .dependsOn(zioActorsPersistence)
 
-lazy val examples = module("zio-actors-examples", "examples")
+lazy val examples = module("zio-webhooks-examples", "examples")
   .settings(
     skip in publish := true,
     fork := true,
@@ -96,18 +64,7 @@ lazy val examples = module("zio-actors-examples", "examples")
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioActors, zioActorsPersistence, zioActorsPersistenceJDBC)
-
-lazy val zioActorsAkkaInterop = module("zio-actors-akka-interop", "akka-interop")
-  .settings(
-    libraryDependencies ++= Seq(
-      "dev.zio"           %% "zio-test"         % zioVersion % "test",
-      "dev.zio"           %% "zio-test-sbt"     % zioVersion % "test",
-      "com.typesafe.akka" %% "akka-actor-typed" % akkaActorTypedVersion
-    ),
-    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
-  )
-  .dependsOn(zioActors)
+  .dependsOn(zioWebhooks)
 
 def module(moduleName: String, fileName: String): Project =
   Project(moduleName, file(fileName))
@@ -119,10 +76,10 @@ def module(moduleName: String, fileName: String): Project =
     )
 
 lazy val docs = project
-  .in(file("zio-actors-docs"))
+  .in(file("zio-webhooks-docs"))
   .settings(
     skip.in(publish) := true,
-    moduleName := "zio-actors-docs",
+    moduleName := "zio-webhooks-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
     libraryDependencies ++= Seq(
@@ -134,5 +91,5 @@ lazy val docs = project
     docusaurusCreateSite := docusaurusCreateSite.dependsOn(unidoc in Compile).value,
     docusaurusPublishGhpages := docusaurusPublishGhpages.dependsOn(unidoc in Compile).value
   )
-  .dependsOn(zioActors, zioActorsPersistence, zioActorsAkkaInterop)
+  .dependsOn(zioWebhooks)
   .enablePlugins(MdocPlugin, DocusaurusPlugin, ScalaUnidocPlugin)
