@@ -31,12 +31,13 @@ inThisBuild(
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
-val zioVersion = "1.0.4"
+val zioVersion  = "1.0.4"
+val sttpVersion = "2.2.9"
 
 lazy val root =
   project
     .in(file("."))
-    .settings(skip in publish := true)
+    .settings(publish / skip := true)
     .aggregate(zioWebhooks)
 
 lazy val zioWebhooks = module("zio-webhooks", "webhooks")
@@ -44,9 +45,11 @@ lazy val zioWebhooks = module("zio-webhooks", "webhooks")
   .settings(buildInfoSettings("zio.webhooks"))
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio"          % zioVersion,
-      "dev.zio" %% "zio-test"     % zioVersion % "test",
-      "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
+      "dev.zio"                      %% "zio"                           % zioVersion,
+      "dev.zio"                      %% "zio-test"                      % zioVersion % "test",
+      "dev.zio"                      %% "zio-test-sbt"                  % zioVersion % "test",
+      "com.softwaremill.sttp.client" %% "core"                          % sttpVersion,
+      "com.softwaremill.sttp.client" %% "async-http-client-backend-zio" % sttpVersion
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
@@ -56,7 +59,7 @@ lazy val zioWebhooks = module("zio-webhooks", "webhooks")
 
 lazy val examples = module("zio-webhooks-examples", "examples")
   .settings(
-    skip in publish := true,
+    publish / skip := true,
     fork := true,
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-test"     % zioVersion % "test",
@@ -78,18 +81,18 @@ def module(moduleName: String, fileName: String): Project =
 lazy val docs = project
   .in(file("zio-webhooks-docs"))
   .settings(
-    skip.in(publish) := true,
+    publish / skip := true,
     moduleName := "zio-webhooks-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio" % zioVersion
     ),
-    unidocProjectFilter in (ScalaUnidoc, unidoc) := inProjects(root),
-    target in (ScalaUnidoc, unidoc) := (baseDirectory in LocalRootProject).value / "website" / "static" / "api",
-    cleanFiles += (target in (ScalaUnidoc, unidoc)).value,
-    docusaurusCreateSite := docusaurusCreateSite.dependsOn(unidoc in Compile).value,
-    docusaurusPublishGhpages := docusaurusPublishGhpages.dependsOn(unidoc in Compile).value
+    ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(root),
+    ScalaUnidoc / unidoc / target := (LocalRootProject / baseDirectory).value / "website" / "static" / "api",
+    cleanFiles += (ScalaUnidoc / unidoc / target).value,
+    docusaurusCreateSite := docusaurusCreateSite.dependsOn(Compile / unidoc).value,
+    docusaurusPublishGhpages := docusaurusPublishGhpages.dependsOn(Compile / unidoc).value
   )
   .dependsOn(zioWebhooks)
   .enablePlugins(MdocPlugin, DocusaurusPlugin, ScalaUnidocPlugin)
