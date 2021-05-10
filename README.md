@@ -5,7 +5,7 @@
 | ![CI][Badge-CI] | [![Release Artifacts][Badge-SonatypeReleases]][Link-SonatypeReleases] | [![Snapshot Artifacts][Badge-SonatypeSnapshots]][Link-SonatypeSnapshots] | [![Badge-Discord]][Link-Discord] |
 
 # Summary
-High-performance, purely-functional library for building, composing, and supervising typed webhooks based on ZIO.
+Microlibrary for reliable and persistent webhook delivery.
 
 # Documentation
 [ZIO Webhooks Microsite](https://zio.github.io/zio-webhooks/)
