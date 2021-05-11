@@ -21,12 +21,12 @@ const users = [
 ];
 
 const siteConfig = {
-  title: 'ZIO Actors',
-  tagline: 'High-performance, purely-functional library for building and supervising typed actors backed by ZIO',
+  title: 'ZIO Webhooks',
+  tagline: 'A microlibrary for reliable and persistent webhook delivery',
   url: 'https://zio.github.io',
-  baseUrl: '/zio-actors/', 
+  baseUrl: '/zio-webhooks/', 
 
-  projectName: 'zio-actors',
+  projectName: 'zio-webhooks',
   organizationName: 'zio',
 
   // For no header links in the top nav bar -> headerLinks: [],
@@ -102,11 +102,11 @@ const siteConfig = {
     cornerOffset: 100,
   },
 
-  customDocsPath: 'zio-actors-docs/target/mdoc',
+  customDocsPath: 'zio-webhooks-docs/target/mdoc',
 
   algolia: {
     apiKey: 'b7978c4d7d28a5a9181d2eea975b0e99',
-    indexName: 'zio-actors',
+    indexName: 'zio-webhooks',
     algoliaOptions: {} // Optional, if provided by Algolia
   },
 

@@ -65,7 +65,7 @@ class HomeSplash extends React.Component {
                     <PromoSection>
                         <Button href={docUrl('overview/overview_index')}>Overview</Button>
                         <Button href={docUrl('usecases/usecases_index')}>Use Cases</Button>
-                        <Button href="https://github.com/zio/zio-actors" target="_blank">GitHub</Button>
+                        <Button href="https://github.com/zio/zio-webhooks" target="_blank">GitHub</Button>
                     </PromoSection>
                 </div>
             </SplashContainer>
@@ -95,53 +95,13 @@ class Index extends React.Component {
             <div
                 className="productShowcaseSection paddingBottom"
                 style={{textAlign: 'center'}}>
-                <h2>Welcome to ZIO Actors</h2>
+                <h2>Welcome to ZIO Webhooks</h2>
                 <MarkdownBlock>
-                    A high-performance, purely-functional library for building, composing, and supervising typed actors
-                    backed by `ZIO`.
+                A microlibrary for reliable and persistent webhook delivery.
                 </MarkdownBlock>
 
                 <MarkdownBlock>
-                    The [Actor Model](https://en.wikipedia.org/wiki/Actor_model) is used to build distributed highly
-                    scalable applications.
-                    The core concept behind the actor model is the ability to create multiple actors which run
-                    concurrently.
-                    The actor would receive a message do some computation on the message and then output a new message.
-                    Each actor runs independently of each other with no shared state between them and as such failure of
-                    one actor won't have an affect on the running of another.
-                    In its simplest form the goal of this project is to provide the ability to write actors in
-                    Functional Way that are typed leveraging [ZIO](https://github.com/zio/zio).
-                </MarkdownBlock>
-
-                <h2>
-                    ZIO Actors current alternatives
-                </h2>
-
-                <MarkdownBlock>
-                    - [Akka](https://akka.io) (Scala & Java)
-                </MarkdownBlock>
-
-                <MarkdownBlock>
-                    - [Akka .net](https://getakka.net) (C#)
-                </MarkdownBlock>
-
-                <MarkdownBlock>
-                    - [Orleans](https://dotnet.github.io/orleans/) (C#)
-                </MarkdownBlock>
-
-                <MarkdownBlock>
-                    - [Erlang/Otp](http://www.erlang.org) (Erlang)
-                </MarkdownBlock>
-
-                <MarkdownBlock>
-                    - [Elixir](https://elixir-lang.org) (Elixir)
-                </MarkdownBlock>
-
-                <MarkdownBlock>
-                    We differentiate ourselves from the above competition by having the following benefits:
-                    * Purely Functional
-                    * Everything Typed
-                    * Light Weight
+                    Lorem ipsum
                 </MarkdownBlock>
             </div>
         );
@@ -150,7 +110,7 @@ class Index extends React.Component {
             <Block layout="fourColumn">
                 {[
                     {
-                        content: 'Model actors\' communication without side effects',
+                        content: 'Model webhooks\' communication without side effects',
                         image: `${baseUrl}img/undraw_tweetstorm.svg`,
                         imageAlign: 'top',
                         title: 'Effectful',

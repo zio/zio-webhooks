@@ -37,9 +37,9 @@ class Footer extends React.Component {
                         <h5>GitHub</h5>
                         <a
                             className="github-button"
-                            href="https://github.com/zio/zio-actors"
+                            href="https://github.com/zio/zio-webhooks"
                             data-icon="octicon-star"
-                            data-count-href="/zio/zio-actors/stargazers"
+                            data-count-href="/zio/zio-webhooks/stargazers"
                             data-show-count="true"
                             data-count-aria-label="# stargazers on GitHub"
                             aria-label="Star this project on GitHub">
@@ -53,8 +53,8 @@ class Footer extends React.Component {
                     <div>
                         <h5>Additional resources</h5>
                         <a
-                            href="/zio-actors/api/index.html">
-                            Scaladoc of zio-actors
+                            href="/zio-webhooks/api/index.html">
+                            Scaladoc of zio-webhooks
                         </a>
                     </div>
                 </section>
