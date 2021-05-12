@@ -1,6 +1,7 @@
 package zio.webhooks
 
 import zio.Task
+import zio.prelude.NonEmptySet
 import zio.stream.Stream
 
 /**
