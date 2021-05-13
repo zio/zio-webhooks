@@ -1,7 +1,8 @@
 package zio.webhooks
 
 /**
- * A [[WebhookDeliveryMode]] represents the delivery mode for a webhook: either one event at a time,
- * or batched, in which case events may be batched together for communication efficiency.
+ * A [[WebhookDeliveryMode]] specifies two aspects of webhook delivery: [[WebhookDeliveryBatching]], whether the
+ * delivery of events is done one-by-one or in batches; and [[WebhookDeliverySemantics]], which specify a delivery goal
+ * of at least once, or at most once.
  */
 final case class WebhookDeliveryMode(batching: WebhookDeliveryBatching, semantics: WebhookDeliverySemantics)

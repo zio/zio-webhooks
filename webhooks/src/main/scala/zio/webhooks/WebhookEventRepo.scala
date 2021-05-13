@@ -10,12 +10,14 @@ import zio.stream.Stream
 trait WebhookEventRepo {
 
   /**
-   * Retrieves all events by their status.
-   *
-   * TODO: Change return type to stream
+   * Retrieves all events by their statuses.
    */
-  def getEventsByStatus(statuses: NonEmptySet[WebhookEventStatus]): Stream[Throwable, WebhookEvent]
+  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): Stream[Throwable, WebhookEvent]
 
+  /**
+   * Retrieves events by [[WebhookId]] and a non-empty set of [[WebhookEventStatus]]es. Implementations should ensure
+   * ordering of events.
+   */
   def getEventsByWebhookAndStatus(
     id: WebhookId,
     status: NonEmptySet[WebhookEventStatus]
@@ -24,7 +26,7 @@ trait WebhookEventRepo {
   /**
    * Sets the status of the specified event.
    */
-  def setEventStatus(key: WebhookKey, status: WebhookEventStatus): Task[Unit]
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): Task[Unit]
 
   /**
    * Marks all events by the specified webhook id as failed.
