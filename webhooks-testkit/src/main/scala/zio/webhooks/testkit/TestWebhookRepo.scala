@@ -6,6 +6,7 @@ import zio.{ Has, IO, Ref, Task, ULayer, ZIO }
 final case class TestWebhookRepo(
   ref: Ref[Map[WebhookId, Webhook]]
 ) extends WebhookRepo {
+
   def getWebhookById(webhookId: WebhookId): Task[Option[Webhook]] =
     ref.get.map(_.get(webhookId))
 
@@ -20,5 +21,5 @@ final case class TestWebhookRepo(
 }
 
 object TestWebhookRepo {
-  val test: ULayer[Has[WebhookRepo]] = Ref.make(Map.empty[WebhookId, Webhook]).map(TestWebhookRepo(_)).toLayer
+  val testLayer: ULayer[Has[WebhookRepo]] = Ref.make(Map.empty[WebhookId, Webhook]).map(TestWebhookRepo(_)).toLayer
 }
