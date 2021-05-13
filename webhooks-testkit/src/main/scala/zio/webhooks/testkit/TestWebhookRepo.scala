@@ -1,6 +1,6 @@
 package zio.webhooks
 
-import zio.{ Ref, Task }
+import zio.{ Has, Ref, Task, ULayer }
 
 final case class TestWebhookRepo(
   ref: Ref[Map[WebhookId, Webhook]]
@@ -11,5 +11,5 @@ final case class TestWebhookRepo(
 }
 
 object TestWebhookRepo {
-  // make a layer that produces a WebhookRepo
+  val test: ULayer[Has[WebhookRepo]] = Ref.make(Map.empty[WebhookId, Webhook]).map(TestWebhookRepo(_)).toLayer
 }
