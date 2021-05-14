@@ -12,13 +12,15 @@ final case class TestWebhookRepo(
 
   def setWebhookStatus(id: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit] =
     for {
-      map <- ref.get
-      _   <- ZIO
-               .fromOption(map.get(id))
-               .bimap(
-                 _ => MissingWebhookError(id),
-                 webhook => map.updated(id, webhook.copy(status = status))
-               )
+      isPresent <- ref.modify { map =>
+                     map.get(id) match {
+                       case None          =>
+                         (false, map)
+                       case Some(webhook) =>
+                         (true, map.updated(id, webhook.copy(status = status)))
+                     }
+                   }
+      _         <- ZIO.unless(isPresent)(ZIO.fail(MissingWebhookError(id)))
     } yield ()
 }
 
