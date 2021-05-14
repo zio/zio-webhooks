@@ -12,11 +12,13 @@ final case class TestWebhookRepo(
 
   def setWebhookStatus(id: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit] =
     for {
-      map       <- ref.get
-      webhookOpt = map.get(id)
-      _         <- ZIO
-                     .fromOption(webhookOpt)
-                     .bimap(_ => MissingWebhookError(id), webhook => map.updated(id, webhook.copy(status = status)))
+      map <- ref.get
+      _   <- ZIO
+               .fromOption(map.get(id))
+               .bimap(
+                 _ => MissingWebhookError(id),
+                 webhook => map.updated(id, webhook.copy(status = status))
+               )
     } yield ()
 }
 
