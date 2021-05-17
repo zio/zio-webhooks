@@ -1,17 +1,15 @@
 package zio.webhooks.testkit
 
+import zio._
 import zio.webhooks.WebhookStateRepo
-import zio.Ref
-import zio.Task
-import zio.{ Has, ULayer }
 
 final case class TestWebhookStateRepo(
-  ref: Ref[String]
+  ref: Ref[Option[String]]
 ) extends WebhookStateRepo {
 
-  def getState: Task[String] = ref.get
+  def getState: UIO[Option[String]] = ref.get
 
-  def setState(state: String): Task[Unit] = ref.set(state)
+  def setState(state: String): Task[Unit] = ref.set(Some(state))
 }
 
 object TestWebhookStateRepo {

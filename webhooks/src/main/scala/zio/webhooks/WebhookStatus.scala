@@ -3,8 +3,8 @@ package zio.webhooks
 import java.time.Instant
 
 /**
- * A [[WebhookStatus]] describes the status of a webhook, which is either enabled or disabled, or
- * unavailable since a specified moment in time.
+ * A [[WebhookStatus]] describes the status of a webhook, which can be `Enabled`, `Disabled`,
+ * `Retrying`, or `Unavailable`: the latter two being so since some [[java.time.Instant]].
  */
 sealed trait WebhookStatus
 object WebhookStatus {
