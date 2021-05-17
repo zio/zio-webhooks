@@ -4,7 +4,8 @@ import zio._
 import zio.prelude.NonEmptySet
 import zio.stream._
 import zio.webhooks._
-import zio.webhooks.WebhookError._
+import zio.webhooks.MissingWebhookObjectError
+import zio.webhooks.MissingWebhookObjectError._
 
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
@@ -40,7 +41,7 @@ final private case class TestWebhookEventRepoImpl(
   def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
-  ): Stream[WebhookError.MissingWebhookError, WebhookEvent] =
+  ): Stream[MissingWebhookError, WebhookEvent] =
     getEventsByStatuses(statuses).filter(_.key.webhookId == id)
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit] =
@@ -56,7 +57,7 @@ final private case class TestWebhookEventRepoImpl(
       _             <- hub.publishAll(updatedMap.values)
     } yield ()
 
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit] =
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingWebhookObjectError, Unit] =
     for {
       webhookExists <- webhookRepo.getWebhookById(key.webhookId).map(_.isDefined)
       _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(key.webhookId)))

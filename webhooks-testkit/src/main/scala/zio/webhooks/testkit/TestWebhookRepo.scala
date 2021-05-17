@@ -1,7 +1,7 @@
 package zio.webhooks.testkit
 
 import zio.webhooks._
-import zio.webhooks.WebhookError._
+import zio.webhooks.MissingWebhookObjectError._
 import zio._
 
 final case class TestWebhookRepo(
