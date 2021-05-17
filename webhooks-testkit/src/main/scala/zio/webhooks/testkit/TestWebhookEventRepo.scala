@@ -11,7 +11,7 @@ trait TestWebhookEventRepo {
 }
 
 object TestWebhookEventRepo {
-  val testLayer
+  val test
     : RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
     for {
       ref         <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
