@@ -1,6 +1,6 @@
 package zio.webhooks
 
-import zio.Task
+import zio.UIO
 
 /**
  * A [[WebhookStateRepo]] is used to store state necessary for the library to perform its
@@ -12,10 +12,10 @@ trait WebhookStateRepo {
   /**
    * Retrieves the value of some `String` state.
    */
-  def getState: Task[String]
+  def getState: UIO[Option[String]]
 
   /**
    * Sets the the value of some `String` state.
    */
-  def setState(state: String): Task[Unit]
+  def setState(state: String): UIO[Unit]
 }
