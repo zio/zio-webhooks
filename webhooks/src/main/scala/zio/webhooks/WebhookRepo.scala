@@ -1,6 +1,6 @@
 package zio.webhooks
 
-import WebhookError.MissingWebhookError
+import zio.webhooks.MissingWebhookObjectError.MissingWebhookError
 import zio.{ IO, UIO }
 
 /**
