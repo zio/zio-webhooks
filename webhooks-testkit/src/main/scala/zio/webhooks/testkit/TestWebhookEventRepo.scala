@@ -4,15 +4,15 @@ import zio._
 import zio.prelude.NonEmptySet
 import zio.stream._
 import zio.webhooks._
-import zio.webhooks.MissingWebhookObjectError
-import zio.webhooks.MissingWebhookObjectError._
+import zio.webhooks.WebhookError._
 
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
 }
 
 object TestWebhookEventRepo {
-  val test: RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
+  val testLayer
+    : RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
     for {
       ref         <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
       hub         <- Hub.unbounded[WebhookEvent]
@@ -41,7 +41,7 @@ final private case class TestWebhookEventRepoImpl(
   def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
-  ): Stream[MissingWebhookError, WebhookEvent] =
+  ): Stream[WebhookError.MissingWebhookError, WebhookEvent] =
     getEventsByStatuses(statuses).filter(_.key.webhookId == id)
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit] =
@@ -57,7 +57,7 @@ final private case class TestWebhookEventRepoImpl(
       _             <- hub.publishAll(updatedMap.values)
     } yield ()
 
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingWebhookObjectError, Unit] =
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit] =
     for {
       webhookExists <- webhookRepo.getWebhookById(key.webhookId).map(_.isDefined)
       _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(key.webhookId)))

@@ -1,6 +1,6 @@
 package zio.webhooks
 
-import MissingWebhookObjectError._
+import zio.webhooks.WebhookError._
 import zio._
 import zio.prelude.NonEmptySet
 import zio.stream._
@@ -32,5 +32,5 @@ trait WebhookEventRepo {
   /**
    * Sets the status of the specified event.
    */
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingWebhookObjectError, Unit]
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit]
 }

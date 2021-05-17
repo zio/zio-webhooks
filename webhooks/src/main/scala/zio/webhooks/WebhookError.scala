@@ -7,23 +7,13 @@ sealed trait WebhookError
 object WebhookError {
 
   /**
-   * A [[SendWebhookEventError]] occurs when a webhook event fails to get sent.
+   * A [[MissingWebhookError]] occurs when a webhook we expect to exist is missing.
    */
-  case class SendWebhookEventError(webhookEvent: WebhookEvent, message: String) extends WebhookError
-}
-
-sealed trait MissingWebhookObjectError extends WebhookError
-object MissingWebhookObjectError {
+  case class MissingWebhookError(id: WebhookId) extends WebhookError
 
   /**
-   * A [[MissingWebhookError]] occurs when a webhook with the given [[WebhookId]] we expect to exist
-   * is missing.
+   * A [[MissingWebhookEventError]] occurs when a webhook event we expect to exist is missing.
    */
-  final case class MissingWebhookError(id: WebhookId) extends MissingWebhookObjectError
+  case class MissingWebhookEventError(key: WebhookEventKey) extends WebhookError
 
-  /**
-   * A [[MissingWebhookEventError]] occurs when a webhook event with the given [[WebhookEventKey]]
-   * we expect to exist is missing.
-   */
-  final case class MissingWebhookEventError(key: WebhookEventKey) extends MissingWebhookObjectError
 }

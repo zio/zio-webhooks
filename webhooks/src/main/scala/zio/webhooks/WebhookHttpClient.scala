@@ -1,11 +1,12 @@
 package zio.webhooks
 
 import zio.IO
-import WebhookError.SendWebhookEventError
+import zio.Chunk
+import java.io.IOException
 
 /**
- * A [[WebhookHttpClient]] provides the facility to send a [[WebhookEvent]] over HTTP.
+ * A [[WebhookHttpClient]] provides the facility to post data over HTTP.
  */
 trait WebhookHttpClient {
-  def sendWebhookEvent(webhookEvent: WebhookEvent): IO[SendWebhookEventError, Unit]
+  def post(url: String, content: String, headers: Chunk[(String, String)]): IO[IOException, Unit]
 }

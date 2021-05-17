@@ -1,7 +1,7 @@
 package zio.webhooks.testkit
 
 import zio.webhooks._
-import zio.webhooks.MissingWebhookObjectError._
+import zio.webhooks.WebhookError._
 import zio._
 
 final case class TestWebhookRepo(
@@ -26,5 +26,5 @@ final case class TestWebhookRepo(
 }
 
 object TestWebhookRepo {
-  val test: ULayer[Has[WebhookRepo]] = Ref.make(Map.empty[WebhookId, Webhook]).map(TestWebhookRepo(_)).toLayer
+  val testLayer: ULayer[Has[WebhookRepo]] = Ref.make(Map.empty[WebhookId, Webhook]).map(TestWebhookRepo(_)).toLayer
 }
