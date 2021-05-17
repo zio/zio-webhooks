@@ -10,4 +10,10 @@ object WebhookError {
    * A [[MissingWebhookError]] occurs when a webhook we expect to exist is missing.
    */
   case class MissingWebhookError(id: WebhookId) extends WebhookError
+
+  /**
+   * A [[MissingWebhookEventError]] occurs when a webhook event we expect to exist is missing.
+   */
+  case class MissingWebhookEventError(key: WebhookEventKey) extends WebhookError
+
 }

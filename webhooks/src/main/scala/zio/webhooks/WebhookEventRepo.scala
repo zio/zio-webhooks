@@ -1,8 +1,9 @@
 package zio.webhooks
 
-import zio.Task
+import zio.webhooks.WebhookError._
+import zio._
 import zio.prelude.NonEmptySet
-import zio.stream.Stream
+import zio.stream._
 
 /**
  * A [[WebhookEventRepo]] provides persistence facilities for webhook events.
@@ -12,7 +13,7 @@ trait WebhookEventRepo {
   /**
    * Retrieves all events by their statuses.
    */
-  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): Stream[Throwable, WebhookEvent]
+  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent]
 
   /**
    * Retrieves events by [[WebhookId]] and a non-empty set of [[WebhookEventStatus]]es. Implementations should ensure
@@ -20,16 +21,16 @@ trait WebhookEventRepo {
    */
   def getEventsByWebhookAndStatus(
     id: WebhookId,
-    status: NonEmptySet[WebhookEventStatus]
-  ): Stream[Throwable, WebhookEvent]
+    statuses: NonEmptySet[WebhookEventStatus]
+  ): Stream[MissingWebhookError, WebhookEvent]
 
   /**
    * Sets the status of the specified event.
    */
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): Task[Unit]
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit]
 
   /**
    * Marks all events by the specified webhook id as failed.
    */
-  def setAllAsFailedByWebhookId(webhookId: WebhookId): Task[Unit]
+  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit]
 }

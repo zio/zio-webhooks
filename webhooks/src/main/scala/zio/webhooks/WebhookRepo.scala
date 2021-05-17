@@ -1,7 +1,7 @@
 package zio.webhooks
 
 import WebhookError.MissingWebhookError
-import zio.{ IO, Task }
+import zio.{ IO, UIO }
 
 /**
  * A [[WebhookRepo]] provides persistence facilities for webhooks.
@@ -11,7 +11,7 @@ trait WebhookRepo {
   /**
    * Retrieves a webhook by id.
    */
-  def getWebhookById(webhookId: WebhookId): Task[Option[Webhook]]
+  def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]]
 
   /**
    * Sets the status of a webhook.
