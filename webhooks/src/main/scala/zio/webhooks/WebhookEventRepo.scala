@@ -25,12 +25,12 @@ trait WebhookEventRepo {
   ): Stream[MissingWebhookError, WebhookEvent]
 
   /**
-   * Sets the status of the specified event.
-   */
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit]
-
-  /**
    * Marks all events by the specified webhook id as failed.
    */
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit]
+
+  /**
+   * Sets the status of the specified event.
+   */
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit]
 }

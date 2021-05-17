@@ -1,8 +1,9 @@
-package zio.webhooks
+package zio.webhooks.testkit
 
 import zio._
 import zio.prelude.NonEmptySet
 import zio.stream._
+import zio.webhooks._
 import zio.webhooks.WebhookError._
 
 trait TestWebhookEventRepo {
@@ -43,6 +44,19 @@ final private case class TestWebhookEventRepoImpl(
   ): Stream[WebhookError.MissingWebhookError, WebhookEvent] =
     getEventsByStatuses(statuses).filter(_.key.webhookId == id)
 
+  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit] =
+    for {
+      webhookExists <- webhookRepo.getWebhookById(webhookId).map(_.isDefined)
+      _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(webhookId)))
+      updatedMap    <- ref.updateAndGet { map =>
+                         map ++ (
+                           for ((key, event) <- map if (key.webhookId == webhookId))
+                             yield (key, event.copy(status = WebhookEventStatus.Failed))
+                         )
+                       }
+      _             <- hub.publishAll(updatedMap.values)
+    } yield ()
+
   def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit] =
     for {
       webhookExists <- webhookRepo.getWebhookById(key.webhookId).map(_.isDefined)
@@ -58,18 +72,5 @@ final private case class TestWebhookEventRepoImpl(
       _             <- eventOpt.fold[IO[MissingWebhookEventError, Unit]](
                          ZIO.fail(MissingWebhookEventError(key))
                        )(event => hub.publish(event).unit)
-    } yield ()
-
-  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit] =
-    for {
-      webhookExists <- webhookRepo.getWebhookById(webhookId).map(_.isDefined)
-      _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(webhookId)))
-      updatedMap    <- ref.updateAndGet { map =>
-                         map ++ (
-                           for ((key, event) <- map if (key.webhookId == webhookId))
-                             yield (key, event.copy(status = WebhookEventStatus.Failed))
-                         )
-                       }
-      _             <- hub.publishAll(updatedMap.values)
     } yield ()
 }
