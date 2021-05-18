@@ -9,7 +9,7 @@ import java.io.IOException
 trait WebhookHttpClient {
 
   /**
-    * Webhooks send a [[WebhookHttpRequest]] as a POST method.
-    */
+   * Webhooks send a [[WebhookHttpRequest]] as a POST method.
+   */
   def post(request: WebhookHttpRequest): IO[IOException, WebhookHttpResponse]
 }

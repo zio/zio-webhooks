@@ -18,9 +18,10 @@ final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpCl
 
   def post(webhookRequest: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] = {
     // handrolled WebhookHttpRequest => sttp.client.RequestT
-    val request = basicRequest.post(Uri(webhookRequest.url))
-                              .body(webhookRequest.content)
-                              .headers(webhookRequest.headers.toMap)
+    val request = basicRequest
+      .post(Uri(webhookRequest.url))
+      .body(webhookRequest.content)
+      .headers(webhookRequest.headers.toMap)
     sttpClient.get
       // TODO: should we use `Uri.safeApply` here instead? Is it on this lib to ensure proper URIs?
       // Right now we're failing fast when an invalid Uri is passed in.
