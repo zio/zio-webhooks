@@ -14,8 +14,6 @@ import java.io.IOException
  * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] backend which is in turn backed by
  * sttp's ZIO backend, specifically the [[AsyncHttpClientZioBackend]].
  */
-// TODO: Write tests to ensure glue sticks!
-// https://sttp.softwaremill.com/en/v2/backends/zio.html#testing
 final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpClient {
 
   // TODO: should we use `Uri.safeApply` here instead? Is it on this lib to ensure proper URIs?
