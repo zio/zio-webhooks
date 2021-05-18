@@ -13,18 +13,24 @@ final case class WebhookServer(
 ) {
 
   /**
-   * Subscribe
+   * Starts the webhook server. Kicks off the following to run in parellel:
+   * - new webhook event subscription
+   * - event recovery for events
+   * - retry monitoring
    */
   def start: IO[IOException, Any] =
     // start fibers for each
-    subscribeToNewEvents *> initiateRecovery *> monitorRetries
+    startEventSubscription *> startEventRecovery *> startRetryMonitoring
 
   // periodically retry every WebhookEvent in queue
   // if we've retried for >7 days,
   //   Webhook as Unavailable
-  //   clear Queue for that Webhook
+  //   clear WebhookState for that Webhook
   //   make sure that subscribeToNewEvents does _not_ try to deliver to an unavailable webhook
-  def monitorRetries: UIO[Any] = ZIO.unit // ticket
+  /**
+   * Kicks off periodic retries for every [[WebhookEvent]] pending delivery.
+   */
+  private def startRetryMonitoring: UIO[Any] = ZIO.unit // ticket
 
   /**
    * Call webhookEventRepo.getEventsByStatus looking for new events
@@ -44,13 +50,22 @@ final case class WebhookServer(
    *          - create a queue in the map
    *          - enqueue the event into the queue
    */
-  def subscribeToNewEvents: UIO[Any] = ZIO.unit
+  /**
+   * Kicks off new [[WebhookEvent]] subscription.
+   */
+  private def startEventSubscription: UIO[Any] = ZIO.unit
 
   // get events that are Delivering & AtLeastOnce
   // reconstruct webhookState
-  def initiateRecovery: UIO[Any] = ZIO.unit
+  /**
+   * Kicks off recovery of events that with the following delivery mode: `Delivering` & `AtLeastOnce`.
+   */
+  private def startEventRecovery: UIO[Any] = ZIO.unit
 
-  // wait until all in progress work is finished
+  // Maybe should have state somewhere here shut down.
+  /**
+   * Waits until all work in progress is finished, then shuts down.
+   */
   def shutdown: IO[IOException, Any] = ZIO.unit
 }
 

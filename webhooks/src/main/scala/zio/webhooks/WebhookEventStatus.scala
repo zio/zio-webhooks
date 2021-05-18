@@ -2,8 +2,10 @@ package zio.webhooks
 
 /**
  * A [[WebhookEventStatus]] denotes the lifecycle of a [[WebhookEvent]]. Upon creation, an event is
- * `New`. On [[WebhookServer]] startup, events are loaded and are marked `Delivering`. Once the
- * server gets back a success from the webhook URL, the event is marked `Delivered`.
+ * `New`. On [[WebhookServer]] startup, events that are loaded, reloaded, or being retried are
+ * marked `Delivering`. Once the server gets back a success from the webhook URL, the event is
+ * marked `Delivered`. If after 7 days our webhook fails to delivery any events, we mark all events
+ * under that webhook `Failed`.
  */
 sealed trait WebhookEventStatus
 object WebhookEventStatus {
