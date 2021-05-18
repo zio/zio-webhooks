@@ -14,25 +14,27 @@ import java.io.IOException
  * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] backend which is in turn backed by
  * sttp's ZIO backend, specifically the [[AsyncHttpClientZioBackend]].
  */
+// TODO: Write tests to ensure glue sticks!
+// https://sttp.softwaremill.com/en/v2/backends/zio.html#testing
 final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpClient {
 
+  // TODO: should we use `Uri.safeApply` here instead? Is it on this lib to ensure proper URIs?
+  // Right now we're failing fast when an invalid Uri is passed in.
+  // If lib needs to ensure proper URIs, how do we change the signature?
   def post(webhookRequest: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] = {
     // handrolled WebhookHttpRequest => sttp.client.RequestT
-    val request = basicRequest
+    val sttpRequest = basicRequest
       .post(Uri(webhookRequest.url))
       .body(webhookRequest.content)
       .headers(webhookRequest.headers.toMap)
-    sttpClient.get
-      // TODO: should we use `Uri.safeApply` here instead? Is it on this lib to ensure proper URIs?
-      // Right now we're failing fast when an invalid Uri is passed in.
-      // If lib needs to ensure proper URIs, how do we change the signature?
-      .send(request)
+    sttpClient
+      .send(sttpRequest)
       .map(response => WebhookHttpResponse(response.code.code))
       .refineOrDie[IOException] { case e: IOException => e }
   }
 }
 
 object WebhookSttpClient {
-  val live: TaskLayer[WebhookSttpClient] =
-    AsyncHttpClientZioBackend.layer().map(WebhookSttpClient(_))
+  val live: TaskLayer[Has[WebhookHttpClient]] =
+    AsyncHttpClientZioBackend.managed().map(WebhookSttpClient(_)).toLayer
 }

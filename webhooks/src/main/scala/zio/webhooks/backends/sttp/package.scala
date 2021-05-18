@@ -8,9 +8,9 @@ import zio.stream.Stream
 package object sttp {
 
   /**
-   * An [[SttpClient]] is a service that provides a ZIO [[SttpBackend]].
+   * An [[SttpClient]] is an `SttpBackend` for ZIO.
    *
    * Taken from https://sttp.softwaremill.com/en/v2/backends/zio.html
    */
-  type SttpClient = Has[SttpBackend[Task, Stream[Throwable, Byte], WebSocketHandler]]
+  type SttpClient = SttpBackend[Task, Stream[Throwable, Byte], WebSocketHandler]
 }
