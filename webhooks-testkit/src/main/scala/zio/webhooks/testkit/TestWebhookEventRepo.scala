@@ -3,16 +3,15 @@ package zio.webhooks.testkit
 import zio._
 import zio.prelude.NonEmptySet
 import zio.stream._
-import zio.webhooks._
 import zio.webhooks.WebhookError._
+import zio.webhooks._
 
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
 }
 
 object TestWebhookEventRepo {
-  val testLayer
-    : RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
+  val test: RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
     for {
       ref         <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
       hub         <- Hub.unbounded[WebhookEvent]
@@ -23,7 +22,7 @@ object TestWebhookEventRepo {
 }
 
 final private case class TestWebhookEventRepoImpl(
-  ref: Ref[Map[WebhookEventKey, WebhookEvent]],
+  ref: Ref[Map[WebhookEventKey, WebhookEvent]], // ref & hub together could be a SubscriptionRef 🤔
   hub: Hub[WebhookEvent],
   webhookRepo: WebhookRepo
 ) extends WebhookEventRepo
