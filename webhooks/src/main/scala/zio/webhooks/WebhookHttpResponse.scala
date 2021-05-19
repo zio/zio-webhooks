@@ -7,5 +7,5 @@ package zio.webhooks
 final class WebhookHttpResponse private (val statusCode: Int) extends AnyVal
 
 object WebhookHttpResponse {
-  def apply(statusCode: Int) = new WebhookHttpResponse(statusCode)
+  def apply(statusCode: Int): WebhookHttpResponse = new WebhookHttpResponse(statusCode)
 }
