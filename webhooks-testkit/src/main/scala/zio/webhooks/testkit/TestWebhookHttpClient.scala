@@ -8,33 +8,33 @@ import zio.webhooks.WebhookHttpRequest
 import zio.webhooks.WebhookHttpResponse
 
 trait TestWebhookHttpClient {
-  def requests: UIO[Chunk[WebhookHttpRequest]]
+  def requests: UIO[Queue[WebhookHttpRequest]]
 }
 
 object TestWebhookHttpClient {
-  def requests: URIO[Has[TestWebhookHttpClient], Chunk[WebhookHttpRequest]] =
+  def requests: URIO[Has[TestWebhookHttpClient], Queue[WebhookHttpRequest]] =
     ZIO.serviceWith(_.requests)
 
   val test: ULayer[Has[TestWebhookHttpClient] with Has[WebhookHttpClient]] = {
     for {
-      ref      <- Ref.make(Map.empty[WebhookHttpRequest, Queue[WebhookHttpResponse]])
-      received <- Ref.make[Chunk[WebhookHttpRequest]](Chunk.empty)
-      impl      = TestWebhookHttpClientImpl(ref, received)
+      ref   <- Ref.makeManaged(Map.empty[WebhookHttpRequest, Queue[WebhookHttpResponse]])
+      queue <- Queue.unbounded[WebhookHttpRequest].toManaged_
+      impl   = TestWebhookHttpClientImpl(ref, queue)
     } yield Has.allOf[TestWebhookHttpClient, WebhookHttpClient](impl, impl)
   }.toLayerMany
 }
 
 final case class TestWebhookHttpClientImpl(
   ref: Ref[Map[WebhookHttpRequest, Queue[WebhookHttpResponse]]],
-  received: Ref[Chunk[WebhookHttpRequest]]
+  received: Queue[WebhookHttpRequest]
 ) extends WebhookHttpClient
     with TestWebhookHttpClient {
 
-  def requests: UIO[Chunk[WebhookHttpRequest]] = received.get
+  def requests: UIO[Queue[WebhookHttpRequest]] = ZIO.effectTotal(received)
 
   def post(request: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] =
     for {
-      _        <- received.update(_ :+ request)
+      _        <- received.offer(request)
       map      <- ref.get
       queue    <- ZIO
                     .fromOption(map.get(request))

@@ -28,13 +28,11 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         )
 
         for {
-          _        <- TestWebhookRepo.createWebhook(webhook)
-          _        <- TestWebhookEventRepo.createEvent(webhookEvent)
-          // ⚠🚨 Temporary hack 🚨⚠ This works, but we're waiting for the server to do stuff.
-          // TODO: Change TestWebhookHttpClient#requests so it exposes a Queue/Stream for us to listen to instead.
-          _         = Thread.sleep(125)
-          requests <- TestWebhookHttpClient.requests
-        } yield assert(requests.length)(equalTo(1))
+          _            <- TestWebhookRepo.createWebhook(webhook)
+          _            <- TestWebhookEventRepo.createEvent(webhookEvent)
+          queue        <- TestWebhookHttpClient.requests
+          requestsMade <- queue.takeN(1)
+        } yield assert(requestsMade.size)(equalTo(1))
       }
       // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
     ).provideLayerShared(testEnv)
