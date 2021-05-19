@@ -39,7 +39,7 @@ lazy val root =
   project
     .in(file("."))
     .settings(publish / skip := true)
-    .aggregate(zioWebhooks, webhooksTestkit)
+    .aggregate(zioWebhooks, zioWebhooksTest, webhooksTestkit)
 
 lazy val zioWebhooks = module("zio-webhooks", "webhooks")
   .enablePlugins(BuildInfoPlugin)
@@ -48,16 +48,24 @@ lazy val zioWebhooks = module("zio-webhooks", "webhooks")
     libraryDependencies ++= Seq(
       "dev.zio"                      %% "zio"                           % zioVersion,
       "dev.zio"                      %% "zio-prelude"                   % zioPreludeVersion,
-      "dev.zio"                      %% "zio-test"                      % zioVersion % "test",
-      "dev.zio"                      %% "zio-test-sbt"                  % zioVersion % "test",
       "com.softwaremill.sttp.client" %% "core"                          % sttpVersion,
       "com.softwaremill.sttp.client" %% "async-http-client-backend-zio" % sttpVersion
-    ),
-    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
+    )
   )
   .settings(
     stdSettings("zio-webhooks")
   )
+
+lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
+  .settings(
+    publish / skip := true,
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio-test"     % zioVersion % "test",
+      "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
+    ),
+    testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
+  )
+  .dependsOn(zioWebhooks, webhooksTestkit)
 
 lazy val webhooksTestkit = module("zio-webhooks-testkit", "webhooks-testkit")
   .settings(
