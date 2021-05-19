@@ -11,7 +11,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
     suite("WebhookServerSpec")(
       test("attempts to send as many events as repo publishes") {
         // TODO: write ways to manipulate contents TestWebhook*Repo
-        
+
         assertCompletes
       }
     )
