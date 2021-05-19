@@ -5,6 +5,8 @@ import zio.test._
 import zio.webhooks.testkit._
 import zio._
 import zio.test.Assertion._
+// import zio.duration.Duration
+// import zio.test.environment.TestClock
 
 object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
@@ -28,17 +30,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         for {
           _        <- TestWebhookRepo.createWebhook(webhook)
           _        <- TestWebhookEventRepo.createEvent(webhookEvent)
+          // ⚠🚨 Temporary hack 🚨⚠ This works, but we're waiting for the server to do stuff.
+          // TODO: Change TestWebhookHttpClient#requests so it exposes a Queue/Stream for us to listen to instead.
+          _         = Thread.sleep(125)
           requests <- TestWebhookHttpClient.requests
-        } yield assert(requests.length)(equalTo(3))
+        } yield assert(requests.length)(equalTo(1))
       }
       // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
     ).provideLayerShared(testEnv)
-
-  val testEnv: ULayer[TestEnv] = {
-    val repos =
-      (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++ TestWebhookStateRepo.test ++ TestWebhookHttpClient.test
-    repos ++ (repos >>> WebhookServer.live)
-  }.orDie
 
   type TestEnv = Has[WebhookEventRepo]
     with Has[TestWebhookEventRepo]
@@ -48,4 +47,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
     with Has[TestWebhookHttpClient]
     with Has[WebhookHttpClient]
     with Has[WebhookServer]
+
+  val testEnv: ULayer[TestEnv] = {
+    val repos =
+      (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++ TestWebhookStateRepo.test ++ TestWebhookHttpClient.test
+    repos ++ (repos >>> WebhookServer.live)
+  }.orDie
 }

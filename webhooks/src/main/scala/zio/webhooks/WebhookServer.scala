@@ -3,17 +3,19 @@ package zio.webhooks
 import zio._
 import java.io.IOException
 import java.time.Instant
+import zio.prelude.NonEmptySet
 
 final case class WebhookServer(
   webhookRepo: WebhookRepo,
-  webhookStateRepo: WebhookStateRepo,
-  webhookEventRepo: WebhookEventRepo,
+  stateRepo: WebhookStateRepo,
+  eventRepo: WebhookEventRepo,
+  httpClient: WebhookHttpClient,
   // consider STM if needed
   webhookState: Ref[Map[WebhookId, WebhookServer.WebhookState]]
 ) {
 
   /**
-   * Starts the webhook server. Kicks off the following to run in parellel:
+   * Starts the webhook server. Kicks off the following to run concurrently:
    * - new webhook event subscription
    * - event recovery for events
    * - retry monitoring
@@ -53,7 +55,20 @@ final case class WebhookServer(
   /**
    * Kicks off new [[WebhookEvent]] subscription.
    */
-  private def startEventSubscription: UIO[Any] = ZIO.unit
+  private def startEventSubscription: UIO[Any] =
+    eventRepo
+      .getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
+      .foreach(newEvent =>
+        for {
+          opt     <- webhookRepo.getWebhookById(newEvent.key.webhookId)
+          // how to handle domain errors here?
+          webhook <- ZIO.fromOption(opt) // for now
+          request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
+          _       <- httpClient.post(request)
+        } yield ()
+      )
+      .ignore
+      .fork // keep track of fibers for when we shut down?
 
   // get events that are Delivering & AtLeastOnce
   // reconstruct webhookState
@@ -73,7 +88,7 @@ final case class WebhookServer(
  * We're providing a live layer for convenience and to ensure proper resource management.
  */
 object WebhookServer {
-  type Env = Has[WebhookRepo] with Has[WebhookStateRepo] with Has[WebhookEventRepo]
+  type Env = Has[WebhookRepo] with Has[WebhookStateRepo] with Has[WebhookEventRepo] with Has[WebhookHttpClient]
 
   sealed trait WebhookState
   object WebhookState {
@@ -85,12 +100,13 @@ object WebhookServer {
 
   val live: RLayer[WebhookServer.Env, Has[WebhookServer]] =
     (for {
-      webhookState     <- Ref.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
-      webhookRepo      <- ZManaged.service[WebhookRepo]
-      webhookStateRepo <- ZManaged.service[WebhookStateRepo]
-      webhookEventRepo <- ZManaged.service[WebhookEventRepo]
-      server            = WebhookServer(webhookRepo, webhookStateRepo, webhookEventRepo, webhookState)
-      _                <- server.start.orDie.toManaged_
-      _                <- ZManaged.finalizer(server.shutdown.orDie)
+      state      <- Ref.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
+      repo       <- ZManaged.service[WebhookRepo]
+      stateRepo  <- ZManaged.service[WebhookStateRepo]
+      eventRepo  <- ZManaged.service[WebhookEventRepo]
+      httpClient <- ZManaged.service[WebhookHttpClient]
+      server      = WebhookServer(repo, stateRepo, eventRepo, httpClient, state)
+      _          <- server.start.orDie.toManaged_
+      _          <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server).toLayer
 }
