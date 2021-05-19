@@ -13,5 +13,6 @@ final case class TestWebhookStateRepo(
 }
 
 object TestWebhookStateRepo {
-  val testLayer: ULayer[Has[WebhookStateRepo]] = Ref.make(Option.empty[String]).map(TestWebhookStateRepo(_)).toLayer
+  val test: ULayer[Has[WebhookStateRepo]] =
+    Ref.make(Option.empty[String]).map(TestWebhookStateRepo(_)).toLayer
 }

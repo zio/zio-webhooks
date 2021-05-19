@@ -73,6 +73,7 @@ final case class WebhookServer(
  * We're providing a live layer for convenience and to ensure proper resource management.
  */
 object WebhookServer {
+  type Env = Has[WebhookRepo] with Has[WebhookStateRepo] with Has[WebhookEventRepo]
 
   sealed trait WebhookState
   object WebhookState {
@@ -82,7 +83,7 @@ object WebhookServer {
     case object Unavailable                                                   extends WebhookState
   }
 
-  val live =
+  val live: RLayer[WebhookServer.Env, Has[WebhookServer]] =
     (for {
       webhookState     <- Ref.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
       webhookRepo      <- ZManaged.service[WebhookRepo]
