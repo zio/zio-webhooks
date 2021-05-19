@@ -5,8 +5,6 @@ import zio.test._
 import zio.webhooks.testkit._
 import zio._
 import zio.test.Assertion._
-// import zio.duration.Duration
-// import zio.test.environment.TestClock
 
 object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
