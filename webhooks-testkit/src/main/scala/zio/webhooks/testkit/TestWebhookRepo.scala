@@ -4,9 +4,26 @@ import zio.webhooks._
 import zio.webhooks.WebhookError._
 import zio._
 
-final case class TestWebhookRepo(
+trait TestWebhookRepo {
+  def createWebhook(webhook: Webhook): UIO[Unit]
+}
+
+object TestWebhookRepo {
+  val test: ULayer[Has[TestWebhookRepo] with Has[WebhookRepo]] = {
+    for {
+      ref <- Ref.make(Map.empty[WebhookId, Webhook])
+      impl = TestWebhookRepoImpl(ref)
+    } yield Has.allOf[TestWebhookRepo, WebhookRepo](impl, impl)
+  }.toLayerMany
+}
+
+final private case class TestWebhookRepoImpl(
   ref: Ref[Map[WebhookId, Webhook]]
-) extends WebhookRepo {
+) extends WebhookRepo
+    with TestWebhookRepo {
+
+  def createWebhook(webhook: Webhook): UIO[Unit] =
+    ref.update(_ + ((webhook.id, webhook)))
 
   def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]] =
     ref.get.map(_.get(webhookId))
@@ -23,8 +40,4 @@ final case class TestWebhookRepo(
                        }
       _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(id)))
     } yield ()
-}
-
-object TestWebhookRepo {
-  val test: ULayer[Has[WebhookRepo]] = Ref.make(Map.empty[WebhookId, Webhook]).map(TestWebhookRepo(_)).toLayer
 }
