@@ -11,6 +11,8 @@ trait TestWebhookEventRepo {
 }
 
 object TestWebhookEventRepo {
+  // Layer Definitions
+
   val test: RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
     for {
       ref         <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
@@ -19,10 +21,16 @@ object TestWebhookEventRepo {
       impl         = TestWebhookEventRepoImpl(ref, hub, webhookRepo)
     } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo, WebhookRepo](impl, impl, webhookRepo)
   }.toLayerMany
+
+  // Accessor Methods
+
+  def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
+    ZIO.serviceWith(_.createEvent(event))
 }
 
 final private case class TestWebhookEventRepoImpl(
-  ref: Ref[Map[WebhookEventKey, WebhookEvent]], // ref & hub together could be a SubscriptionRef 🤔
+  // ref & hub together could be a SubscriptionRef 🤔
+  ref: Ref[Map[WebhookEventKey, WebhookEvent]],
   hub: Hub[WebhookEvent],
   webhookRepo: WebhookRepo
 ) extends WebhookEventRepo

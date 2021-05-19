@@ -9,12 +9,19 @@ trait TestWebhookRepo {
 }
 
 object TestWebhookRepo {
+  // Layer Definitions
+
   val test: ULayer[Has[TestWebhookRepo] with Has[WebhookRepo]] = {
     for {
       ref <- Ref.make(Map.empty[WebhookId, Webhook])
       impl = TestWebhookRepoImpl(ref)
     } yield Has.allOf[TestWebhookRepo, WebhookRepo](impl, impl)
   }.toLayerMany
+
+  // Accessor Methods
+
+  def createWebhook(webhook: Webhook): URIO[Has[TestWebhookRepo], Unit] =
+    ZIO.serviceWith(_.createWebhook(webhook))
 }
 
 final private case class TestWebhookRepoImpl(
