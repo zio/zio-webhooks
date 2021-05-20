@@ -1,12 +1,12 @@
 package zio.webhooks.testkit
 
 import java.io.IOException
-import zio.{ Queue, Ref, ZIO }
-import zio.webhooks.WebhookHttpClient
 import zio._
+import zio.webhooks.WebhookHttpClient
 import zio.webhooks.WebhookHttpRequest
 import zio.webhooks.WebhookHttpResponse
 
+// TODO: scaladoc
 trait TestWebhookHttpClient {
   def requests: UIO[Queue[WebhookHttpRequest]]
 }

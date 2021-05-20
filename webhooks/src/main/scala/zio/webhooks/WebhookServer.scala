@@ -1,9 +1,11 @@
 package zio.webhooks
 
 import zio._
+import zio.prelude.NonEmptySet
+import zio.webhooks.WebhookError._
+
 import java.io.IOException
 import java.time.Instant
-import zio.prelude.NonEmptySet
 
 final case class WebhookServer(
   webhookRepo: WebhookRepo,
@@ -20,19 +22,18 @@ final case class WebhookServer(
    * - event recovery for events
    * - retry monitoring
    */
-  def start: IO[IOException, Any] =
-    // start fibers for each
+  def start: IO[WebhookError, Any] =
     startEventSubscription *> startEventRecovery *> startRetryMonitoring
 
-  // periodically retry every WebhookEvent in queue
+  // periodically retry every WebhookEvent in queues
   // if we've retried for >7 days,
   //   Webhook as Unavailable
   //   clear WebhookState for that Webhook
   //   make sure that subscribeToNewEvents does _not_ try to deliver to an unavailable webhook
   /**
-   * Kicks off periodic retries for every [[WebhookEvent]] pending delivery.
+   * Kicks off backoff retries for every [[WebhookEvent]] pending delivery.
    */
-  private def startRetryMonitoring: UIO[Any] = ZIO.unit // ticket
+  private def startRetryMonitoring: IO[WebhookError, Any] = ZIO.unit // ticket
 
   /**
    * Call webhookEventRepo.getEventsByStatus looking for new events
@@ -42,7 +43,7 @@ final case class WebhookServer(
    * For each new event:
    *  - mark event as Delivering
    *  - check to see if webhookId is retrying
-   *    - if there's a queue in the map, we're retrying
+   *    - if there are queues, we're retrying
    *      - enqueue the event
    *    - otherwise:
    *      - send it
@@ -55,38 +56,34 @@ final case class WebhookServer(
   /**
    * Kicks off new [[WebhookEvent]] subscription.
    */
-  private def startEventSubscription: UIO[Any] =
+  private def startEventSubscription: IO[WebhookError, Any] =
     eventRepo
       .getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
-      .foreach(newEvent =>
+      .foreach { newEvent =>
+        val webhookId = newEvent.key.webhookId
         for {
-          opt     <- webhookRepo.getWebhookById(newEvent.key.webhookId)
-          // how to handle domain errors here?
-          webhook <- ZIO.fromOption(opt) // for now
+          webhook <- webhookRepo
+                       .getWebhookById(webhookId)
+                       .flatMap(opt => ZIO.fromOption(opt).mapError(_ => MissingWebhookError(webhookId)))
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
-          _       <- httpClient.post(request)
+          _       <- httpClient.post(request).mapError(IOError(_)) // TODO: do something with response
         } yield ()
-      )
-      .ignore
-      .fork // keep track of fibers for when we shut down?
+      }
+      .fork
 
   // get events that are Delivering & AtLeastOnce
   // reconstruct webhookState
   /**
    * Kicks off recovery of events that with the following delivery mode: `Delivering` & `AtLeastOnce`.
    */
-  private def startEventRecovery: UIO[Any] = ZIO.unit
+  private def startEventRecovery: IO[WebhookError, Any] = ZIO.unit
 
-  // Maybe should have state somewhere here shut down.
   /**
    * Waits until all work in progress is finished, then shuts down.
    */
   def shutdown: IO[IOException, Any] = ZIO.unit
 }
 
-/**
- * We're providing a live layer for convenience and to ensure proper resource management.
- */
 object WebhookServer {
   type Env = Has[WebhookRepo] with Has[WebhookStateRepo] with Has[WebhookEventRepo] with Has[WebhookHttpClient]
 
@@ -98,15 +95,19 @@ object WebhookServer {
     case object Unavailable                                                   extends WebhookState
   }
 
-  val live: RLayer[WebhookServer.Env, Has[WebhookServer]] =
-    (for {
+  /**
+   * A live server layer is provided for convenience and to ensure proper resource management.
+   */
+  val live: RLayer[WebhookServer.Env, Has[WebhookServer]] = {
+    for {
       state      <- Ref.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
       repo       <- ZManaged.service[WebhookRepo]
       stateRepo  <- ZManaged.service[WebhookStateRepo]
       eventRepo  <- ZManaged.service[WebhookEventRepo]
       httpClient <- ZManaged.service[WebhookHttpClient]
       server      = WebhookServer(repo, stateRepo, eventRepo, httpClient, state)
-      _          <- server.start.orDie.toManaged_
+      _          <- server.start.mapError(_.asThrowable).orDie.toManaged_
       _          <- ZManaged.finalizer(server.shutdown.orDie)
-    } yield server).toLayer
+    } yield server
+  }.toLayer
 }
