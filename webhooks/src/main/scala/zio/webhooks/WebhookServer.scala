@@ -23,17 +23,14 @@ final case class WebhookServer(
    * - retry monitoring
    */
   def start: IO[WebhookError, Any] =
-    startEventSubscription *> startEventRecovery *> startRetryMonitoring
+    startNewEventSubscription *> startEventRecovery *> startRetryMonitoring
 
-  // periodically retry every WebhookEvent in queues
-  // if we've retried for >7 days,
-  //   Webhook as Unavailable
-  //   clear WebhookState for that Webhook
-  //   make sure that subscribeToNewEvents does _not_ try to deliver to an unavailable webhook
+  // get events that are Delivering & AtLeastOnce
+  // reconstruct webhookState
   /**
-   * Kicks off backoff retries for every [[WebhookEvent]] pending delivery.
+   * Kicks off recovery of events that with the following delivery mode: `Delivering` & `AtLeastOnce`.
    */
-  private def startRetryMonitoring: IO[WebhookError, Any] = ZIO.unit // ticket
+  private def startEventRecovery: IO[WebhookError, Any] = ZIO.unit
 
   /**
    * Call webhookEventRepo.getEventsByStatus looking for new events
@@ -50,13 +47,13 @@ final case class WebhookServer(
    *        - if successful
    *          - mark it as Delivered
    *        - if unsuccessful
-   *          - create a queue in the map
+   *          - create a queue in the state
    *          - enqueue the event into the queue
    */
   /**
    * Kicks off new [[WebhookEvent]] subscription.
    */
-  private def startEventSubscription: IO[WebhookError, Any] =
+  private def startNewEventSubscription: IO[WebhookError, Any] =
     eventRepo
       .getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
       .foreach { newEvent =>
@@ -66,17 +63,21 @@ final case class WebhookServer(
                        .getWebhookById(webhookId)
                        .flatMap(opt => ZIO.fromOption(opt).mapError(_ => MissingWebhookError(webhookId)))
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
-          _       <- httpClient.post(request).mapError(IOError(_)) // TODO: do something with response
-        } yield ()
+          // TODO: do something with response
+          _       <- httpClient.post(request).ignore // TODO: write test to handle failure
+        } yield () // should WebhookError crash server?
       }
       .fork
 
-  // get events that are Delivering & AtLeastOnce
-  // reconstruct webhookState
+  // periodically retry every WebhookEvent in queues
+  // if we've retried for >7 days,
+  //   Webhook as Unavailable
+  //   clear WebhookState for that Webhook
+  //   make sure that subscribeToNewEvents does _not_ try to deliver to an unavailable webhook
   /**
-   * Kicks off recovery of events that with the following delivery mode: `Delivering` & `AtLeastOnce`.
+   * Kicks off backoff retries for every [[WebhookEvent]] pending delivery.
    */
-  private def startEventRecovery: IO[WebhookError, Any] = ZIO.unit
+  private def startRetryMonitoring: IO[WebhookError, Any] = ZIO.unit // ticket
 
   /**
    * Waits until all work in progress is finished, then shuts down.

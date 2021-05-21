@@ -1,9 +1,9 @@
 package zio.webhooks
 
-import zio.webhooks.WebhookError._
 import zio._
 import zio.prelude.NonEmptySet
 import zio.stream._
+import zio.webhooks.WebhookError._
 
 /**
  * A [[WebhookEventRepo]] provides persistence facilities for webhook events.

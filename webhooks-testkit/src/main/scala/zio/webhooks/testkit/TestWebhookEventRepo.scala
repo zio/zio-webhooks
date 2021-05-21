@@ -15,9 +15,9 @@ object TestWebhookEventRepo {
 
   val test: RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
     for {
-      ref         <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
-      queue       <- Queue.unbounded[WebhookEvent]
-      webhookRepo <- ZIO.service[WebhookRepo]
+      ref         <- Ref.makeManaged(Map.empty[WebhookEventKey, WebhookEvent])
+      queue       <- Queue.unbounded[WebhookEvent].toManaged_
+      webhookRepo <- ZManaged.service[WebhookRepo]
       impl         = TestWebhookEventRepoImpl(ref, queue, webhookRepo)
     } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo, WebhookRepo](impl, impl, webhookRepo)
   }.toLayerMany
@@ -38,7 +38,6 @@ final private case class TestWebhookEventRepoImpl(
   def createEvent(event: WebhookEvent): UIO[Unit] =
     for {
       _ <- ref.update(_.updated(event.key, event))
-      _ <- ref.get
       _ <- queue.offer(event)
     } yield ()
 
