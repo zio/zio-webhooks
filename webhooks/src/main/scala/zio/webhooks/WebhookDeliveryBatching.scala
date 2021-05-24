@@ -13,5 +13,5 @@ object WebhookDeliveryBatching {
   case object Single extends WebhookDeliveryBatching
 
   // TODO: Smart constructor for `Batched`
-  final case class Batched (size: Int, maxWait: Duration) extends WebhookDeliveryBatching
+  final case class Batched(size: Int, maxWait: Duration) extends WebhookDeliveryBatching
 }
