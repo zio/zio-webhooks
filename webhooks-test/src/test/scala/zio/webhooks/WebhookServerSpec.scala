@@ -89,18 +89,26 @@ object WebhookServerSpecUtil {
     sleepDuration: Option[Duration] = None
   ): URIO[TestEnv, TestResult] =
     for {
-      responseQueue <- Queue.unbounded[WebhookHttpResponse]
-      _             <- responseQueue.offerAll(stubResponses)
-      _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-      _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
-      _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
-      requestQueue  <- TestWebhookHttpClient.requests
+      responseQueue  <- Queue.unbounded[WebhookHttpResponse]
+      _              <- responseQueue.offerAll(stubResponses)
+      _              <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
+      eventFiber     <- TestWebhookEventRepo.subscribeToEvents { eventsDequeue =>
+                          for {
+                            deliveringEvents <- eventsDequeue
+                                                  .filterOutput(_.status == WebhookEventStatus.Delivering)
+                                                  .takeN(events.size)
+                          } yield assert(deliveringEvents.size)(equalTo(events.size))
+                        }.fork
+      _              <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
+      _              <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
+      requestQueue   <- TestWebhookHttpClient.requests
       // let test fiber sleep as we have to let requests be made to fail some tests
       // TODO: there's a better way to do this: poll the queue repeatedly with a timeout
       // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862 fo
-      _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
-      testResult    <- requestsAssertion(requestQueue)
-    } yield testResult
+      _              <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
+      testDeliveries <- eventFiber.join
+      testRequests   <- requestsAssertion(requestQueue)
+    } yield testDeliveries && testRequests
 
   def createWebhooks(n: Int)(status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Iterable[Webhook] =
     (0 until n).map(i => singleWebhook(i.toLong, status, deliveryMode))

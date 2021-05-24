@@ -29,8 +29,10 @@ object TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.createEvent(event))
 
-  def getEvents: URIO[Has[TestWebhookEventRepo], Dequeue[WebhookEvent]] =
-    ZIO.serviceWith(_.subscribeToEvents.useNow)
+  def subscribeToEvents[A](
+    useDequeue: Dequeue[WebhookEvent] => URIO[Has[TestWebhookEventRepo], A]
+  ): URIO[Has[TestWebhookEventRepo], A] =
+    ZIO.serviceWith(_.subscribeToEvents.use(useDequeue))
 }
 
 final private case class TestWebhookEventRepoImpl(
@@ -45,17 +47,6 @@ final private case class TestWebhookEventRepoImpl(
       _ <- ref.update(_.updated(event.key, event))
       _ <- hub.publish(event)
     } yield ()
-
-  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]] = hub.subscribe
-
-  def subscribeToEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
-    Stream.fromHub(hub).filter(event => statuses.contains(event.status))
-
-  def subscribeToEventsByWebhookAndStatus(
-    id: WebhookId,
-    statuses: NonEmptySet[WebhookEventStatus]
-  ): Stream[WebhookError.MissingWebhookError, WebhookEvent] =
-    subscribeToEventsByStatuses(statuses).filter(_.key.webhookId == id)
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit] =
     for {
@@ -86,4 +77,15 @@ final private case class TestWebhookEventRepoImpl(
                          ZIO.fail(MissingWebhookEventError(key))
                        )(event => hub.publish(event).unit)
     } yield ()
+
+  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]] = hub.subscribe
+
+  def subscribeToEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
+    Stream.fromHub(hub).filter(event => statuses.contains(event.status))
+
+  def subscribeToEventsByWebhookAndStatus(
+    id: WebhookId,
+    statuses: NonEmptySet[WebhookEventStatus]
+  ): Stream[WebhookError.MissingWebhookError, WebhookEvent] =
+    subscribeToEventsByStatuses(statuses).filter(_.key.webhookId == id)
 }
