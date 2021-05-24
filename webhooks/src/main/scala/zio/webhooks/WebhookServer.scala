@@ -67,7 +67,7 @@ final case class WebhookServer(
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
           // TODO: do something with response
           // TODO: write test to handle failure?
-          _       <- /* ZIO.unless(webhook.isDisabled)( */httpClient.post(request).ignore/* ) */
+          _       <- ZIO.unless(webhook.isDisabled)(httpClient.post(request).ignore)
         } yield () // should WebhookError crash server?
       }
       .fork
