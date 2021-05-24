@@ -10,4 +10,7 @@ final case class Webhook(
   label: String,
   status: WebhookStatus,
   deliveryMode: WebhookDeliveryMode
-)
+) {
+  final def isDisabled: Boolean =
+    status == WebhookStatus.Disabled
+}

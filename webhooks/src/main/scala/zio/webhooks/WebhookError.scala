@@ -2,8 +2,6 @@ package zio.webhooks
 
 import zio.webhooks.WebhookError._
 
-import java.io.IOException
-
 /**
  * Represents errors that can be raised during the operation of a webhook server.
  */
@@ -15,7 +13,6 @@ sealed trait WebhookError extends Product with Serializable {
         new Throwable(
           s"Missing webhook event with webhook id ${key.webhookId.value} and event id ${key.eventId.value}."
         )
-      case IOError(e)                    => e
     }
 }
 
@@ -30,9 +27,4 @@ object WebhookError {
    * A [[MissingWebhookEventError]] occurs when a webhook event we expect to exist is missing.
    */
   case class MissingWebhookEventError(key: WebhookEventKey) extends WebhookError
-
-  /**
-   * An [[IOError]] occurs when an [[java.io.IOException]] is raised.
-   */
-  case class IOError(IOException: IOException) extends WebhookError
 }

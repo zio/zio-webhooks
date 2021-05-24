@@ -64,7 +64,8 @@ final case class WebhookServer(
                        .flatMap(opt => ZIO.fromOption(opt).mapError(_ => MissingWebhookError(webhookId)))
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
           // TODO: do something with response
-          _       <- httpClient.post(request).ignore // TODO: write test to handle failure
+          // TODO: write test to handle failure?
+          _       <- ZIO.unless(webhook.isDisabled)(httpClient.post(request).ignore)
         } yield () // should WebhookError crash server?
       }
       .fork
