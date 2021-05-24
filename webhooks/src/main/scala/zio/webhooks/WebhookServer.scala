@@ -61,6 +61,8 @@ final case class WebhookServer(
       .foreach { newEvent =>
         val webhookId = newEvent.key.webhookId
         for {
+          // TODO: we're getting webhooks for each event for the URL and webhook status.
+          // TODO: could this be a bottleneck?
           webhook <- webhookRepo
                        .getWebhookById(webhookId)
                        .flatMap(opt => ZIO.fromOption(opt).mapError(_ => MissingWebhookError(webhookId)))

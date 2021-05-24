@@ -1,7 +1,6 @@
 package zio.webhooks
 
 import zio._
-import zio.clock.Clock
 import zio.duration._
 import zio.test.Assertion._
 import zio.test.DefaultRunnableSpec
@@ -9,7 +8,6 @@ import zio.test.TestAspect._
 import zio.test._
 import zio.test.environment.Live
 import zio.webhooks.WebhookServerSpecHelper._
-import zio.webhooks.testkit._
 
 object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
@@ -18,21 +16,16 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         testM("can dispatch single event to n webhooks") {
           val n        = 100
           val webhooks = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
-          val events   = webhooks.flatMap(webhook => createWebhookEvent(1)(webhook.id))
 
-          for {
-            stubResponses <- Queue.unbounded[WebhookHttpResponse]
-            _             <- stubResponses.offerAll(Chunk.fill(n)(WebhookHttpResponse(200)))
-            _             <- TestWebhookHttpClient.setResponse(_ => Some(stubResponses))
-            _             <- ZIO.foreach(webhooks)(TestWebhookRepo.createWebhook(_))
-            _             <- ZIO.foreach(events)(TestWebhookEventRepo.createEvent(_))
-            requestsMade  <- TestWebhookHttpClient.requests
-            size          <- requestsMade.takeN(n).map(_.size)
-          } yield assert(size)(equalTo(n))
+          assertRequestsMade(
+            stubResponses = Chunk.fill(n)(WebhookHttpResponse(200)),
+            webhooks = webhooks,
+            events = webhooks.map(_.id).flatMap(createWebhookEvent(1)),
+            requestsAssertion = _.takeN(n).map(assert(_)(hasSize(equalTo(n))))
+          )
         },
-        testM("dispatches no events for disabled webhooks") {
-          val n = 100
-
+        testM("no events dispatched for disabled webhooks") {
+          val n       = 100
           val webhook = Webhook(
             WebhookId(0),
             "http://foo.bar",
@@ -41,19 +34,13 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             WebhookDeliveryMode.SingleAtMostOnce
           )
 
-          val events = createWebhookEvent(n)(webhook.id)
-
-          for {
-            stubResponses <- Queue.unbounded[WebhookHttpResponse]
-            _             <- stubResponses.offerAll(Chunk.fill(n)(WebhookHttpResponse(200)))
-            _             <- TestWebhookHttpClient.setResponse(_ => Some(stubResponses))
-            _             <- TestWebhookRepo.createWebhook(webhook)
-            _             <- ZIO.foreach(events)(TestWebhookEventRepo.createEvent(_))
-            requestsMade  <- TestWebhookHttpClient.requests
-            // let test fiber sleep as we have to let requests be made to fail test
-            _             <- Clock.Service.live.sleep(50.millis)
-            size          <- requestsMade.takeAll.map(_.size)
-          } yield assert(size)(equalTo(0))
+          assertRequestsMade(
+            stubResponses = Chunk.fill(n)(WebhookHttpResponse(200)),
+            webhooks = List(webhook),
+            events = createWebhookEvent(n)(webhook.id),
+            requestsAssertion = _.takeAll.map(assert(_)(hasSize(equalTo(0)))),
+            sleepDuration = Some(50.millis)
+          )
         },
         testM("dispatches no events for unavailable webhooks") {
           ???
