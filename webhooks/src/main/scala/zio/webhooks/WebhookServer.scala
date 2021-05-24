@@ -12,7 +12,8 @@ final case class WebhookServer(
   stateRepo: WebhookStateRepo,
   eventRepo: WebhookEventRepo,
   httpClient: WebhookHttpClient,
-  // consider STM if needed
+  batchQueue: Queue[WebhookEvent],
+  // consider STM if needed,
   webhookState: Ref[Map[WebhookId, WebhookServer.WebhookState]]
 ) {
 
@@ -23,7 +24,7 @@ final case class WebhookServer(
    * - retry monitoring
    */
   def start: IO[WebhookError, Any] =
-    // should I be doing anything else with the fibers?
+    // should we be doing anything else with the fibers?
     startNewEventSubscription *> startEventRecovery *> startRetryMonitoring
 
   // get events that are Delivering & AtLeastOnce
@@ -61,11 +62,10 @@ final case class WebhookServer(
       .foreach { newEvent =>
         val webhookId = newEvent.key.webhookId
         for {
-          // TODO: we're getting webhooks for each event for the URL and webhook status.
-          // TODO: could this be a bottleneck?
           webhook <- webhookRepo
                        .getWebhookById(webhookId)
                        .flatMap(opt => ZIO.fromOption(opt).mapError(_ => MissingWebhookError(webhookId)))
+          batching = webhook.deliveryMode.batching
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
           // TODO: do something with response
           // TODO: write test to handle failure?
@@ -107,11 +107,12 @@ object WebhookServer {
   val live: RLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
       state      <- Ref.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
+      batchQueue <- Queue.bounded[WebhookEvent](1024).toManaged_
       repo       <- ZManaged.service[WebhookRepo]
       stateRepo  <- ZManaged.service[WebhookStateRepo]
       eventRepo  <- ZManaged.service[WebhookEventRepo]
       httpClient <- ZManaged.service[WebhookHttpClient]
-      server      = WebhookServer(repo, stateRepo, eventRepo, httpClient, state)
+      server      = WebhookServer(repo, stateRepo, eventRepo, httpClient, batchQueue, state)
       _          <- server.start.mapError(_.asThrowable).orDie.toManaged_
       _          <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server

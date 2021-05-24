@@ -91,6 +91,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           sleepDuration = Some(10.millis)
         )
       }
+      // TODO: test that successfully dispatched events are marked delivered
       // TODO: test that `WebhookError`s in the subscription crash the server?
       // TODO: what to do with non-existent webhook or webhook events?
       // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
