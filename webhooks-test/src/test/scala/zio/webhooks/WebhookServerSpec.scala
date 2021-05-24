@@ -37,13 +37,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           )
         },
         testM("can dispatch single event to n webhooks") {
-          val n        = 100
-          val webhooks = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+          val n                 = 100
+          val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+          val eventsToNWebhooks = webhooks.map(_.id).flatMap(createWebhookEvents(1))
 
           assertRequestsMade(
             stubResponses = List.fill(n)(WebhookHttpResponse(200)),
             webhooks = webhooks,
-            events = webhooks.map(_.id).flatMap(createWebhookEvents(1)),
+            events = eventsToNWebhooks,
             requestsAssertion = queue => assertM(queue.takeN(n))(hasSize(equalTo(n)))
           )
         },
