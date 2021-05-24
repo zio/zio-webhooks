@@ -8,6 +8,8 @@ import zio.webhooks._
 
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
+
+  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]]
 }
 
 object TestWebhookEventRepo {
@@ -26,6 +28,9 @@ object TestWebhookEventRepo {
 
   def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.createEvent(event))
+
+  def getEvents: URIO[Has[TestWebhookEventRepo], Dequeue[WebhookEvent]] =
+    ZIO.serviceWith(_.subscribeToEvents.useNow)
 }
 
 final private case class TestWebhookEventRepoImpl(
@@ -40,6 +45,8 @@ final private case class TestWebhookEventRepoImpl(
       _ <- ref.update(_.updated(event.key, event))
       _ <- hub.publish(event)
     } yield ()
+
+  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]] = hub.subscribe
 
   def subscribeToEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
     Stream.fromHub(hub).filter(event => statuses.contains(event.status))
