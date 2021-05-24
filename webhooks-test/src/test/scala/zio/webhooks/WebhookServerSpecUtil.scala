@@ -1,14 +1,13 @@
 package zio.webhooks
 
 import zio._
-import zio.test._
-
-import zio.webhooks.testkit._
-import zio.duration.Duration
 import zio.clock.Clock
+import zio.duration.Duration
+import zio.test._
+import zio.webhooks.testkit._
 
 // TODO: scaladoc
-object WebhookServerSpecHelper {
+object WebhookServerSpecUtil {
 
   def assertRequestsMade(
     stubResponses: Iterable[WebhookHttpResponse],
@@ -24,7 +23,9 @@ object WebhookServerSpecHelper {
       _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
       _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
       requestQueue  <- TestWebhookHttpClient.requests
-      // let test fiber sleep as we have to let requests be made to fail test
+      // let test fiber sleep as we have to let requests be made to fail some tests
+      // TODO: there's a better way to do this: poll the queue repeatedly with a timeout
+      // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862 fo
       _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
       testResult    <- requestsAssertion(requestQueue)
     } yield testResult
@@ -40,8 +41,7 @@ object WebhookServerSpecHelper {
       )
     }
 
-  // TODO: make this return some NonEmpty*?
-  def createWebhookEvent(n: Int)(webhookId: WebhookId): Iterable[WebhookEvent] =
+  def createWebhookEvents(n: Int)(webhookId: WebhookId): Iterable[WebhookEvent] =
     (0 until n).map { i =>
       WebhookEvent(
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
