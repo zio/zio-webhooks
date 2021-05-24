@@ -16,9 +16,9 @@ object TestWebhookEventRepo {
   val test: RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
     for {
       ref         <- Ref.makeManaged(Map.empty[WebhookEventKey, WebhookEvent])
-      queue       <- Queue.unbounded[WebhookEvent].toManaged_
+      hub         <- Hub.unbounded[WebhookEvent].toManaged_
       webhookRepo <- ZManaged.service[WebhookRepo]
-      impl         = TestWebhookEventRepoImpl(ref, queue, webhookRepo)
+      impl         = TestWebhookEventRepoImpl(ref, hub, webhookRepo)
     } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo, WebhookRepo](impl, impl, webhookRepo)
   }.toLayerMany
 
@@ -30,7 +30,7 @@ object TestWebhookEventRepo {
 
 final private case class TestWebhookEventRepoImpl(
   ref: Ref[Map[WebhookEventKey, WebhookEvent]],
-  queue: Queue[WebhookEvent],
+  hub: Hub[WebhookEvent],
   webhookRepo: WebhookRepo
 ) extends WebhookEventRepo
     with TestWebhookEventRepo {
@@ -38,11 +38,11 @@ final private case class TestWebhookEventRepoImpl(
   def createEvent(event: WebhookEvent): UIO[Unit] =
     for {
       _ <- ref.update(_.updated(event.key, event))
-      _ <- queue.offer(event)
+      _ <- hub.publish(event)
     } yield ()
 
   def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
-    Stream.fromQueue(queue).filter(event => statuses.contains(event.status))
+    Stream.fromHub(hub).filter(event => statuses.contains(event.status))
 
   def getEventsByWebhookAndStatus(
     id: WebhookId,
@@ -60,7 +60,7 @@ final private case class TestWebhookEventRepoImpl(
                              yield (key, event.copy(status = WebhookEventStatus.Failed))
                          )
                        }
-      _             <- queue.offerAll(updatedMap.values)
+      _             <- hub.publishAll(updatedMap.values)
     } yield ()
 
   def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit] =
@@ -77,6 +77,6 @@ final private case class TestWebhookEventRepoImpl(
                        }
       _             <- eventOpt.fold[IO[MissingWebhookEventError, Unit]](
                          ZIO.fail(MissingWebhookEventError(key))
-                       )(event => queue.offer(event).unit)
+                       )(event => hub.publish(event).unit)
     } yield ()
 }
