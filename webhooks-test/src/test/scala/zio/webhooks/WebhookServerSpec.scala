@@ -18,26 +18,18 @@ object WebhookServerSpec extends DefaultRunnableSpec {
     suite("WebhookServerSpec")(
       suite("on server new event subscription")(
         testM("dispatches correct request given event") {
-          val webhook = Webhook(
-            WebhookId(0),
-            "http://foo.bar",
-            "testWebhook",
-            WebhookStatus.Enabled,
-            WebhookDeliveryMode.SingleAtMostOnce
-          )
-
           val event = WebhookEvent(
-            WebhookEventKey(WebhookEventId(0), webhook.id),
+            WebhookEventKey(WebhookEventId(0), singleWebhook.id),
             WebhookEventStatus.New,
             "event payload",
             Chunk(("Accept", "*/*"))
           )
 
-          val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
+          val expectedRequest = WebhookHttpRequest(singleWebhook.url, event.content, event.headers)
 
           assertRequestsMade(
             stubResponses = List(WebhookHttpResponse(200)),
-            webhooks = List(webhook),
+            webhooks = List(singleWebhook),
             events = List(event),
             requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
           )
@@ -54,44 +46,31 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           )
         },
         testM("dispatches no events for disabled webhooks") {
-          val n       = 100
-          val webhook = Webhook(
-            WebhookId(0),
-            "http://foo.bar",
-            "testWebhook",
-            WebhookStatus.Disabled,
-            WebhookDeliveryMode.SingleAtMostOnce
-          )
+          val n = 100
 
           assertRequestsMade(
             stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-            webhooks = List(webhook),
-            events = createWebhookEvents(n)(webhook.id),
+            webhooks = List(singleWebhook),
+            events = createWebhookEvents(n)(singleWebhook.id),
             requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
           )
         },
         testM("dispatches no events for unavailable webhooks") {
-          val n       = 100
-          val webhook = Webhook(
-            WebhookId(0),
-            "http://foo.bar",
-            "testWebhook",
-            WebhookStatus.Unavailable(Instant.EPOCH),
-            WebhookDeliveryMode.SingleAtMostOnce
-          )
+          val n = 100
 
           assertRequestsMade(
             stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-            webhooks = List(webhook),
-            events = createWebhookEvents(n)(webhook.id),
+            webhooks = List(singleWebhook),
+            events = createWebhookEvents(n)(singleWebhook.id),
             requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
           )
         }
+        // TODO: what to do with non-existent webhook or webhook events?
         // TODO: test that errors in the subscription crash the server?
-        // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       ) @@ timeout(5.seconds)
+      // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
     ).provideSomeLayer[Has[Live.Service] with Has[Annotations.Service]](testEnv)
 }
 
@@ -138,6 +117,14 @@ object WebhookServerSpecUtil {
         Chunk(("Accept", "*/*"))
       )
     }
+
+  val singleWebhook = Webhook(
+    WebhookId(0),
+    "http://foo.bar",
+    "testWebhook label",
+    WebhookStatus.Unavailable(Instant.EPOCH),
+    WebhookDeliveryMode.SingleAtMostOnce
+  )
 
   type TestEnv = Has[WebhookEventRepo]
     with Has[TestWebhookEventRepo]
