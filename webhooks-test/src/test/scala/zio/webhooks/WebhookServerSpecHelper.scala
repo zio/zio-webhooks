@@ -1,6 +1,7 @@
 package zio.webhooks
 
-import zio.Chunk
+import zio._
+import zio.webhooks.testkit._
 
 // TODO: scaladoc
 object WebhookServerSpecHelper {
@@ -25,4 +26,19 @@ object WebhookServerSpecHelper {
         Chunk(("Accept", "*/*"))
       )
     }
+
+  type TestEnv = Has[WebhookEventRepo]
+    with Has[TestWebhookEventRepo]
+    with Has[WebhookRepo]
+    with Has[TestWebhookRepo]
+    with Has[WebhookStateRepo]
+    with Has[TestWebhookHttpClient]
+    with Has[WebhookHttpClient]
+    with Has[WebhookServer]
+
+  val testEnv: ULayer[TestEnv] = {
+    val repos =
+      (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++ TestWebhookStateRepo.test ++ TestWebhookHttpClient.test
+    repos ++ (repos >>> WebhookServer.live)
+  }.orDie
 }

@@ -41,7 +41,7 @@ final case class TestWebhookHttpClientImpl(
     for {
       _        <- received.offer(request)
       f        <- ref.get
-      queue    <- ZIO.fromOption(f(request)).mapError(_ => new IOException("No response for given request."))
+      queue    <- ZIO.fromOption(f(request)).mapError(_ => new IOException("No response set for given request."))
       response <- queue.take
     } yield response
 

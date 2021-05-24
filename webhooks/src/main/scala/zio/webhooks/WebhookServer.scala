@@ -19,16 +19,18 @@ final case class WebhookServer(
   /**
    * Starts the webhook server. Kicks off the following to run concurrently:
    * - new webhook event subscription
-   * - event recovery for events
+   * - event recovery for webhooks which need to deliver at least once
    * - retry monitoring
    */
   def start: IO[WebhookError, Any] =
+    // should I be doing anything else with the fibers?
     startNewEventSubscription *> startEventRecovery *> startRetryMonitoring
 
   // get events that are Delivering & AtLeastOnce
   // reconstruct webhookState
   /**
-   * Kicks off recovery of events that with the following delivery mode: `Delivering` & `AtLeastOnce`.
+   * Kicks off recovery of events whose status is `Delivering` for webhooks with `AtLeastOnce`
+   * delivery semantics.
    */
   private def startEventRecovery: IO[WebhookError, Any] = ZIO.unit
 
@@ -65,16 +67,16 @@ final case class WebhookServer(
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
           // TODO: do something with response
           // TODO: write test to handle failure?
-          _       <- ZIO.unless(webhook.isDisabled)(httpClient.post(request).ignore)
+          _       <- /* ZIO.unless(webhook.isDisabled)( */httpClient.post(request).ignore/* ) */
         } yield () // should WebhookError crash server?
       }
       .fork
 
   // periodically retry every WebhookEvent in queues
   // if we've retried for >7 days,
-  //   Webhook as Unavailable
+  //   mark Webhook as Unavailable
   //   clear WebhookState for that Webhook
-  //   make sure that subscribeToNewEvents does _not_ try to deliver to an unavailable webhook
+  //   make sure that startNewEventSubscription does _not_ try to deliver to an unavailable webhook
   /**
    * Kicks off backoff retries for every [[WebhookEvent]] pending delivery.
    */

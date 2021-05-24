@@ -54,24 +54,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             _             <- Clock.Service.live.sleep(50.millis)
             size          <- requestsMade.takeAll.map(_.size)
           } yield assert(size)(equalTo(0))
-        }
+        },
+        testM("dispatches no events for unavailable webhooks") {
+          ???
+        } @@ ignore
         // TODO: test that errors in the subscription crash the server?
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       ) @@ timeout(5.seconds)
-    ).provideSomeLayer[Has[Live.Service]](testEnv)
-
-  type TestEnv = Has[WebhookEventRepo]
-    with Has[TestWebhookEventRepo]
-    with Has[WebhookRepo]
-    with Has[TestWebhookRepo]
-    with Has[WebhookStateRepo]
-    with Has[TestWebhookHttpClient]
-    with Has[WebhookHttpClient]
-    with Has[WebhookServer]
-
-  val testEnv: ULayer[TestEnv] = {
-    val repos =
-      (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++ TestWebhookStateRepo.test ++ TestWebhookHttpClient.test
-    repos ++ (repos >>> WebhookServer.live)
-  }.orDie
+    ).provideSomeLayer[Has[Live.Service] with Has[Annotations.Service]](testEnv)
 }
