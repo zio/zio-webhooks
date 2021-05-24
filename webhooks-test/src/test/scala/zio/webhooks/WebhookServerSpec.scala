@@ -17,18 +17,43 @@ object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
     suite("WebhookServerSpec")(
       suite("on server new event subscription")(
+        testM("dispatches correct request given event") {
+          val webhook = Webhook(
+            WebhookId(0),
+            "http://foo.bar",
+            "testWebhook",
+            WebhookStatus.Enabled,
+            WebhookDeliveryMode.SingleAtMostOnce
+          )
+
+          val event = WebhookEvent(
+            WebhookEventKey(WebhookEventId(0), webhook.id),
+            WebhookEventStatus.New,
+            "event payload",
+            Chunk(("Accept", "*/*"))
+          )
+
+          val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
+
+          assertRequestsMade(
+            stubResponses = List(WebhookHttpResponse(200)),
+            webhooks = List(webhook),
+            events = List(event),
+            requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
+          )
+        },
         testM("can dispatch single event to n webhooks") {
           val n        = 100
           val webhooks = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
           assertRequestsMade(
-            stubResponses = Chunk.fill(n)(WebhookHttpResponse(200)),
+            stubResponses = List.fill(n)(WebhookHttpResponse(200)),
             webhooks = webhooks,
             events = webhooks.map(_.id).flatMap(createWebhookEvents(1)),
-            requestsAssertion = _.takeN(n).map(assert(_)(hasSize(equalTo(n))))
+            requestsAssertion = queue => assertM(queue.takeN(n))(hasSize(equalTo(n)))
           )
         },
-        testM("no events dispatched for disabled webhooks") {
+        testM("dispatches no events for disabled webhooks") {
           val n       = 100
           val webhook = Webhook(
             WebhookId(0),
@@ -39,10 +64,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           )
 
           assertRequestsMade(
-            stubResponses = Chunk.fill(n)(WebhookHttpResponse(200)),
+            stubResponses = List.fill(n)(WebhookHttpResponse(200)),
             webhooks = List(webhook),
             events = createWebhookEvents(n)(webhook.id),
-            requestsAssertion = _.takeAll.map(_.size).map(assert(_)(equalTo(0))),
+            requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
           )
         },
@@ -57,10 +82,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           )
 
           assertRequestsMade(
-            stubResponses = Chunk.fill(n)(WebhookHttpResponse(200)),
+            stubResponses = List.fill(n)(WebhookHttpResponse(200)),
             webhooks = List(webhook),
             events = createWebhookEvents(n)(webhook.id),
-            requestsAssertion = _.takeAll.map(_.size).map(assert(_)(equalTo(0))),
+            requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
           )
         }
@@ -70,7 +95,6 @@ object WebhookServerSpec extends DefaultRunnableSpec {
     ).provideSomeLayer[Has[Live.Service] with Has[Annotations.Service]](testEnv)
 }
 
-// TODO: scaladoc
 object WebhookServerSpecUtil {
 
   def assertRequestsMade(
