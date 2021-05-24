@@ -18,18 +18,20 @@ object WebhookServerSpec extends DefaultRunnableSpec {
     suite("WebhookServerSpec")(
       suite("on server new event subscription")(
         testM("dispatches correct request given event") {
+          val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+
           val event = WebhookEvent(
-            WebhookEventKey(WebhookEventId(0), singleWebhook.id),
+            WebhookEventKey(WebhookEventId(0), webhook.id),
             WebhookEventStatus.New,
             "event payload",
             Chunk(("Accept", "*/*"))
           )
 
-          val expectedRequest = WebhookHttpRequest(singleWebhook.url, event.content, event.headers)
+          val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
 
           assertRequestsMade(
             stubResponses = List(WebhookHttpResponse(200)),
-            webhooks = List(singleWebhook),
+            webhooks = List(webhook),
             events = List(event),
             requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
           )
@@ -46,23 +48,25 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           )
         },
         testM("dispatches no events for disabled webhooks") {
-          val n = 100
+          val n       = 100
+          val webhook = singleWebhook(0, WebhookStatus.Disabled, WebhookDeliveryMode.SingleAtMostOnce)
 
           assertRequestsMade(
             stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-            webhooks = List(singleWebhook),
-            events = createWebhookEvents(n)(singleWebhook.id),
+            webhooks = List(webhook),
+            events = createWebhookEvents(n)(webhook.id),
             requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
           )
         },
         testM("dispatches no events for unavailable webhooks") {
-          val n = 100
+          val n       = 100
+          val webhook = singleWebhook(0, WebhookStatus.Unavailable(Instant.EPOCH), WebhookDeliveryMode.SingleAtMostOnce)
 
           assertRequestsMade(
             stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-            webhooks = List(singleWebhook),
-            events = createWebhookEvents(n)(singleWebhook.id),
+            webhooks = List(webhook),
+            events = createWebhookEvents(n)(webhook.id),
             requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
           )
@@ -98,15 +102,7 @@ object WebhookServerSpecUtil {
     } yield testResult
 
   def createWebhooks(n: Int)(status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Iterable[Webhook] =
-    (0 until n).map { i =>
-      Webhook(
-        WebhookId(i.toLong),
-        "http://example.org/" + i,
-        "testWebhook" + i,
-        status,
-        deliveryMode
-      )
-    }
+    (0 until n).map(i => singleWebhook(i.toLong, status, deliveryMode))
 
   def createWebhookEvents(n: Int)(webhookId: WebhookId): Iterable[WebhookEvent] =
     (0 until n).map { i =>
@@ -118,13 +114,14 @@ object WebhookServerSpecUtil {
       )
     }
 
-  val singleWebhook = Webhook(
-    WebhookId(0),
-    "http://foo.bar",
-    "testWebhook label",
-    WebhookStatus.Unavailable(Instant.EPOCH),
-    WebhookDeliveryMode.SingleAtMostOnce
-  )
+  def singleWebhook(id: Long, status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Webhook =
+    Webhook(
+      WebhookId(id),
+      "http://example.org/" + id,
+      "testWebhook" + id,
+      status,
+      deliveryMode
+    )
 
   type TestEnv = Has[WebhookEventRepo]
     with Has[TestWebhookEventRepo]
