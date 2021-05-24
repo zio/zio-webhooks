@@ -57,7 +57,7 @@ final case class WebhookServer(
    */
   private def startNewEventSubscription: IO[WebhookError, Any] =
     eventRepo
-      .getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
+      .subscribeToEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
       .foreach { newEvent =>
         val webhookId = newEvent.key.webhookId
         for {

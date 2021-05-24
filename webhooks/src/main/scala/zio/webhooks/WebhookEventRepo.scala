@@ -11,15 +11,16 @@ import zio.webhooks.WebhookError._
 trait WebhookEventRepo {
 
   /**
-   * Retrieves all events by their statuses.
+   * Subscribes to events given a non-empty set of statuses. Implementations are responsible for
+   * ordering events.
    */
-  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent]
+  def subscribeToEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent]
 
   /**
-   * Retrieves events by [[WebhookId]] and a non-empty set of [[WebhookEventStatus]]es. Implementations should ensure
-   * ordering of events.
+   * Retrieves events by [[WebhookId]] and a non-empty set of [[WebhookEventStatus]]es.
+   * Implementations are responsible for ordering events.
    */
-  def getEventsByWebhookAndStatus(
+  def subscribeToEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
   ): Stream[MissingWebhookError, WebhookEvent]

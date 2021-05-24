@@ -41,14 +41,14 @@ final private case class TestWebhookEventRepoImpl(
       _ <- hub.publish(event)
     } yield ()
 
-  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
+  def subscribeToEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
     Stream.fromHub(hub).filter(event => statuses.contains(event.status))
 
-  def getEventsByWebhookAndStatus(
+  def subscribeToEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
   ): Stream[WebhookError.MissingWebhookError, WebhookEvent] =
-    getEventsByStatuses(statuses).filter(_.key.webhookId == id)
+    subscribeToEventsByStatuses(statuses).filter(_.key.webhookId == id)
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit] =
     for {
