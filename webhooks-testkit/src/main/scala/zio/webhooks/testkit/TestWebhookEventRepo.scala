@@ -30,9 +30,9 @@ object TestWebhookEventRepo {
     ZIO.serviceWith(_.createEvent(event))
 
   def subscribeToEvents[A](
-    useDequeue: Dequeue[WebhookEvent] => URIO[Has[TestWebhookEventRepo], A]
+    useDequeue: Dequeue[WebhookEvent] => UIO[A]
   ): URIO[Has[TestWebhookEventRepo], A] =
-    ZIO.serviceWith(_.subscribeToEvents.use(useDequeue))
+    ZIO.serviceWith(_.subscribeToEvents.use[Any, Nothing, A](useDequeue))
 }
 
 final private case class TestWebhookEventRepoImpl(

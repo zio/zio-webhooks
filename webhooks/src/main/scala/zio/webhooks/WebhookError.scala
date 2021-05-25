@@ -8,10 +8,12 @@ import zio.webhooks.WebhookError._
 sealed trait WebhookError extends Product with Serializable {
   def asThrowable: Throwable =
     this match {
-      case MissingWebhookError(id)       => new Throwable(s"Missing webhook with id ${id.value}.")
+      case MissingWebhookError(id)       =>
+        new Throwable(s"Missing webhook with id ${id.value}.")
       case MissingWebhookEventError(key) =>
         new Throwable(
-          s"Missing webhook event with webhook id ${key.webhookId.value} and event id ${key.eventId.value}."
+          s"Missing webhook event with webhook id ${key.webhookId.value} and " +
+            s"event id ${key.eventId.value}."
         )
     }
 }
