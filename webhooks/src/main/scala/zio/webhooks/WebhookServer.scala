@@ -68,7 +68,13 @@ final case class WebhookServer(
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
           // TODO: do something with response
           // TODO: write test to handle failure?
-          _       <- ZIO.when(webhook.isOnline)(httpClient.post(request).ignore)
+          _       <- ZIO.when(webhook.isOnline) {
+                       for {
+                         _ <- eventRepo.setEventStatus(newEvent.key, WebhookEventStatus.Delivering)
+                         _ <- httpClient.post(request).ignore
+                         _ <- eventRepo.setEventStatus(newEvent.key, WebhookEventStatus.Delivered)
+                       } yield ()
+                     }
           // TODO: only mark events delivering if webhook is online
           // _       <- eventRepo.setEventStatus(newEvent.key, WebhookEventStatus.Delivering)
         } yield ()

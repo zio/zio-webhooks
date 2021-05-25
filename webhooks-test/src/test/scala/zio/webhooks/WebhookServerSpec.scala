@@ -36,6 +36,29 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
           ).build
         },
+        testM("webhook is marked Delivering, then Delivered for successful dispatch") {
+          val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+
+          val event = WebhookEvent(
+            WebhookEventKey(WebhookEventId(0), webhook.id),
+            WebhookEventStatus.New,
+            "event payload",
+            Chunk(("Accept", "*/*"))
+          )
+
+          val expectedStatuses = List(WebhookEventStatus.Delivering, WebhookEventStatus.Delivered)
+
+          WebhooksStateAssertion(
+            stubResponses = List(WebhookHttpResponse(200)),
+            webhooks = List(webhook),
+            events = List(event),
+            eventsAssertion = queue => {
+              val markEvents    = queue.filterOutput(!_.status.isNew).takeN(2)
+              val eventStatuses = markEvents.map(_.map(_.status))
+              assertM(eventStatuses)(hasSameElements(expectedStatuses))
+            }
+          ).build
+        },
         testM("can dispatch single event to n webhooks") {
           val n                 = 100
           val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
@@ -91,28 +114,20 @@ object WebhookServerSpecUtil {
   ) {
     def build: RIO[TestEnv, TestResult] =
       for {
-        responseQueue  <- Queue.unbounded[WebhookHttpResponse]
-        _              <- responseQueue.offerAll(stubResponses)
-        _              <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-        eventsFiber    <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion).fork
-        // TODO: write something like this for each test
-        // { eventsDequeue =>
-        //   for {
-        //     deliveringEvents <- eventsDequeue
-        //                           // .filterOutput(_.status == WebhookEventStatus.Delivering)
-        //                           .takeN(events.size)
-        //   } yield assert(deliveringEvents.size)(equalTo(events.size))
-        // }.fork
-        _              <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
-        _              <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
-        requestQueue   <- TestWebhookHttpClient.requests
+        responseQueue <- Queue.unbounded[WebhookHttpResponse]
+        _             <- responseQueue.offerAll(stubResponses)
+        _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
+        eventsFiber   <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion).fork
+        _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
+        _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
+        requestQueue  <- TestWebhookHttpClient.requests
         // let test fiber sleep as we have to let requests be made to fail some tests
         // TODO: there's a better way to do this: poll the queue repeatedly with a timeout
         // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862 fo
-        _              <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
-        deliveriesTest <- eventsFiber.join
-        requestsTest   <- requestsAssertion(requestQueue)
-      } yield deliveriesTest && requestsTest
+        _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
+        eventsTest    <- eventsFiber.join
+        requestsTest  <- requestsAssertion(requestQueue)
+      } yield eventsTest && requestsTest
   }
 
   def createWebhooks(n: Int)(status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Iterable[Webhook] =
@@ -123,7 +138,7 @@ object WebhookServerSpecUtil {
       WebhookEvent(
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
         WebhookEventStatus.New,
-        "lorem ipsum " + i,
+        "event payload " + i,
         Chunk(("Accept", "*/*"))
       )
     }
