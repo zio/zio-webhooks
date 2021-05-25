@@ -16,7 +16,7 @@ import java.time.Instant
 object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
     suite("WebhookServerSpec")(
-      suite("on server new event subscription")(
+      suite("on new event subscription")(
         testM("dispatches correct request given event") {
           val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
@@ -29,48 +29,48 @@ object WebhookServerSpec extends DefaultRunnableSpec {
 
           val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
 
-          assertWebhooksState(
+          WebhooksStateAssertion(
             stubResponses = List(WebhookHttpResponse(200)),
             webhooks = List(webhook),
             events = List(event),
             requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
-          )
+          ).build
         },
         testM("can dispatch single event to n webhooks") {
           val n                 = 100
           val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
           val eventsToNWebhooks = webhooks.map(_.id).flatMap(createWebhookEvents(1))
 
-          assertWebhooksState(
+          WebhooksStateAssertion(
             stubResponses = List.fill(n)(WebhookHttpResponse(200)),
             webhooks = webhooks,
             events = eventsToNWebhooks,
             requestsAssertion = queue => assertM(queue.takeN(n))(hasSize(equalTo(n)))
-          )
+          ).build
         },
         testM("dispatches no events for disabled webhooks") {
           val n       = 100
           val webhook = singleWebhook(0, WebhookStatus.Disabled, WebhookDeliveryMode.SingleAtMostOnce)
 
-          assertWebhooksState(
+          WebhooksStateAssertion(
             stubResponses = List.fill(n)(WebhookHttpResponse(200)),
             webhooks = List(webhook),
             events = createWebhookEvents(n)(webhook.id),
             requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
-          )
+          ).build
         },
         testM("dispatches no events for unavailable webhooks") {
           val n       = 100
           val webhook = singleWebhook(0, WebhookStatus.Unavailable(Instant.EPOCH), WebhookDeliveryMode.SingleAtMostOnce)
 
-          assertWebhooksState(
+          WebhooksStateAssertion(
             stubResponses = List.fill(n)(WebhookHttpResponse(200)),
             webhooks = List(webhook),
             events = createWebhookEvents(n)(webhook.id),
             requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
-          )
+          ).build
         }
         // TODO: what to do with non-existent webhook or webhook events?
         // TODO: test that errors in the subscription crash the server?
@@ -80,40 +80,40 @@ object WebhookServerSpec extends DefaultRunnableSpec {
 }
 
 object WebhookServerSpecUtil {
-
-  def assertWebhooksState(
+  final case class WebhooksStateAssertion(
     stubResponses: Iterable[WebhookHttpResponse],
     webhooks: Iterable[Webhook],
     events: Iterable[WebhookEvent],
-    // TODO: add webhooks assertion, a way to peek into webhook changes by the server
     eventsAssertion: Dequeue[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     // TODO[low-prio]: this should be a Dequeue so we don't inadvertently write to the Queue in tests
     requestsAssertion: Queue[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     sleepDuration: Option[Duration] = None
-  ): URIO[TestEnv, TestResult] =
-    for {
-      responseQueue  <- Queue.unbounded[WebhookHttpResponse]
-      _              <- responseQueue.offerAll(stubResponses)
-      _              <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-      eventsFiber    <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion).fork
-      // TODO: write something like this for each test
-      // { eventsDequeue =>
-      //   for {
-      //     deliveringEvents <- eventsDequeue
-      //                           // .filterOutput(_.status == WebhookEventStatus.Delivering)
-      //                           .takeN(events.size)
-      //   } yield assert(deliveringEvents.size)(equalTo(events.size))
-      // }.fork
-      _              <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
-      _              <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
-      requestQueue   <- TestWebhookHttpClient.requests
-      // let test fiber sleep as we have to let requests be made to fail some tests
-      // TODO: there's a better way to do this: poll the queue repeatedly with a timeout
-      // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862 fo
-      _              <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
-      deliveriesTest <- eventsFiber.join
-      requestsTest   <- requestsAssertion(requestQueue)
-    } yield deliveriesTest && requestsTest
+  ) {
+    def build: RIO[TestEnv, TestResult] =
+      for {
+        responseQueue  <- Queue.unbounded[WebhookHttpResponse]
+        _              <- responseQueue.offerAll(stubResponses)
+        _              <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
+        eventsFiber    <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion).fork
+        // TODO: write something like this for each test
+        // { eventsDequeue =>
+        //   for {
+        //     deliveringEvents <- eventsDequeue
+        //                           // .filterOutput(_.status == WebhookEventStatus.Delivering)
+        //                           .takeN(events.size)
+        //   } yield assert(deliveringEvents.size)(equalTo(events.size))
+        // }.fork
+        _              <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
+        _              <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
+        requestQueue   <- TestWebhookHttpClient.requests
+        // let test fiber sleep as we have to let requests be made to fail some tests
+        // TODO: there's a better way to do this: poll the queue repeatedly with a timeout
+        // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862 fo
+        _              <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
+        deliveriesTest <- eventsFiber.join
+        requestsTest   <- requestsAssertion(requestQueue)
+      } yield deliveriesTest && requestsTest
+  }
 
   def createWebhooks(n: Int)(status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Iterable[Webhook] =
     (0 until n).map(i => singleWebhook(i.toLong, status, deliveryMode))
