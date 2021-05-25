@@ -122,8 +122,8 @@ object WebhookServerSpecUtil {
         _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
         requestQueue  <- TestWebhookHttpClient.requests
         // let test fiber sleep as we have to let requests be made to fail some tests
-        // TODO: there's a better way to do this: poll the queue repeatedly with a timeout
-        // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862 fo
+        // TODO[low-prio]: there's a better way to do this: poll the queue repeatedly with a timeout
+        // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862
         _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
         eventsTest    <- eventsFiber.join
         requestsTest  <- requestsAssertion(requestQueue)

@@ -16,6 +16,13 @@ final case class WebhookServer(
   webhookState: Ref[Map[WebhookId, WebhookServer.WebhookState]]
 ) {
 
+  private def dispatchEvent(request: WebhookHttpRequest, key: WebhookEventKey) =
+    for {
+      _ <- eventRepo.setEventStatus(key, WebhookEventStatus.Delivering)
+      _ <- httpClient.post(request).ignore
+      _ <- eventRepo.setEventStatus(key, WebhookEventStatus.Delivered)
+    } yield ()
+
   /**
    * Starts the webhook server. Kicks off the following to run concurrently:
    * - new webhook event subscription
@@ -24,7 +31,7 @@ final case class WebhookServer(
    */
   def start: IO[WebhookError, Any] =
     startNewEventSubscription *> startEventRecovery *> startRetryMonitoring
-  // TODO: handle the first error from any of the fibers
+  // TODO: handle the first error from any of the fibers, smth like:
   // startNewEventSubscription raceFirst startEventRecovery raceFirst startRetryMonitoring
 
   // get events that are Delivering & AtLeastOnce
@@ -68,13 +75,7 @@ final case class WebhookServer(
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
           // TODO: do something with response
           // TODO: write test to handle failure?
-          _       <- ZIO.when(webhook.isOnline) {
-                       for {
-                         _ <- eventRepo.setEventStatus(newEvent.key, WebhookEventStatus.Delivering)
-                         _ <- httpClient.post(request).ignore
-                         _ <- eventRepo.setEventStatus(newEvent.key, WebhookEventStatus.Delivered)
-                       } yield ()
-                     }
+          _       <- ZIO.when(webhook.isOnline)(dispatchEvent(request, newEvent.key))
           // TODO: only mark events delivering if webhook is online
           // _       <- eventRepo.setEventStatus(newEvent.key, WebhookEventStatus.Delivering)
         } yield ()
