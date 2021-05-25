@@ -12,7 +12,8 @@ final case class WebhookServer(
   stateRepo: WebhookStateRepo,
   eventRepo: WebhookEventRepo,
   httpClient: WebhookHttpClient,
-  // consider STM if needed
+  batchQueue: Queue[WebhookEvent],
+  // consider STM if needed,
   webhookState: Ref[Map[WebhookId, WebhookServer.WebhookState]]
 ) {
 
@@ -72,6 +73,7 @@ final case class WebhookServer(
           webhook <- webhookRepo
                        .getWebhookById(webhookId)
                        .flatMap(ZIO.fromOption(_).mapError(_ => MissingWebhookError(webhookId)))
+          batching = webhook.deliveryMode.batching
           request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
           // TODO: do something with response
           // TODO: write test to handle failure?
@@ -115,11 +117,12 @@ object WebhookServer {
   val live: RLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
       state      <- Ref.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
+      batchQueue <- Queue.bounded[WebhookEvent](1024).toManaged_
       repo       <- ZManaged.service[WebhookRepo]
       stateRepo  <- ZManaged.service[WebhookStateRepo]
       eventRepo  <- ZManaged.service[WebhookEventRepo]
       httpClient <- ZManaged.service[WebhookHttpClient]
-      server      = WebhookServer(repo, stateRepo, eventRepo, httpClient, state)
+      server      = WebhookServer(repo, stateRepo, eventRepo, httpClient, batchQueue, state)
       _          <- server.start.mapError(_.asThrowable).orDie.toManaged_
       _          <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server

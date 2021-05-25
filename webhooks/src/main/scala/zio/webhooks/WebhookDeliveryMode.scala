@@ -1,5 +1,7 @@
 package zio.webhooks
 
+import java.time.Duration
+
 /**
  * A [[WebhookDeliveryMode]] specifies two aspects of webhook delivery: [[WebhookDeliveryBatching]],
  * whether the delivery of events is done one-by-one or in batches; and
@@ -8,8 +10,14 @@ package zio.webhooks
 final case class WebhookDeliveryMode private (batching: WebhookDeliveryBatching, semantics: WebhookDeliverySemantics)
 
 object WebhookDeliveryMode {
-  val BatchedAtLeastOnce = WebhookDeliveryMode(WebhookDeliveryBatching.Batched, WebhookDeliverySemantics.AtLeastOnce)
-  val BatchedAtMostOnce  = WebhookDeliveryMode(WebhookDeliveryBatching.Batched, WebhookDeliverySemantics.AtMostOnce)
-  val SingleAtLeastOnce  = WebhookDeliveryMode(WebhookDeliveryBatching.Single, WebhookDeliverySemantics.AtLeastOnce)
-  val SingleAtMostOnce   = WebhookDeliveryMode(WebhookDeliveryBatching.Single, WebhookDeliverySemantics.AtMostOnce)
+  def batchedAtLeastOnce(size: Int, maxWait: Duration): WebhookDeliveryMode =
+    WebhookDeliveryMode(WebhookDeliveryBatching.Batched(size, maxWait), WebhookDeliverySemantics.AtLeastOnce)
+
+  def batchedAtMostOnce(size: Int, maxWait: Duration): WebhookDeliveryMode =
+    WebhookDeliveryMode(WebhookDeliveryBatching.Batched(size, maxWait), WebhookDeliverySemantics.AtMostOnce)
+
+  val SingleAtLeastOnce: WebhookDeliveryMode =
+    WebhookDeliveryMode(WebhookDeliveryBatching.Single, WebhookDeliverySemantics.AtLeastOnce)
+  val SingleAtMostOnce: WebhookDeliveryMode  =
+    WebhookDeliveryMode(WebhookDeliveryBatching.Single, WebhookDeliverySemantics.AtMostOnce)
 }
