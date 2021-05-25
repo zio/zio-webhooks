@@ -94,28 +94,27 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
             sleepDuration = Some(100.millis)
           ).build
-        }
-        // TODO: reimplement this test
-        // testM("supports max batch sizes for at-most-once event delivery") {
-        //   val n                    = 100
-        //   val maxBatchSize         = 10
-        //   val maxWaitDuration      = 30.seconds
-        //   val webhook              = singleWebhook(
-        //     id = 0,
-        //     WebhookStatus.Enabled,
-        //     WebhookDeliveryMode.batchedAtMostOnce(maxBatchSize, maxWaitDuration)
-        //   )
-        //   val expectedRequestsMade = n / maxBatchSize
+        },
+        testM("supports max batch sizes for at-most-once event delivery") {
+          val n                    = 100
+          val maxBatchSize         = 10
+          val maxWaitDuration      = 30.seconds
+          val webhook              = singleWebhook(
+            id = 0,
+            WebhookStatus.Enabled,
+            WebhookDeliveryMode.batchedAtMostOnce(maxBatchSize, maxWaitDuration)
+          )
+          val expectedRequestsMade = n / maxBatchSize
 
-        //   assertRequestsMade(
-        //     stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-        //     webhooks = List(webhook),
-        //     events = createWebhookEvents(n)(webhook.id),
-        //     requestsAssertion =
-        //       queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade)),
-        //     sleepDuration = Some(10.millis)
-        //   )
-        // }
+          WebhooksStateAssertion(
+            stubResponses = List.fill(n)(WebhookHttpResponse(200)),
+            webhooks = List(webhook),
+            events = createWebhookEvents(n)(webhook.id),
+            requestsAssertion =
+              queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade)),
+            sleepDuration = Some(10.millis)
+          ).build
+        }
         // TODO: what to do with non-existent webhook or webhook events?
         // TODO: test that errors in the subscription crash the server?
       ) @@ timeout(5.seconds)
