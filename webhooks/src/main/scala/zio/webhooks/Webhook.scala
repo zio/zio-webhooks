@@ -13,6 +13,8 @@ final case class Webhook(
   status: WebhookStatus,
   deliveryMode: WebhookDeliveryMode
 ) {
+  val batching: WebhookDeliveryBatching = deliveryMode.batching
+
   final def isOnline: Boolean =
     status match {
       case Enabled     => true

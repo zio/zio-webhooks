@@ -1,7 +1,5 @@
 package zio.webhooks
 
-import java.time.Duration
-
 /**
  * A [[Webhook]] can be delivered in two ways: as a `Single` or `Batched` delivery. `Single`
  * indicates that each [[WebhookEvent]] is delivered in one HTTP call. Conversely, `Batched`
@@ -13,5 +11,6 @@ object WebhookDeliveryBatching {
   case object Single extends WebhookDeliveryBatching
 
   // TODO: Smart constructor for `Batched`
-  final case class Batched(size: Int, maxWait: Duration) extends WebhookDeliveryBatching
+  // TODO[high-prio]: implement maxWait duration
+  final case class Batched(size: Int) extends WebhookDeliveryBatching
 }

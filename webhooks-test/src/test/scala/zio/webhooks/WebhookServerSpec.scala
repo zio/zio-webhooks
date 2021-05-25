@@ -96,14 +96,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           ).build
         },
         testM("supports max batch sizes for at-most-once event delivery") {
-          val n                    = 100
-          val maxBatchSize         = 10
-          val maxWaitDuration      = 30.seconds
-          val webhook              = singleWebhook(
+          val n            = 100
+          val maxBatchSize = 10
+          val webhook      = singleWebhook(
             id = 0,
             WebhookStatus.Enabled,
-            WebhookDeliveryMode.batchedAtMostOnce(maxBatchSize, maxWaitDuration)
+            WebhookDeliveryMode.batchedAtMostOnce(maxBatchSize)
           )
+
           val expectedRequestsMade = n / maxBatchSize
 
           WebhooksStateAssertion(
@@ -123,6 +123,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
 }
 
 object WebhookServerSpecUtil {
+
   final case class WebhooksStateAssertion(
     stubResponses: Iterable[WebhookHttpResponse],
     webhooks: Iterable[Webhook],

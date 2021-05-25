@@ -35,7 +35,7 @@ final case class TestWebhookHttpClientImpl(
 ) extends WebhookHttpClient
     with TestWebhookHttpClient {
 
-  def requests: UIO[Queue[WebhookHttpRequest]] = ZIO.effectTotal(received)
+  def requests: UIO[Queue[WebhookHttpRequest]] = UIO(received)
 
   def post(request: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] =
     for {

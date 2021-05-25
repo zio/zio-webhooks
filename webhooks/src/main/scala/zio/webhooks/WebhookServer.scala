@@ -2,27 +2,43 @@ package zio.webhooks
 
 import zio._
 import zio.prelude.NonEmptySet
+import zio.stream._
+import zio.webhooks.WebhookDeliveryBatching._
 import zio.webhooks.WebhookError._
 
 import java.io.IOException
 import java.time.Instant
 
+/**
+ * A [[WebhookServer]] subscribes to webhook events and reliably dispatches them, i.e. failed
+ * dispatches are retried until some set time.
+ *
+ * A live server layer is provided for convenience and to ensure proper resource management.
+ */
 final case class WebhookServer(
   webhookRepo: WebhookRepo,
   stateRepo: WebhookStateRepo,
   eventRepo: WebhookEventRepo,
   httpClient: WebhookHttpClient,
-  batchQueue: Queue[WebhookEvent],
-  // consider STM if needed,
-  webhookState: Ref[Map[WebhookId, WebhookServer.WebhookState]]
+  webhookState: SubscriptionRef[Map[WebhookId, WebhookServer.WebhookState]],
+  batchConfig: Option[WebhookServer.BatchingConfig] = None
 ) {
 
-  private def dispatchEvent(request: WebhookHttpRequest, key: WebhookEventKey) =
+  private def dispatchEvent(webhook: Webhook, event: WebhookEvent) =
     for {
-      _ <- eventRepo.setEventStatus(key, WebhookEventStatus.Delivering)
-      _ <- httpClient.post(request).ignore
-      _ <- eventRepo.setEventStatus(key, WebhookEventStatus.Delivered)
+      _      <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
+      request = WebhookHttpRequest(webhook.url, event.content, event.headers)
+      _      <- webhook.batching match {
+                  case Single     =>
+                    dispatchRequest(request)
+                  case Batched(_) => ???
+                }
+      _      <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered)
     } yield ()
+
+  private def dispatchRequest(request: WebhookHttpRequest): URIO[Any, Unit] =
+    // TODO: handle post non-200, IOException
+    httpClient.post(request).ignore
 
   /**
    * Starts the webhook server. Kicks off the following to run concurrently:
@@ -31,9 +47,21 @@ final case class WebhookServer(
    * - retry monitoring
    */
   def start: IO[WebhookError, Any] =
-    startNewEventSubscription *> startEventRecovery *> startRetryMonitoring
-  // TODO: handle the first error from any of the fibers, smth like:
+    startNewEventSubscription *> startEventRecovery *> startRetryMonitoring *> startBatching
+  // TODO[high-prio]: handle the first error from any of the fibers, smth like:
   // startNewEventSubscription raceFirst startEventRecovery raceFirst startRetryMonitoring
+
+  /**
+   * Kicks off a fiber that listens to events queued for webhook batch dispatch
+   *
+   * @return
+   */
+  private def startBatching: UIO[Fiber[WebhookError, Unit]] = {
+    batchConfig match {
+      case None             => ZIO.unit
+      case Some(config @ _) => ZIO.unit
+    }
+  }.fork
 
   // get events that are Delivering & AtLeastOnce
   // reconstruct webhookState
@@ -73,13 +101,7 @@ final case class WebhookServer(
           webhook <- webhookRepo
                        .getWebhookById(webhookId)
                        .flatMap(ZIO.fromOption(_).mapError(_ => MissingWebhookError(webhookId)))
-          batching = webhook.deliveryMode.batching
-          request  = WebhookHttpRequest(webhook.url, newEvent.content, newEvent.headers)
-          // TODO: do something with response
-          // TODO: write test to handle failure?
-          _       <- ZIO.when(webhook.isOnline)(dispatchEvent(request, newEvent.key))
-          // TODO: only mark events delivering if webhook is online
-          // _       <- eventRepo.setEventStatus(newEvent.key, WebhookEventStatus.Delivering)
+          _       <- ZIO.when(webhook.isOnline)(dispatchEvent(webhook, newEvent))
         } yield ()
       }
       .forkAs("new event subscription")
@@ -101,30 +123,32 @@ final case class WebhookServer(
 }
 
 object WebhookServer {
+
+  case class Batch(maxSize: Int, webhook: Webhook, events: Chunk[WebhookEvent])
+
+  // TODO: add/implement maxWait duration
+  final case class BatchingConfig(maxSize: Int)
+
   type Env = Has[WebhookRepo] with Has[WebhookStateRepo] with Has[WebhookEventRepo] with Has[WebhookHttpClient]
 
-  sealed trait WebhookState
-  object WebhookState {
-    case object Enabled                                                       extends WebhookState
-    case object Disabled                                                      extends WebhookState
-    final case class Retrying(sinceTime: Instant, queue: Queue[WebhookEvent]) extends WebhookState
-    case object Unavailable                                                   extends WebhookState
-  }
-
-  /**
-   * A live server layer is provided for convenience and to ensure proper resource management.
-   */
   val live: RLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
-      state      <- Ref.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
-      batchQueue <- Queue.bounded[WebhookEvent](1024).toManaged_
+      state      <- SubscriptionRef.make(Map.empty[WebhookId, WebhookServer.WebhookState]).toManaged_
       repo       <- ZManaged.service[WebhookRepo]
       stateRepo  <- ZManaged.service[WebhookStateRepo]
       eventRepo  <- ZManaged.service[WebhookEventRepo]
       httpClient <- ZManaged.service[WebhookHttpClient]
-      server      = WebhookServer(repo, stateRepo, eventRepo, httpClient, batchQueue, state)
+      server      = WebhookServer(repo, stateRepo, eventRepo, httpClient, state)
       _          <- server.start.mapError(_.asThrowable).orDie.toManaged_
       _          <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server
   }.toLayer
+
+  sealed trait WebhookState
+  object WebhookState {
+    final case class Enabled(batch: Option[Batch])                            extends WebhookState
+    case object Disabled                                                      extends WebhookState
+    final case class Retrying(sinceTime: Instant, queue: Queue[WebhookEvent]) extends WebhookState
+    case object Unavailable                                                   extends WebhookState
+  }
 }
