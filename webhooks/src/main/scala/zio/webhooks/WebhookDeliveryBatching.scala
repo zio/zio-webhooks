@@ -8,9 +8,6 @@ package zio.webhooks
  */
 sealed trait WebhookDeliveryBatching extends Product with Serializable
 object WebhookDeliveryBatching {
-  case object Single extends WebhookDeliveryBatching
-
-  // TODO: Smart constructor for `Batched`
-  // TODO[high-prio]: implement maxWait duration
-  final case class Batched(size: Int) extends WebhookDeliveryBatching
+  case object Single  extends WebhookDeliveryBatching
+  case object Batched extends WebhookDeliveryBatching
 }

@@ -17,109 +17,111 @@ object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
     suite("WebhookServerSpec")(
       suite("on new event subscription")(
-        testM("dispatches correct request given event") {
-          val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+        suite("single dispatch")(
+          testM("dispatches correct request given event") {
+            val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
-          val event = WebhookEvent(
-            WebhookEventKey(WebhookEventId(0), webhook.id),
-            WebhookEventStatus.New,
-            "event payload",
-            Chunk(("Accept", "*/*"))
-          )
+            val event = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload",
+              Chunk(("Accept", "*/*"))
+            )
 
-          val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
+            val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
 
-          WebhooksStateAssertion(
-            stubResponses = List(WebhookHttpResponse(200)),
-            webhooks = List(webhook),
-            events = List(event),
-            requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
-          ).build
-        },
-        testM("webhook is marked Delivering, then Delivered for successful dispatch") {
-          val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+            WebhooksStateAssertion(
+              stubResponses = List(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = List(event),
+              requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
+            ).build
+          },
+          testM("webhook is marked Delivering, then Delivered for successful dispatch") {
+            val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
-          val event = WebhookEvent(
-            WebhookEventKey(WebhookEventId(0), webhook.id),
-            WebhookEventStatus.New,
-            "event payload",
-            Chunk(("Accept", "*/*"))
-          )
+            val event = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload",
+              Chunk(("Accept", "*/*"))
+            )
 
-          val expectedStatuses = List(WebhookEventStatus.Delivering, WebhookEventStatus.Delivered)
+            val expectedStatuses = List(WebhookEventStatus.Delivering, WebhookEventStatus.Delivered)
 
-          WebhooksStateAssertion(
-            stubResponses = List(WebhookHttpResponse(200)),
-            webhooks = List(webhook),
-            events = List(event),
-            eventsAssertion = queue => {
-              val markEvents    = queue.filterOutput(!_.status.isNew).takeN(2)
-              val eventStatuses = markEvents.map(_.map(_.status))
-              assertM(eventStatuses)(hasSameElements(expectedStatuses))
-            }
-          ).build
-        },
-        testM("can dispatch single event to n webhooks") {
-          val n                 = 100
-          val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
-          val eventsToNWebhooks = webhooks.map(_.id).flatMap(createWebhookEvents(1))
+            WebhooksStateAssertion(
+              stubResponses = List(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = List(event),
+              eventsAssertion = queue => {
+                val markEvents    = queue.filterOutput(!_.status.isNew).takeN(2)
+                val eventStatuses = markEvents.map(_.map(_.status))
+                assertM(eventStatuses)(hasSameElements(expectedStatuses))
+              }
+            ).build
+          },
+          testM("can dispatch single event to n webhooks") {
+            val n                 = 100
+            val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+            val eventsToNWebhooks = webhooks.map(_.id).flatMap(createWebhookEvents(1))
 
-          WebhooksStateAssertion(
-            stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-            webhooks = webhooks,
-            events = eventsToNWebhooks,
-            requestsAssertion = queue => assertM(queue.takeN(n))(hasSize(equalTo(n)))
-          ).build
-        },
-        testM("dispatches no events for disabled webhooks") {
-          val n       = 100
-          val webhook = singleWebhook(0, WebhookStatus.Disabled, WebhookDeliveryMode.SingleAtMostOnce)
+            WebhooksStateAssertion(
+              stubResponses = List.fill(n)(WebhookHttpResponse(200)),
+              webhooks = webhooks,
+              events = eventsToNWebhooks,
+              requestsAssertion = queue => assertM(queue.takeN(n))(hasSize(equalTo(n)))
+            ).build
+          },
+          testM("dispatches no events for disabled webhooks") {
+            val n       = 100
+            val webhook = singleWebhook(0, WebhookStatus.Disabled, WebhookDeliveryMode.SingleAtMostOnce)
 
-          WebhooksStateAssertion(
-            stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-            webhooks = List(webhook),
-            events = createWebhookEvents(n)(webhook.id),
-            requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
-            sleepDuration = Some(100.millis)
-          ).build
-        },
-        testM("dispatches no events for unavailable webhooks") {
-          val n       = 100
-          val webhook = singleWebhook(0, WebhookStatus.Unavailable(Instant.EPOCH), WebhookDeliveryMode.SingleAtMostOnce)
+            WebhooksStateAssertion(
+              stubResponses = List.fill(n)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = createWebhookEvents(n)(webhook.id),
+              requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
+              sleepDuration = Some(100.millis)
+            ).build
+          },
+          testM("dispatches no events for unavailable webhooks") {
+            val n       = 100
+            val webhook =
+              singleWebhook(0, WebhookStatus.Unavailable(Instant.EPOCH), WebhookDeliveryMode.SingleAtMostOnce)
 
-          WebhooksStateAssertion(
-            stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-            webhooks = List(webhook),
-            events = createWebhookEvents(n)(webhook.id),
-            requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
-            sleepDuration = Some(100.millis)
-          ).build
-        },
-        testM("supports max batch sizes for at-most-once event delivery") {
-          val n            = 100
-          val maxBatchSize = 10
-          val webhook      = singleWebhook(
-            id = 0,
-            WebhookStatus.Enabled,
-            WebhookDeliveryMode.batchedAtMostOnce(maxBatchSize)
-          )
+            WebhooksStateAssertion(
+              stubResponses = List.fill(n)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = createWebhookEvents(n)(webhook.id),
+              requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
+              sleepDuration = Some(100.millis)
+            ).build
+          }
+        ).provideSomeLayer[Clock](testEnv()),
+        suite("batching ")(
+          testM("supports max batch sizes for at-most-once event delivery") {
+            val n            = 100
+            val maxBatchSize = WebhookServer.BatchingConfig.default.maxSize
+            val webhook      = singleWebhook(
+              id = 0,
+              WebhookStatus.Enabled,
+              WebhookDeliveryMode.BatchedAtMostOnce
+            )
 
-          val expectedRequestsMade = n / maxBatchSize
+            val expectedRequestsMade = n / maxBatchSize
 
-          WebhooksStateAssertion(
-            stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-            webhooks = List(webhook),
-            events = createWebhookEvents(n)(webhook.id),
-            requestsAssertion =
-              queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade)),
-            sleepDuration = Some(10.millis)
-          ).build
-        }
-        // TODO: what to do with non-existent webhook or webhook events?
-        // TODO: test that errors in the subscription crash the server?
+            WebhooksStateAssertion(
+              stubResponses = List.fill(n)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = createWebhookEvents(n)(webhook.id),
+              requestsAssertion =
+                queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
+            ).build
+          }
+        ).provideSomeLayer[Has[Live.Service]](testEnv(Some(WebhookServer.BatchingConfig(10))))
+        // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       ) @@ timeout(5.seconds)
-      // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
-    ).provideSomeLayer[Has[Live.Service] with Has[Annotations.Service]](testEnv)
+    )
 }
 
 object WebhookServerSpecUtil {
@@ -180,11 +182,14 @@ object WebhookServerSpecUtil {
     with Has[WebhookStateRepo]
     with Has[TestWebhookHttpClient]
     with Has[WebhookHttpClient]
+    with Has[Option[WebhookServer.BatchingConfig]]
     with Has[WebhookServer]
 
-  val testEnv: ULayer[TestEnv] = {
-    val repos =
-      (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++ TestWebhookStateRepo.test ++ TestWebhookHttpClient.test
-    repos ++ (repos >>> WebhookServer.live)
+  def testEnv(batchingConfig: Option[WebhookServer.BatchingConfig] = None): ULayer[TestEnv] = {
+    val repos = (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++
+      TestWebhookStateRepo.test ++
+      TestWebhookHttpClient.test
+    val deps  = (repos ++ WebhookServer.BatchingConfig.mkLayer(batchingConfig)).orDie
+    deps ++ (deps >>> WebhookServer.live)
   }.orDie
 }

@@ -8,14 +8,12 @@ package zio.webhooks
 final case class WebhookDeliveryMode private (batching: WebhookDeliveryBatching, semantics: WebhookDeliverySemantics)
 
 object WebhookDeliveryMode {
-  def batchedAtLeastOnce(size: Int): WebhookDeliveryMode =
-    WebhookDeliveryMode(WebhookDeliveryBatching.Batched(size), WebhookDeliverySemantics.AtLeastOnce)
-
-  def batchedAtMostOnce(size: Int): WebhookDeliveryMode =
-    WebhookDeliveryMode(WebhookDeliveryBatching.Batched(size), WebhookDeliverySemantics.AtMostOnce)
-
-  val SingleAtLeastOnce: WebhookDeliveryMode =
+  val BatchedAtLeastOnce: WebhookDeliveryMode =
+    WebhookDeliveryMode(WebhookDeliveryBatching.Batched, WebhookDeliverySemantics.AtLeastOnce)
+  val BatchedAtMostOnce: WebhookDeliveryMode  =
+    WebhookDeliveryMode(WebhookDeliveryBatching.Batched, WebhookDeliverySemantics.AtMostOnce)
+  val SingleAtLeastOnce: WebhookDeliveryMode  =
     WebhookDeliveryMode(WebhookDeliveryBatching.Single, WebhookDeliverySemantics.AtLeastOnce)
-  val SingleAtMostOnce: WebhookDeliveryMode  =
+  val SingleAtMostOnce: WebhookDeliveryMode   =
     WebhookDeliveryMode(WebhookDeliveryBatching.Single, WebhookDeliverySemantics.AtMostOnce)
 }
