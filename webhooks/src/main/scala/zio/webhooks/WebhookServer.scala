@@ -29,26 +29,27 @@ final case class WebhookServer(
 
   private def consumeBatchElement(batches: RefM[Map[Webhook, NonEmptyChunk[WebhookEvent]]], batchSize: Int) =
     for {
-      (webhook, event) <- batchingQueue.take
-      _                <- batches.update { map =>
-                            map.get(webhook) match {
-                              case None                                   =>
-                                UIO(map + (webhook -> NonEmptyChunk(event)))
-                              case Some(value) if value.size == batchSize =>
-                                // TODO: Events may have different headers,
-                                // TODO: we're just taking the last one's for now.
-                                // TODO: WebhookEvents' contents are just being appended.
-                                // TODO: Content is stringly-typed, may need more structure
-                                val request = WebhookHttpRequest(
-                                  webhook.url,
-                                  value.map(_.content).mkString("\n"),
-                                  event.headers
-                                )
-                                httpClient.post(request).ignore *> UIO(map - webhook) // TODO: handle errors/non-200
-                              case Some(value)                            =>
-                                UIO(map.updated(webhook, value :+ event))
-                            }
-                          }
+      elem <- batchingQueue.take
+      _    <- batches.update { map =>
+                val (webhook, event) = elem
+                map.get(webhook) match {
+                  case None                                   =>
+                    UIO(map + (webhook -> NonEmptyChunk(event)))
+                  case Some(value) if value.size == batchSize =>
+                    // TODO: Events may have different headers,
+                    // TODO: we're just taking the last one's for now.
+                    // TODO: WebhookEvents' contents are just being appended.
+                    // TODO: Content is stringly-typed, may need more structure
+                    val request = WebhookHttpRequest(
+                      webhook.url,
+                      value.map(_.content).mkString("\n"),
+                      event.headers
+                    )
+                    httpClient.post(request).ignore *> UIO(map - webhook) // TODO: handle errors/non-200
+                  case Some(value)                            =>
+                    UIO(map.updated(webhook, value :+ event))
+                }
+              }
     } yield ()
 
   private def dispatchEvent(webhook: Webhook, event: WebhookEvent) =

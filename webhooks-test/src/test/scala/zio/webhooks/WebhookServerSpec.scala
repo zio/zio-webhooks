@@ -7,7 +7,7 @@ import zio.test.Assertion._
 import zio.test.DefaultRunnableSpec
 import zio.test.TestAspect._
 import zio.test._
-import zio.test.environment.Live
+import zio.webhooks.WebhookServer.BatchingConfig
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.testkit._
 
@@ -17,7 +17,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
     suite("WebhookServerSpec")(
       suite("on new event subscription")(
-        suite("single dispatch")(
+        suite("with single dispatch")(
           testM("dispatches correct request given event") {
             val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
@@ -97,11 +97,11 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               sleepDuration = Some(100.millis)
             ).build
           }
-        ).provideSomeLayer[Clock](testEnv()),
-        suite("batching ")(
+        ),
+        suite("with batched dispatch")(
           testM("supports max batch sizes for at-most-once event delivery") {
             val n            = 100
-            val maxBatchSize = WebhookServer.BatchingConfig.default.maxSize
+            val maxBatchSize = 10
             val webhook      = singleWebhook(
               id = 0,
               WebhookStatus.Enabled,
@@ -118,10 +118,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
             ).build
           }
-        ).provideSomeLayer[Has[Live.Service]](testEnv(Some(WebhookServer.BatchingConfig(10))))
+        ).provideLayer(testEnv(Some(BatchingConfig(10))) ++ Clock.live)
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
-      ) @@ timeout(5.seconds)
-    )
+      )
+    ).provideLayer(testEnv(None) ++ Clock.live) @@ timeout(5.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -182,14 +182,14 @@ object WebhookServerSpecUtil {
     with Has[WebhookStateRepo]
     with Has[TestWebhookHttpClient]
     with Has[WebhookHttpClient]
-    with Has[Option[WebhookServer.BatchingConfig]]
+    with Has[Option[BatchingConfig]]
     with Has[WebhookServer]
 
-  def testEnv(batchingConfig: Option[WebhookServer.BatchingConfig] = None): ULayer[TestEnv] = {
+  def testEnv(batchingConfig: Option[BatchingConfig]): ULayer[TestEnv] = {
     val repos = (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++
       TestWebhookStateRepo.test ++
       TestWebhookHttpClient.test
-    val deps  = (repos ++ WebhookServer.BatchingConfig.mkLayer(batchingConfig)).orDie
+    val deps  = (repos ++ BatchingConfig.mkLayer(batchingConfig)).orDie
     deps ++ (deps >>> WebhookServer.live)
   }.orDie
 }
