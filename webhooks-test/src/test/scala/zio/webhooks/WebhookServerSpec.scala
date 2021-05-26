@@ -131,8 +131,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 assertM(queue.takeBetween(expectedRequestsMade, eventCount).map(_.size))(equalTo(expectedRequestsMade)),
               sleepDuration = Some(100.millis)
             ).build
-          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live)
-          /* testM("supports max batch wait time for at-most-once event delivery") {
+          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live),
+          testM("supports max batch wait time for at-most-once event delivery") {
             val n       = 5
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
@@ -145,7 +145,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion =
                 queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
             ).build
-          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds)))) */
+          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))))
         )
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
