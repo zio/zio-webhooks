@@ -102,11 +102,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           testM("supports max batch sizes for at-most-once event delivery") {
             val n            = 100
             val maxBatchSize = 10
-            val webhook      = singleWebhook(
-              id = 0,
-              WebhookStatus.Enabled,
-              WebhookDeliveryMode.BatchedAtMostOnce
-            )
+            val webhook      = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
             val expectedRequestsMade = n / maxBatchSize
 
@@ -117,7 +113,21 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion =
                 queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
             ).build
-          }.provideLayer(testEnv(Some(BatchingConfig(10))) ++ Clock.live)
+          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live),
+          testM("supports max batch wait time for at-most-once event delivery") {
+            val n       = 5
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+
+            val expectedRequestsMade = 1
+
+            WebhooksStateAssertion(
+              stubResponses = List.fill(n)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = createWebhookEvents(n)(webhook.id),
+              requestsAssertion =
+                queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
+            ).build
+          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))))
         )
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
@@ -189,7 +199,7 @@ object WebhookServerSpecUtil {
     val repos = (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++
       TestWebhookStateRepo.test ++
       TestWebhookHttpClient.test
-    val deps  = (repos ++ BatchingConfig.mkLayer(batchingConfig)).orDie
+    val deps  = (repos ++ BatchingConfig.createLayer(batchingConfig)).orDie
     deps ++ (deps >>> WebhookServer.live)
   }.orDie
 }

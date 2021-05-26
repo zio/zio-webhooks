@@ -7,6 +7,7 @@ import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer._
 
 import java.io.IOException
+import java.time.Duration
 import java.time.Instant
 
 /**
@@ -86,9 +87,9 @@ final case class WebhookServer(
    */
   private def startBatching: UIO[Any] =
     batchingConfig match {
-      case None                            =>
+      case None                               =>
         ZIO.unit
-      case Some(BatchingConfig(batchSize)) =>
+      case Some(BatchingConfig(batchSize, _)) =>
         RefM
           .make(Map.empty[Webhook, NonEmptyChunk[WebhookEvent]])
           .flatMap(batches => consumeBatchElement(batches, batchSize).forever)
@@ -154,15 +155,10 @@ final case class WebhookServer(
 }
 
 object WebhookServer {
-  // TODO: add/implement maxWait duration
-  final case class BatchingConfig(maxSize: Int)
+  // TODO: Smart constructor
+  final case class BatchingConfig(maxSize: Int, maxWaitTime: Duration)
   object BatchingConfig {
-    val default: BatchingConfig = BatchingConfig(10)
-
-    val live: ULayer[Has[Option[BatchingConfig]]] =
-      mkLayer(Some(default))
-
-    def mkLayer(batchingConfig: Option[BatchingConfig] = None): ULayer[Has[Option[BatchingConfig]]] =
+    def createLayer(batchingConfig: Option[BatchingConfig] = None): ULayer[Has[Option[BatchingConfig]]] =
       ZLayer.succeed(batchingConfig)
   }
 
