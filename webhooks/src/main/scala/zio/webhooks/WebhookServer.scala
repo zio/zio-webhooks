@@ -14,6 +14,8 @@ import java.time.Instant
  * dispatches are attempted twice followed by exponential backoff. Retries are performed until some
  * duration after which webhooks will be marked `Unavailable` since some [[java.time.Instant]].
  *
+ * Batched deliveries are enabled if `batchConfig` is defined.
+ *
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
  */

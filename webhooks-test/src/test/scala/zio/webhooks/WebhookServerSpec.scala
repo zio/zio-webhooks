@@ -117,8 +117,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion =
                 queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
             ).build
-          }
-        ).provideLayer(testEnv(Some(BatchingConfig(10))) ++ Clock.live)
+          }.provideLayer(testEnv(Some(BatchingConfig(10))) ++ Clock.live)
+        )
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
     ).provideLayer(testEnv(batchingConfig = None) ++ Clock.live) @@ timeout(5.seconds)
