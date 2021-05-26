@@ -130,7 +130,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion = queue =>
                 assertM(queue.takeBetween(expectedRequestsMade, eventCount).map(_.size))(equalTo(expectedRequestsMade))
             ).build
-          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live),
+          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live)
           /* testM("supports max batch wait time for at-most-once event delivery") {
             val n       = 5
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
