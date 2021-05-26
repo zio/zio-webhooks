@@ -99,7 +99,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
         ),
         suite("with batched dispatch")(
-          testM("supports max batch sizes for at-most-once event delivery") {
+          testM("supports batching for at-most-once event delivery") {
             val n            = 100
             val maxBatchSize = 10
             val webhook      = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
@@ -114,7 +114,24 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
             ).build
           }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live),
-          testM("supports max batch wait time for at-most-once event delivery") {
+          testM("supports batching for multiple webhooks") {
+            val eventCount   = 100
+            val webhookCount = 10
+            val maxBatchSize = eventCount / webhookCount
+            val webhooks     = createWebhooks(webhookCount)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+            val events       = webhooks.map(_.id).flatMap(createWebhookEvents(maxBatchSize))
+
+            val expectedRequestsMade = maxBatchSize
+
+            WebhooksStateAssertion(
+              stubResponses = List.fill(eventCount)(WebhookHttpResponse(200)),
+              webhooks = webhooks,
+              events = events,
+              requestsAssertion = queue =>
+                assertM(queue.takeBetween(expectedRequestsMade, eventCount).map(_.size))(equalTo(expectedRequestsMade))
+            ).build
+          }
+          /* testM("supports max batch wait time for at-most-once event delivery") {
             val n       = 5
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
@@ -127,7 +144,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion =
                 queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
             ).build
-          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))))
+          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds)))) */
         )
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )

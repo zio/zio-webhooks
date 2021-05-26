@@ -61,10 +61,8 @@ final case class WebhookServer(
       _ <- webhook.batching match {
              case Single  =>
                val request = WebhookHttpRequest(webhook.url, event.content, event.headers)
-               httpClient.post(request).ignore *> eventRepo.setEventStatus(
-                 event.key,
-                 WebhookEventStatus.Delivered
-               ) // TODO: handle errors/non-200
+               httpClient.post(request).ignore *>
+                 eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered) // TODO: handle errors/non-200
              case Batched =>
                batchingQueue.offer((webhook, event))
            }
@@ -90,10 +88,13 @@ final case class WebhookServer(
       case None                               =>
         ZIO.unit
       case Some(BatchingConfig(batchSize, _)) =>
-        RefM
-          .make(Map.empty[Webhook, NonEmptyChunk[WebhookEvent]])
-          .flatMap(batches => consumeBatchElement(batches, batchSize).forever)
-          .fork
+        // TODO[high-prio]: implement wait size
+        {
+          for {
+            batches <- RefM.make(Map.empty[Webhook, NonEmptyChunk[WebhookEvent]])
+            _       <- consumeBatchElement(batches, batchSize).forever
+          } yield ()
+        }.fork
     }
 
   // get events that are Delivering & AtLeastOnce
