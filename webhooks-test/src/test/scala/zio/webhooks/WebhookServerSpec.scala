@@ -118,7 +118,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val eventCount   = 100
             val webhookCount = 10
             val maxBatchSize = eventCount / webhookCount
-            val webhooks     = createWebhooks(webhookCount)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+            val webhooks     = createWebhooks(webhookCount)(WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
             val events       = webhooks.map(_.id).flatMap(createWebhookEvents(maxBatchSize))
 
             val expectedRequestsMade = maxBatchSize
@@ -128,7 +128,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = webhooks,
               events = events,
               requestsAssertion = queue =>
-                assertM(queue.takeBetween(expectedRequestsMade, eventCount).map(_.size))(equalTo(expectedRequestsMade))
+                assertM(queue.takeBetween(expectedRequestsMade, eventCount).map(_.size))(equalTo(expectedRequestsMade)),
+              sleepDuration = Some(100.millis)
             ).build
           }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live)
           /* testM("supports max batch wait time for at-most-once event delivery") {
