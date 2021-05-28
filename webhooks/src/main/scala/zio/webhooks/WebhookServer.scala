@@ -220,8 +220,11 @@ object WebhookServer {
   // TODO: Smart constructor
   final case class BatchingConfig(maxSize: Int, maxWaitTime: Duration)
   object BatchingConfig {
-    def createLayer(batchingConfig: Option[BatchingConfig] = None): ULayer[Has[Option[BatchingConfig]]] =
-      ZLayer.succeed(batchingConfig)
+    val disabled: ULayer[Has[Option[BatchingConfig]]] =
+      ZLayer.succeed(None)
+
+    def live(maxSize: Int, maxWaitTime: Duration): ULayer[Has[Option[BatchingConfig]]] =
+      ZLayer.succeed(Some(BatchingConfig(maxSize, maxWaitTime)))
   }
 
   sealed trait BatchFulfillment extends Product with Serializable
