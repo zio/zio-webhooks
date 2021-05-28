@@ -39,7 +39,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
             ).build
           },
-          testM("webhook is marked Delivering, then Delivered for successful dispatch") {
+          testM("event is marked Delivering, then Delivered on successful dispatch") {
             val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             val event = WebhookEvent(
@@ -133,7 +133,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = webhooks,
               events = events,
               requestsAssertion = queue =>
-                assertM(queue.takeBetween(expectedRequestsMade, eventCount).map(_.size))(equalTo(expectedRequestsMade)),
+                assertM(
+                  queue.takeBetween(expectedRequestsMade, eventCount).map(_.size)
+                )(equalTo(expectedRequestsMade)),
               sleepDuration = Some(100.millis)
             ).build
           },
