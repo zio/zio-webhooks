@@ -8,12 +8,12 @@ import zio.test.Assertion._
 import zio.test.DefaultRunnableSpec
 import zio.test.TestAspect._
 import zio.test._
+import zio.test.environment.TestClock
 import zio.webhooks.WebhookServer.BatchingConfig
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.testkit._
 
 import java.time.Instant
-import zio.test.environment.TestClock
 
 object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
@@ -120,7 +120,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val eventCount   = 100
             val webhookCount = 10
             val maxBatchSize = eventCount / webhookCount // 10
-            val webhooks     = createWebhooks(webhookCount)(WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+            val webhooks     = createWebhooks(webhookCount)(
+              WebhookStatus.Enabled,
+              WebhookDeliveryMode.BatchedAtMostOnce
+            )
             val events       = webhooks.map(_.id).flatMap(createWebhookEvents(maxBatchSize))
 
             val expectedRequestsMade = maxBatchSize
