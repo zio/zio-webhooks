@@ -32,6 +32,7 @@ addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
 val zioVersion        = "1.0.4"
+val zioMagicVersion   = "0.3.2"
 val zioPreludeVersion = "1.0.0-RC4"
 val sttpVersion       = "2.2.9"
 
@@ -60,8 +61,9 @@ lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
   .settings(
     publish / skip := true,
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio-test"     % zioVersion % "test",
-      "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
+      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "test",
+      "dev.zio"              %% "zio-test"     % zioVersion      % "test",
+      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "test"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )

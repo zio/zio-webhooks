@@ -1,10 +1,9 @@
 package zio.webhooks.testkit
 
-import java.io.IOException
 import zio._
-import zio.webhooks.WebhookHttpClient
-import zio.webhooks.WebhookHttpRequest
-import zio.webhooks.WebhookHttpResponse
+import zio.webhooks._
+
+import java.io.IOException
 
 // TODO: scaladoc
 trait TestWebhookHttpClient {

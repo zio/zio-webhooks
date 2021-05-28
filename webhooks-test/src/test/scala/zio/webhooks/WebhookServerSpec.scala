@@ -3,6 +3,7 @@ package zio.webhooks
 import zio._
 import zio.clock.Clock
 import zio.duration._
+import zio.magic._
 import zio.test.Assertion._
 import zio.test.DefaultRunnableSpec
 import zio.test.TestAspect._
@@ -113,7 +114,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion =
                 queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
             ).build
-          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live),
+          },
           testM("supports batching for multiple webhooks") {
             val eventCount   = 100
             val webhookCount = 10
@@ -131,7 +132,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 assertM(queue.takeBetween(expectedRequestsMade, eventCount).map(_.size))(equalTo(expectedRequestsMade)),
               sleepDuration = Some(100.millis)
             ).build
-          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))) ++ Clock.live),
+          },
           testM("supports max batch wait time for at-most-once event delivery") {
             val n       = 5
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
@@ -145,11 +146,11 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion =
                 queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
             ).build
-          }.provideLayer(testEnv(Some(BatchingConfig(10, 5.seconds))))
-        )
+          }
+        ).injectSome[Clock](batchingTestEnv(Some(BatchingConfig(10, 5.seconds))))
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-    ).provideLayer(testEnv(batchingConfig = None) ++ Clock.live) @@ timeout(5.seconds)
+    ).injectSome[Clock](testEnv) @@ timeout(5.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -213,11 +214,18 @@ object WebhookServerSpecUtil {
     with Has[Option[BatchingConfig]]
     with Has[WebhookServer]
 
-  def testEnv(batchingConfig: Option[BatchingConfig]): ULayer[TestEnv] = {
-    val repos = (TestWebhookRepo.test >+> TestWebhookEventRepo.test) ++
-      TestWebhookStateRepo.test ++
-      TestWebhookHttpClient.test
-    val deps  = (repos ++ BatchingConfig.createLayer(batchingConfig)).orDie
-    deps ++ (deps >>> WebhookServer.live)
-  }.orDie
+  def batchingTestEnv[E](batchingConfig: Option[BatchingConfig]): ZLayer[Clock, E, TestEnv] =
+    ZLayer
+      .fromSomeMagic[Clock, TestEnv](
+        TestWebhookRepo.test,
+        TestWebhookEventRepo.test,
+        TestWebhookStateRepo.test,
+        TestWebhookHttpClient.test,
+        BatchingConfig.createLayer(batchingConfig),
+        WebhookServer.live
+      )
+      .orDie
+
+  def testEnv[E]: ZLayer[Clock, E, TestEnv] =
+    batchingTestEnv(None)
 }

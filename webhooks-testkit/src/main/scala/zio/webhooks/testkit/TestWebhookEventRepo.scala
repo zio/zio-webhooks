@@ -15,13 +15,13 @@ trait TestWebhookEventRepo {
 object TestWebhookEventRepo {
   // Layer Definitions
 
-  val test: RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo] with Has[WebhookRepo]] = {
+  val test: RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo]] = {
     for {
       ref         <- Ref.makeManaged(Map.empty[WebhookEventKey, WebhookEvent])
       hub         <- Hub.unbounded[WebhookEvent].toManaged_
       webhookRepo <- ZManaged.service[WebhookRepo]
       impl         = TestWebhookEventRepoImpl(ref, hub, webhookRepo)
-    } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo, WebhookRepo](impl, impl, webhookRepo)
+    } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo](impl, impl)
   }.toLayerMany
 
   // Accessor Methods
