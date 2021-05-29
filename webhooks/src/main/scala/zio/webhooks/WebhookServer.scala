@@ -3,6 +3,7 @@ package zio.webhooks
 import zio._
 import zio.clock._
 import zio.prelude.NonEmptySet
+import zio.stream.ZStream
 import zio.webhooks.WebhookDeliveryBatching._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer._
@@ -31,69 +32,37 @@ final case class WebhookServer(
   batchingConfig: Option[BatchingConfig]
 ) {
 
-  // TODO: Extract `Batcher`
-  private def consumeBatchElement(
-    batches: RefM[Map[Webhook, Batch]],
-    maxbatchSize: Int,
+  private def consumeBatchElements(
+    maxBatchSize: Int,
     maxWaitTime: Duration
-  ): RIO[Clock, Unit] =
-    for {
-      elem <- batchingQueue.take
-      _    <- batches.update { map =>
-                val (webhook, event) = elem
-                map.get(webhook) match {
-                  case None                                                                =>
-                    Batch
-                      .start(
-                        maxWaitTime,
-                        event,
-                        onMaxWait = batches.update { map =>
-                          map.get(webhook) match {
-                            case Some(Batch(_, events, None)) =>
-                              // TODO: Events may have different headers,
-                              // TODO: we're just taking the last one's for now.
-                              // TODO: WebhookEvents' contents are just being appended.
-                              // TODO: Content is stringly-typed, may need more structure
-                              val request = WebhookHttpRequest(
-                                webhook.url,
-                                events.map(_.content).mkString("\n"),
-                                event.headers
-                              )
-                              httpClient.post(request).ignore *> UIO(map - webhook) // TODO: handle errors/non-200
-                            case _                            =>
-                              // batch is dispatched, leave map as is
-                              ZIO.unit *> UIO(map)
-                          }
-                        }
-                      )
-                      .map(batch => map + (webhook -> batch))
-                  case Some(batch @ Batch(_, events, None)) if events.size == maxbatchSize =>
-                    for {
-                      batch  <- batch.fulfill(BatchFulfillment.MaxSize)
-                      request = WebhookHttpRequest(
-                                  webhook.url,
-                                  events.map(_.content).mkString("\n"),
-                                  event.headers
-                                )
-                      _      <- httpClient.post(request).ignore
-                    } yield map - webhook
-                  case Some(batch @ Batch(_, _, None))                                     =>
-                    UIO(map.updated(webhook, batch.add(event)))
-                }
-              }
-    } yield ()
+  ): URIO[Clock, Unit] =
+    ZStream
+      .fromQueue(batchingQueue)
+      .groupByKey(_._1, maxBatchSize) { (webhook, stream) =>
+        stream
+          .map(_._2)
+          .groupedWithin(maxBatchSize, maxWaitTime)
+          .mapM(events => dispatchBatch(webhook, events))
+      }
+      .runDrain
 
-  //    // TODO: Events may have different headers,
-  //    // TODO: we're just taking the last one's for now.
-  //    // TODO: WebhookEvents' contents are just being appended.
-  //    // TODO: Content is stringly-typed, may need more structure
-  //    val request = WebhookHttpRequest(
-  //      webhook.url,
-  //      events.map(_.content).mkString("\n"),
-  //      event.headers
-  //    )
-  //    httpClient.post(request).ignore // TODO: handle errors/non-200
-  //  }
+  private def dispatchBatch(webhook: Webhook, events: Chunk[WebhookEvent]): UIO[Unit] = {
+    // TODO: Events may have different headers,
+    // TODO: we're just taking the last one's for now.
+    // TODO: WebhookEvents' contents are just being appended.
+    // TODO: Content is stringly-typed, may need more structure
+    val request = WebhookHttpRequest(
+      webhook.url,
+      events.map(_.content).mkString("\n"),
+      events.last.headers
+    )
+    for {
+      _ <- httpClient.post(request).ignore // TODO: handle errors/non-200
+      // TODO[design]: should have setEventStatus variant accepting multiple keys
+      _ <- ZIO.foreach(events)(event => eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered).ignore)
+      // TODO: enqueue webhook/event errors
+    } yield ()
+  }
 
   private def dispatchEvent(webhook: Webhook, event: WebhookEvent) =
     for {
@@ -128,12 +97,7 @@ final case class WebhookServer(
       case None                                       =>
         ZIO.unit
       case Some(BatchingConfig(maxSize, maxWaitTime)) =>
-        {
-          for {
-            batches <- RefM.make(Map.empty[Webhook, Batch])
-            _       <- consumeBatchElement(batches, maxSize, maxWaitTime).forever
-          } yield ()
-        }.fork
+        consumeBatchElements(maxSize, maxWaitTime).fork
     }
 
   // get events that are Delivering whose webhooks have AtLeastOnce delivery semantics.
@@ -195,28 +159,6 @@ final case class WebhookServer(
 }
 
 object WebhookServer {
-
-  final case class Batch private (
-    waitFiber: Fiber[Nothing, Unit],
-    events: NonEmptyChunk[WebhookEvent],
-    fulfillment: Option[BatchFulfillment] = None
-  ) {
-    def add(event: WebhookEvent): Batch = copy(events = events :+ event)
-
-    def fulfill(fulfillment: BatchFulfillment): UIO[Batch] =
-      waitFiber.interrupt *> UIO(copy(fulfillment = Some(fulfillment)))
-
-    lazy val size = events.size
-  }
-
-  object Batch {
-    def start(maxWaitTime: Duration, event: WebhookEvent, onMaxWait: UIO[Unit]): RIO[Clock, Batch] =
-      for {
-        waitFiber <- (sleep(maxWaitTime) *> onMaxWait).fork
-        batch      = new Batch(waitFiber, NonEmptyChunk(event))
-      } yield batch
-  }
-
   // TODO: Smart constructor
   final case class BatchingConfig(maxSize: Int, maxWaitTime: Duration)
   object BatchingConfig {
@@ -225,12 +167,6 @@ object WebhookServer {
 
     def live(maxSize: Int, maxWaitTime: Duration): ULayer[Has[Option[BatchingConfig]]] =
       ZLayer.succeed(Some(BatchingConfig(maxSize, maxWaitTime)))
-  }
-
-  sealed trait BatchFulfillment extends Product with Serializable
-  object BatchFulfillment {
-    case object MaxSize     extends BatchFulfillment
-    case object MaxWaitTime extends BatchFulfillment
   }
 
   type Env = Has[WebhookRepo]
