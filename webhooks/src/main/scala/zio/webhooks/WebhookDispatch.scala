@@ -7,4 +7,4 @@ import zio.NonEmptyChunk
  * [[WebhookEvent]]s. Retries are done on dispatches since status updates on webhooks and their
  * respective events depend on the outcome of each dispatch.
  */
-final case class Dispatch(webhook: Webhook, events: NonEmptyChunk[WebhookEvent])
+final case class WebhookDispatch(webhook: Webhook, events: NonEmptyChunk[WebhookEvent])

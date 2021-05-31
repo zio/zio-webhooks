@@ -41,11 +41,11 @@ final case class WebhookServer(
           .groupedWithin(maxBatchSize, maxWaitTime)
           .map(NonEmptyChunk.fromChunk(_))
           .collectSome
-          .mapM(events => dispatch(Dispatch(webhook, events)))
+          .mapM(events => dispatch(WebhookDispatch(webhook, events)))
       }
       .runDrain
 
-  private def dispatch(dispatch: Dispatch) = {
+  private def dispatch(dispatch: WebhookDispatch) = {
     // TODO: Events may have different headers,
     // TODO: we're just taking the last one's for now.
     // TODO: WebhookEvents' contents are just being appended.
@@ -70,7 +70,7 @@ final case class WebhookServer(
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
       _ <- webhook.batching match {
              case Single  =>
-               dispatch(Dispatch(webhook, NonEmptyChunk(event)))
+               dispatch(WebhookDispatch(webhook, NonEmptyChunk(event)))
              case Batched =>
                val deliveringEvent = event.copy(status = WebhookEventStatus.Delivering)
                batchingQueue.offer((webhook, deliveringEvent))
