@@ -4,7 +4,6 @@ import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.magic._
-import zio.stream._
 import zio.test.Assertion._
 import zio.test.DefaultRunnableSpec
 import zio.test.TestAspect._
@@ -57,13 +56,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = List(event),
               eventsAssertion = events => {
-                val markEvents    = events.filter(!_.status.isNew).take(2).runCollect
-                val eventStatuses = markEvents.map(_.map(_.status))
+                val eventStatuses = events
+                  .filterOutput(!_.status.isNew)
+                  .takeN(2)
+                  .map(_.map(_.status))
                 assertM(eventStatuses)(hasSameElements(expectedStatuses))
-              },
-              sleepDuration = Some(100.millis)
+              }
             )
-          } @@ flaky,
+          },
           testM("can dispatch single event to n webhooks") {
             val n                 = 100
             val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
@@ -150,7 +150,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = createWebhookEvents(eventCount)(webhook.id),
               eventsAssertion = events => {
-                events.filter(_.status == WebhookEventStatus.Delivered).take(100).runCollect *> assertCompletesM
+                events.filterOutput(_.status == WebhookEventStatus.Delivered).takeN(eventCount) *> assertCompletesM
               }
             )
           },
@@ -212,9 +212,6 @@ object WebhookServerSpecUtil {
       )
     }
 
-  type EventsAssertion =
-    ZStream[Has[TestWebhookEventRepo], Nothing, WebhookEvent] => URIO[Has[TestWebhookEventRepo], TestResult]
-
   def singleWebhook(id: Long, status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Webhook =
     Webhook(
       WebhookId(id),
@@ -250,17 +247,17 @@ object WebhookServerSpecUtil {
     stubResponses: Iterable[WebhookHttpResponse],
     webhooks: Iterable[Webhook],
     events: Iterable[WebhookEvent],
-    eventsAssertion: EventsAssertion = _ => assertCompletesM,
+    eventsAssertion: Dequeue[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     // TODO[low-prio]: this should be a Dequeue so we don't inadvertently write to the Queue in tests
     requestsAssertion: Queue[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
     sleepDuration: Option[Duration] = None
   ): RIO[SpecEnv with TestClock, TestResult] =
     for {
+      eventsFiber   <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion).fork
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
       _             <- responseQueue.offerAll(stubResponses)
       _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-      eventsFiber   <- eventsAssertion(TestWebhookEventRepo.subscribeToEvents).fork
       _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
       _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
       requestQueue  <- TestWebhookHttpClient.requests
