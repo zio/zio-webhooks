@@ -193,7 +193,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         )
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-    ).injectSome[Has[Annotations.Service] with TestClock with Clock](testEnv) @@ timeout(5.seconds)
+    ).injectSome[Has[Annotations.Service] with TestClock with Clock](testEnv) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
