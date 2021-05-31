@@ -41,24 +41,26 @@ final case class WebhookServer(
           .groupedWithin(maxBatchSize, maxWaitTime)
           .map(NonEmptyChunk.fromChunk(_))
           .collectSome
-          .mapM(events => dispatchBatch(webhook, events))
+          .mapM(events => dispatch(Dispatch(webhook, events)))
       }
       .runDrain
 
-  private def dispatchBatch(webhook: Webhook, events: NonEmptyChunk[WebhookEvent]): UIO[Unit] = {
+  private def dispatch(dispatch: Dispatch) = {
     // TODO: Events may have different headers,
     // TODO: we're just taking the last one's for now.
     // TODO: WebhookEvents' contents are just being appended.
     // TODO: Content is stringly-typed, may need more structure
     val request = WebhookHttpRequest(
-      webhook.url,
-      events.map(_.content).mkString("\n"),
-      events.last.headers
+      dispatch.webhook.url,
+      dispatch.events.map(_.content).mkString("\n"),
+      dispatch.events.last.headers
     )
     for {
       _ <- httpClient.post(request).ignore // TODO: handle errors/non-200
       // TODO[design]: should have setEventStatus variant accepting multiple keys
-      _ <- ZIO.foreach(events)(event => eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered).ignore)
+      _ <- ZIO.foreach(dispatch.events) { event =>
+             eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered).ignore
+           }
       // TODO: enqueue webhook/event errors
     } yield ()
   }
@@ -68,9 +70,7 @@ final case class WebhookServer(
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
       _ <- webhook.batching match {
              case Single  =>
-               val request = WebhookHttpRequest(webhook.url, event.content, event.headers)
-               httpClient.post(request).ignore *>
-                 eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered) // TODO: handle errors/non-200
+               dispatch(Dispatch(webhook, NonEmptyChunk(event)))
              case Batched =>
                val deliveringEvent = event.copy(status = WebhookEventStatus.Delivering)
                batchingQueue.offer((webhook, deliveringEvent))
