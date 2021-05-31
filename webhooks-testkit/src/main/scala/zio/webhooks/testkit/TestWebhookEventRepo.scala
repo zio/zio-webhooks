@@ -9,7 +9,7 @@ import zio.webhooks._
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
 
-  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]]
+  def getEvents: UStream[WebhookEvent]
 }
 
 object TestWebhookEventRepo {
@@ -29,10 +29,11 @@ object TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.createEvent(event))
 
-  def subscribeToEvents[A](
-    useDequeue: Dequeue[WebhookEvent] => UIO[A]
-  ): URIO[Has[TestWebhookEventRepo], A] =
-    ZIO.serviceWith(_.subscribeToEvents.use[Any, Nothing, A](useDequeue)) // 2.12 doesn't infer here
+  def subscribeToEvents: ZStream[Has[TestWebhookEventRepo], Nothing, WebhookEvent] =
+    for {
+      eventRepo <- ZStream.environment[Has[TestWebhookEventRepo]].map(_.get)
+      event     <- eventRepo.getEvents
+    } yield event
 }
 
 final private case class TestWebhookEventRepoImpl(
@@ -70,22 +71,27 @@ final private case class TestWebhookEventRepoImpl(
                            case None        =>
                              (None, map)
                            case Some(event) =>
-                             (Some(event), map.updated(key, event.copy(status = status)))
+                             val updatedEvent = event.copy(status = status)
+                             (Some(updatedEvent), map.updated(key, updatedEvent))
                          }
                        }
-      _             <- eventOpt.fold[IO[MissingWebhookEventError, Unit]](
-                         ZIO.fail(MissingWebhookEventError(key))
-                       )(event => hub.publish(event).unit)
+      _             <- eventOpt match {
+                         case None        =>
+                           ZIO.fail(MissingWebhookEventError(key))
+                         case Some(event) =>
+                           hub.publish(event).unit
+                       }
     } yield ()
 
-  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]] = hub.subscribe
+  def getEvents: UStream[WebhookEvent] =
+    Stream.fromHub(hub)
 
-  def subscribeToEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
-    Stream.fromHub(hub).filter(event => statuses.contains(event.status))
+  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
+    getEvents.filter(event => statuses.contains(event.status))
 
-  def subscribeToEventsByWebhookAndStatus(
+  def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
   ): Stream[WebhookError.MissingWebhookError, WebhookEvent] =
-    subscribeToEventsByStatuses(statuses).filter(_.key.webhookId == id)
+    getEventsByStatuses(statuses).filter(_.key.webhookId == id)
 }

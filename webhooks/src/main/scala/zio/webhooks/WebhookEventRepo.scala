@@ -24,13 +24,13 @@ trait WebhookEventRepo {
    * Subscribes to events given a non-empty set of statuses. Implementations are responsible for
    * ordering events.
    */
-  def subscribeToEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent]
+  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent]
 
   /**
    * Retrieves events by [[WebhookId]] and a non-empty set of [[WebhookEventStatus]]es.
    * Implementations are responsible for ordering events.
    */
-  def subscribeToEventsByWebhookAndStatus(
+  def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
   ): Stream[MissingWebhookError, WebhookEvent]

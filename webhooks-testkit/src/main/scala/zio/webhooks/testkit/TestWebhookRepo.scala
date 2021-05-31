@@ -24,9 +24,8 @@ object TestWebhookRepo {
     ZIO.serviceWith(_.createWebhook(webhook))
 }
 
-final private case class TestWebhookRepoImpl(
-  ref: Ref[Map[WebhookId, Webhook]]
-) extends WebhookRepo
+final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]])
+    extends WebhookRepo
     with TestWebhookRepo {
 
   def createWebhook(webhook: Webhook): UIO[Unit] =

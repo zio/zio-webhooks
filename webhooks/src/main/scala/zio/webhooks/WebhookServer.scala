@@ -3,7 +3,7 @@ package zio.webhooks
 import zio._
 import zio.clock._
 import zio.prelude.NonEmptySet
-import zio.stream.ZStream
+import zio.stream.UStream
 import zio.webhooks.WebhookDeliveryBatching._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer._
@@ -32,21 +32,20 @@ final case class WebhookServer(
   batchingConfig: Option[BatchingConfig]
 ) {
 
-  private def consumeBatchElements(
-    maxBatchSize: Int,
-    maxWaitTime: Duration
-  ): URIO[Clock, Unit] =
-    ZStream
+  private def consumeBatchElements(maxBatchSize: Int, maxWaitTime: Duration): URIO[Clock, Unit] =
+    UStream
       .fromQueue(batchingQueue)
       .groupByKey(_._1, maxBatchSize) { (webhook, stream) =>
         stream
           .map(_._2)
           .groupedWithin(maxBatchSize, maxWaitTime)
+          .map(NonEmptyChunk.fromChunk(_))
+          .collectSome
           .mapM(events => dispatchBatch(webhook, events))
       }
       .runDrain
 
-  private def dispatchBatch(webhook: Webhook, events: Chunk[WebhookEvent]): UIO[Unit] = {
+  private def dispatchBatch(webhook: Webhook, events: NonEmptyChunk[WebhookEvent]): UIO[Unit] = {
     // TODO: Events may have different headers,
     // TODO: we're just taking the last one's for now.
     // TODO: WebhookEvents' contents are just being appended.
@@ -64,7 +63,7 @@ final case class WebhookServer(
     } yield ()
   }
 
-  private def dispatchEvent(webhook: Webhook, event: WebhookEvent) =
+  private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent) =
     for {
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
       _ <- webhook.batching match {
@@ -73,7 +72,8 @@ final case class WebhookServer(
                httpClient.post(request).ignore *>
                  eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered) // TODO: handle errors/non-200
              case Batched =>
-               batchingQueue.offer((webhook, event))
+               val deliveringEvent = event.copy(status = WebhookEventStatus.Delivering)
+               batchingQueue.offer((webhook, deliveringEvent))
            }
     } yield ()
 
@@ -97,7 +97,7 @@ final case class WebhookServer(
       case None                                       =>
         ZIO.unit
       case Some(BatchingConfig(maxSize, maxWaitTime)) =>
-        consumeBatchElements(maxSize, maxWaitTime).fork
+        consumeBatchElements(maxSize, maxWaitTime).forkAs("batching")
     }
 
   // get events that are Delivering whose webhooks have AtLeastOnce delivery semantics.
@@ -109,8 +109,6 @@ final case class WebhookServer(
   private def startEventRecovery: UIO[Any] = ZIO.unit.fork
 
   // Call webhookEventRepo.getEventsByStatus looking for new events
-  //
-  // WebhookEventStatus.New
   //
   // For each new event:
   //  - mark event as Delivering
@@ -128,19 +126,17 @@ final case class WebhookServer(
   /**
    * Kicks off new [[WebhookEvent]] subscription.
    */
-  private def startNewEventSubscription: UIO[Any] =
-    eventRepo
-      .subscribeToEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
-      .foreach { newEvent =>
-        val webhookId = newEvent.key.webhookId
-        for {
-          webhook <- webhookRepo
-                       .getWebhookById(webhookId)
-                       .flatMap(ZIO.fromOption(_).mapError(_ => MissingWebhookError(webhookId)))
-          _       <- ZIO.when(webhook.isOnline)(dispatchEvent(webhook, newEvent))
-        } yield ()
-      }
-      .forkAs("new-event-subscription")
+  private def startNewEventSubscription: UIO[Any] = {
+    for (newEvent <- eventRepo.getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))) {
+      val webhookId = newEvent.key.webhookId
+      for {
+        webhook <- webhookRepo
+                     .getWebhookById(webhookId)
+                     .flatMap(ZIO.fromOption(_).mapError(_ => MissingWebhookError(webhookId)))
+        _       <- ZIO.when(webhook.isOnline)(dispatchNewEvent(webhook, newEvent))
+      } yield ()
+    }
+  }.forkAs("new-event-subscription")
 
   // retry dispatching every WebhookEvent in queues twice, then exponentially
   // if we've retried for >7 days,
