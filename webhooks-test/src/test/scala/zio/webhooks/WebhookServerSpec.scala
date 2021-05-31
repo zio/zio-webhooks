@@ -9,7 +9,7 @@ import zio.test.Assertion._
 import zio.test.DefaultRunnableSpec
 import zio.test.TestAspect._
 import zio.test._
-import zio.test.environment.TestClock
+import zio.test.environment._
 import zio.webhooks.WebhookServer.BatchingConfig
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.testkit._
@@ -60,9 +60,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 val markEvents    = events.filter(!_.status.isNew).take(2).runCollect
                 val eventStatuses = markEvents.map(_.map(_.status))
                 assertM(eventStatuses)(hasSameElements(expectedStatuses))
-              }
+              },
+              sleepDuration = Some(100.millis)
             )
-          },
+          } @@ flaky,
           testM("can dispatch single event to n webhooks") {
             val n                 = 100
             val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
@@ -193,7 +194,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         )
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-    ).injectSome[Has[Annotations.Service] with TestClock with Clock](testEnv) @@ timeout(10.seconds)
+    ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -223,7 +224,7 @@ object WebhookServerSpecUtil {
       deliveryMode
     )
 
-  type TestEnv = Has[WebhookEventRepo]
+  type SpecEnv = Has[WebhookEventRepo]
     with Has[TestWebhookEventRepo]
     with Has[WebhookRepo]
     with Has[TestWebhookRepo]
@@ -233,9 +234,9 @@ object WebhookServerSpecUtil {
     with Has[Option[BatchingConfig]]
     with Has[WebhookServer]
 
-  val testEnv: URLayer[Clock, TestEnv] =
+  val testEnv: URLayer[Clock, SpecEnv] =
     ZLayer
-      .fromSomeMagic[Clock, TestEnv](
+      .fromSomeMagic[Clock, SpecEnv](
         TestWebhookRepo.test,
         TestWebhookEventRepo.test,
         TestWebhookStateRepo.test,
@@ -254,7 +255,7 @@ object WebhookServerSpecUtil {
     requestsAssertion: Queue[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
     sleepDuration: Option[Duration] = None
-  ): RIO[TestEnv with TestClock, TestResult] =
+  ): RIO[SpecEnv with TestClock, TestResult] =
     for {
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
       _             <- responseQueue.offerAll(stubResponses)
