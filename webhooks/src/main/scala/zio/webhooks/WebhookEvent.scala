@@ -10,4 +10,6 @@ final case class WebhookEvent(
   status: WebhookEventStatus,
   content: String,
   headers: Chunk[(String, String)]
-)
+) {
+  def isDelivered: Boolean = status == WebhookEventStatus.Delivered
+}

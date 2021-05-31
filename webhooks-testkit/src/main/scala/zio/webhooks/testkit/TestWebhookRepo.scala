@@ -1,12 +1,35 @@
 package zio.webhooks.testkit
 
-import zio.webhooks._
-import zio.webhooks.WebhookError._
 import zio._
+import zio.webhooks.WebhookError._
+import zio.webhooks._
 
-final case class TestWebhookRepo(
-  ref: Ref[Map[WebhookId, Webhook]]
-) extends WebhookRepo {
+trait TestWebhookRepo {
+  def createWebhook(webhook: Webhook): UIO[Unit]
+}
+
+object TestWebhookRepo {
+  // Layer Definitions
+
+  val test: ULayer[Has[TestWebhookRepo] with Has[WebhookRepo]] = {
+    for {
+      ref <- Ref.make(Map.empty[WebhookId, Webhook])
+      impl = TestWebhookRepoImpl(ref)
+    } yield Has.allOf[TestWebhookRepo, WebhookRepo](impl, impl)
+  }.toLayerMany
+
+  // Accessor Methods
+
+  def createWebhook(webhook: Webhook): URIO[Has[TestWebhookRepo], Unit] =
+    ZIO.serviceWith(_.createWebhook(webhook))
+}
+
+final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]])
+    extends WebhookRepo
+    with TestWebhookRepo {
+
+  def createWebhook(webhook: Webhook): UIO[Unit] =
+    ref.update(_ + ((webhook.id, webhook)))
 
   def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]] =
     ref.get.map(_.get(webhookId))
@@ -23,8 +46,4 @@ final case class TestWebhookRepo(
                        }
       _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(id)))
     } yield ()
-}
-
-object TestWebhookRepo {
-  val testLayer: ULayer[Has[WebhookRepo]] = Ref.make(Map.empty[WebhookId, Webhook]).map(TestWebhookRepo(_)).toLayer
 }
