@@ -273,7 +273,6 @@ object WebhookServerSpecUtil {
     adjustDuration: Option[Duration] = None,
     sleepDuration: Option[Duration] = None
   ): RIO[SpecEnv with TestClock, TestResult] =
-    // TODO: try explicitly building object graph here
     for {
       errorsFiber   <- errorsAssertion(WebhookServer.getErrors).fork
       requestQueue  <- TestWebhookHttpClient.requests
