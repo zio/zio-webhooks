@@ -139,8 +139,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion = queue =>
                 assertM(
                   queue.takeBetween(expectedRequestsMade, eventCount).map(_.size)
-                )(equalTo(expectedRequestsMade)),
-              sleepDuration = Some(100.millis)
+                )(equalTo(expectedRequestsMade))
             )
           },
           testM("events dispatched by batch are marked delivered") {
@@ -207,7 +206,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             stubResponses = List(WebhookHttpResponse(200)),
             webhooks = List.empty,
             events = List(eventWithNoWebhook),
-            errorsAssertion = errors => assertM(errors.runHead)(isSome(equalTo(MissingWebhookError(missingWebhookId))))
+            errorsAssertion = errors => assertM(errors.runHead)(isSome(equalTo(MissingWebhookError(missingWebhookId)))),
+            sleepDuration = Some(1.milli)
           )
         }
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
@@ -275,19 +275,21 @@ object WebhookServerSpecUtil {
   ): RIO[SpecEnv with TestClock, TestResult] =
     // TODO: try explicitly building object graph here
     for {
+      errorsFiber   <- errorsAssertion(WebhookServer.getErrors).fork
+      requestQueue  <- TestWebhookHttpClient.requests
+      requestsFiber <- requestsAssertion(requestQueue).fork
+      _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
+      // let test fiber sleep as we have to let requests be made to fail some tests
+      // TODO[low-prio]: there's a better way to do this: poll the queue repeatedly with a timeout
+      // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862
       _             <- responseQueue.offerAll(stubResponses)
       _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
       _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
       _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
-      requestQueue  <- TestWebhookHttpClient.requests
-      // let test fiber sleep as we have to let requests be made to fail some tests
-      // TODO[low-prio]: there's a better way to do this: poll the queue repeatedly with a timeout
-      // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862
       _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
-      _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
       eventsTest    <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion)
-      errorsTest    <- errorsAssertion(WebhookServer.getErrors)
-      requestsTest  <- requestsAssertion(requestQueue)
+      requestsTest  <- requestsFiber.join
+      errorsTest    <- errorsFiber.join
     } yield eventsTest && errorsTest && requestsTest
 }
