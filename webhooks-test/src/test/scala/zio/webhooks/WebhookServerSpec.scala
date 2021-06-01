@@ -4,11 +4,13 @@ import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.magic._
+import zio.stream.ZStream
 import zio.test.Assertion._
 import zio.test.DefaultRunnableSpec
 import zio.test.TestAspect._
 import zio.test._
 import zio.test.environment._
+import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer.BatchingConfig
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.testkit._
@@ -191,7 +193,23 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               adjustDuration = Some(5.seconds)
             )
           }
-        )
+        ),
+        testM("missing webhook errors are sent to stream") {
+          val missingWebhookId   = WebhookId(2)
+          val eventWithNoWebhook = WebhookEvent(
+            WebhookEventKey(WebhookEventId(0), missingWebhookId),
+            WebhookEventStatus.New,
+            "test content",
+            Chunk.empty
+          )
+
+          webhooksTestScenario(
+            stubResponses = List(WebhookHttpResponse(200)),
+            webhooks = List.empty,
+            events = List(eventWithNoWebhook),
+            errorsAssertion = errors => assertM(errors.runHead)(isSome(equalTo(MissingWebhookError(missingWebhookId))))
+          )
+        }
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
     ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ timeout(10.seconds)
@@ -247,14 +265,16 @@ object WebhookServerSpecUtil {
     stubResponses: Iterable[WebhookHttpResponse],
     webhooks: Iterable[Webhook],
     events: Iterable[WebhookEvent],
+    errorsAssertion: ZStream[Has[WebhookServer], Nothing, WebhookError] => URIO[Has[WebhookServer], TestResult] = _ =>
+      assertCompletesM,
     eventsAssertion: Dequeue[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     // TODO[low-prio]: this should be a Dequeue so we don't inadvertently write to the Queue in tests
     requestsAssertion: Queue[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
     sleepDuration: Option[Duration] = None
   ): RIO[SpecEnv with TestClock, TestResult] =
+    // TODO: try explicitly building object graph here
     for {
-      eventsFiber   <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion).fork
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
       _             <- responseQueue.offerAll(stubResponses)
       _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
@@ -266,7 +286,8 @@ object WebhookServerSpecUtil {
       // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862
       _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
       _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
-      eventsTest    <- eventsFiber.join
+      eventsTest    <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion)
+      errorsTest    <- errorsAssertion(WebhookServer.getErrors)
       requestsTest  <- requestsAssertion(requestQueue)
-    } yield eventsTest && requestsTest
+    } yield eventsTest && errorsTest && requestsTest
 }
