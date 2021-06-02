@@ -39,13 +39,19 @@ final case class WebhookServer(
     UStream
       .fromQueue(batchingQueue)
       // TODO: make key (webhook ID, content type) combo
-      .groupByKey(_._1, maxBatchSize) { (webhook, stream) =>
-        stream
-          .map(_._2)
-          .groupedWithin(maxBatchSize, maxWaitTime)
-          .map(NonEmptyChunk.fromChunk(_))
-          .collectSome
-          .mapM(events => dispatch(WebhookDispatch(webhook, events)))
+      .groupByKey(
+        pair => {
+          val (webhook, event) = pair
+          (webhook.id, event.headers.find(_._1 == "Content-Type"))
+        },
+        maxBatchSize
+      ) {
+        case (_, stream) =>
+          stream
+            .groupedWithin(maxBatchSize, maxWaitTime)
+            .map(NonEmptyChunk.fromChunk(_))
+            .collectSome
+            .mapM(events => dispatch(WebhookDispatch(events.head._1, events.map(_._2))))
       }
       .runDrain
 
