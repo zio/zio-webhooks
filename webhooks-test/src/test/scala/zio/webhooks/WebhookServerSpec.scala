@@ -75,7 +75,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = webhooks,
               events = eventsToNWebhooks,
               requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM,
-              sleepDuration = Some(10.millis)
+              sleepDuration = Some(50.millis)
             )
           },
           testM("dispatches no events for disabled webhooks") {
@@ -198,12 +198,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             webhooks = List.empty,
             events = List(eventWithNoWebhook),
             errorsAssertion = errors => assertM(errors.runHead)(isSome(equalTo(MissingWebhookError(missingWebhookId)))),
-            sleepDuration = Some(10.millis)
+            sleepDuration = Some(50.millis)
           )
         }
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-    ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ nonFlaky @@ timeout(60.seconds)
+    ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -268,6 +268,7 @@ object WebhookServerSpecUtil {
       requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
       eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
       // let test fiber sleep to give time for fiber streams to come online
+      // TODO[low-prio]: for optimization, see ZQueueSpec wait for value pattern
       _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
       _             <- responseQueue.offerAll(stubResponses)
