@@ -4,6 +4,7 @@ import zio._
 import zio.clock._
 import zio.prelude.NonEmptySet
 import zio.stream.UStream
+import zio.stream.ZStream
 import zio.webhooks.WebhookDeliveryBatching._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer._
@@ -28,6 +29,7 @@ final case class WebhookServer(
   eventRepo: WebhookEventRepo,
   httpClient: WebhookHttpClient,
   batchingQueue: Queue[(Webhook, WebhookEvent)],
+  errorHub: Hub[WebhookError],
   webhookState: Ref[Map[WebhookId, WebhookServer.WebhookState]],
   batchingConfig: Option[BatchingConfig]
 ) {
@@ -35,6 +37,7 @@ final case class WebhookServer(
   private def consumeBatchElements(maxBatchSize: Int, maxWaitTime: Duration): URIO[Clock, Unit] =
     UStream
       .fromQueue(batchingQueue)
+      // TODO: make key (webhook ID, content type) combo
       .groupByKey(_._1, maxBatchSize) { (webhook, stream) =>
         stream
           .map(_._2)
@@ -45,7 +48,7 @@ final case class WebhookServer(
       }
       .runDrain
 
-  private def dispatch(dispatch: WebhookDispatch) = {
+  private def dispatch(dispatch: WebhookDispatch): UIO[Unit] = {
     // TODO: Events may have different headers,
     // TODO: we're just taking the last one's for now.
     // TODO: WebhookEvents' contents are just being appended.
@@ -65,7 +68,7 @@ final case class WebhookServer(
     } yield ()
   }
 
-  private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent) =
+  private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): IO[WebhookError, Unit] =
     for {
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
       _ <- webhook.batching match {
@@ -77,6 +80,9 @@ final case class WebhookServer(
            }
     } yield ()
 
+  def getErrors: UStream[WebhookError] =
+    UStream.fromHub(errorHub)
+
   /**
    * Starts the webhook server. Kicks off the following to run concurrently:
    * - new webhook event subscription
@@ -84,8 +90,7 @@ final case class WebhookServer(
    * - dispatch retry monitoring
    * - batching
    */
-  // TODO: add error hook
-  // TODO: retry monitoring should just be dispatch
+  // TODO: should retry monitoring just be dispatch?
   def start: URIO[Clock, Any] =
     startNewEventSubscription *> startEventRecovery *> startRetryMonitoring *> startBatching
 
@@ -129,12 +134,11 @@ final case class WebhookServer(
   private def startNewEventSubscription: UIO[Any] = {
     for (newEvent <- eventRepo.getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))) {
       val webhookId = newEvent.key.webhookId
-      for {
-        webhook <- webhookRepo
-                     .getWebhookById(webhookId)
-                     .flatMap(ZIO.fromOption(_).mapError(_ => MissingWebhookError(webhookId)))
-        _       <- ZIO.when(webhook.isOnline)(dispatchNewEvent(webhook, newEvent))
-      } yield ()
+      webhookRepo
+        .getWebhookById(webhookId)
+        .flatMap(ZIO.fromOption(_).mapError(_ => MissingWebhookError(webhookId)))
+        .flatMap(webhook => ZIO.when(webhook.isOnline)(dispatchNewEvent(webhook, newEvent)))
+        .catchAll(errorHub.publish(_).unit)
     }
   }.forkAs("new-event-subscription")
 
@@ -172,16 +176,29 @@ object WebhookServer {
     with Has[Option[BatchingConfig]]
     with Clock
 
+  def getErrors: ZStream[Has[WebhookServer], Nothing, WebhookError] =
+    ZStream.service[WebhookServer].flatMap(_.getErrors)
+
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
       state          <- Ref.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
       batchQueue     <- Queue.bounded[(Webhook, WebhookEvent)](1024).toManaged_
+      errorHub       <- Hub.sliding[WebhookError](128).toManaged_
       batchingConfig <- ZManaged.service[Option[BatchingConfig]]
       repo           <- ZManaged.service[WebhookRepo]
       stateRepo      <- ZManaged.service[WebhookStateRepo]
       eventRepo      <- ZManaged.service[WebhookEventRepo]
       httpClient     <- ZManaged.service[WebhookHttpClient]
-      server          = WebhookServer(repo, stateRepo, eventRepo, httpClient, batchQueue, state, batchingConfig)
+      server          = WebhookServer(
+                          repo,
+                          stateRepo,
+                          eventRepo,
+                          httpClient,
+                          batchQueue,
+                          errorHub,
+                          state,
+                          batchingConfig
+                        )
       _              <- server.start.toManaged_
       _              <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server
