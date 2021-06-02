@@ -113,20 +113,20 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
           },
           testM("missing webhook errors are sent to stream") {
-            val missingWebhookId   = WebhookId(404)
-            val eventWithNoWebhook = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), missingWebhookId),
-              WebhookEventStatus.New,
-              "test content",
-              Chunk.empty
-            )
+            val idRange               = 401L to 404L
+            val missingWebhookIds     = idRange.map(WebhookId(_))
+            val eventsMissingWebhooks = missingWebhookIds.flatMap(id => createWebhookEvents(1)(id))
+
+            val expectedErrorCount = missingWebhookIds.size
 
             webhooksTestScenario(
               stubResponses = List(WebhookHttpResponse(200)),
               webhooks = List.empty,
-              events = List(eventWithNoWebhook),
-              errorsAssertion =
-                errors => assertM(errors.runHead)(isSome(equalTo(MissingWebhookError(missingWebhookId))))
+              events = eventsMissingWebhooks,
+              errorsAssertion = errors =>
+                assertM(errors.take(expectedErrorCount.toLong).runCollect)(
+                  hasSameElements(idRange.map(id => MissingWebhookError(WebhookId(id))))
+                )
             )
           }
         ).provideCustomLayer(testEnv(BatchingConfig.disabled)),
@@ -270,7 +270,7 @@ object WebhookServerSpecUtil {
     eventsAssertion: UStream[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     requestsAssertion: UStream[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
-    sleepDuration: Duration = 128.millis
+    sleepDuration: Duration = 64.millis
   ): RIO[SpecEnv with TestClock, TestResult] =
     for {
       errorsFiber   <- ZIO.service[WebhookServer].flatMap(server => errorsAssertion(server.getErrors).fork)
