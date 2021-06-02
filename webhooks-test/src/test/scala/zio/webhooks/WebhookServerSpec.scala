@@ -234,10 +234,26 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 requests => assertM(requests.runHead.map(_.map(_.content)))(isSome(equalTo(expectedOutput))),
               adjustDuration = Some(5.seconds)
             )
+          },
+          testM("batched plain text event contents are appended") {
+            val webhook         = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+            val plaintextEvents = createPlaintextEvents(2)(webhook.id)
+
+            val expectedOutput = "event payload 0event payload 1"
+
+            webhooksTestScenario(
+              stubResponses = List.fill(2)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = plaintextEvents,
+              requestsAssertion =
+                requests => assertM(requests.runHead.map(_.map(_.content)))(isSome(equalTo(expectedOutput))),
+              adjustDuration = Some(5.seconds)
+            )
           }
         ).provideCustomLayer(testEnv(BatchingConfig.default))
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
+    // ) @@ timeout(5.seconds)
     ) @@ nonFlaky @@ timeout(2.minutes)
 }
 
@@ -313,7 +329,7 @@ object WebhookServerSpecUtil {
       errorsFiber   <- ZIO.service[WebhookServer].flatMap(server => errorsAssertion(server.getErrors).fork)
       requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
       eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
-      // let test fiber sleep to give time for fiber streams to come online
+      // let test fiber sleep to give time for fiber streams 👆 to come online
       // TODO[low-prio]: for optimization, see ZQueueSpec wait for value pattern
       _             <- Clock.Service.live.sleep(sleepDuration)
       responseQueue <- Queue.unbounded[WebhookHttpResponse]

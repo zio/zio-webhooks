@@ -38,11 +38,10 @@ final case class WebhookServer(
   private def consumeBatchElements(maxBatchSize: Int, maxWaitTime: Duration): URIO[Clock, Unit] =
     UStream
       .fromQueue(batchingQueue)
-      // TODO: make key (webhook ID, content type) combo
       .groupByKey(
         pair => {
           val (webhook, event) = pair
-          (webhook.id, event.headers.find(_._1 == "Content-Type"))
+          (webhook.id, event.headers.find(_._1.toLowerCase == "content-type"))
         },
         maxBatchSize
       ) {
@@ -56,15 +55,19 @@ final case class WebhookServer(
       .runDrain
 
   private def dispatch(dispatch: WebhookDispatch): UIO[Unit] = {
-    // TODO: Events may have different headers,
-    // TODO: we're just taking the last one's for now.
-    // TODO: WebhookEvents' contents are just being appended.
-    // TODO: Content is stringly-typed, may need more structure
-    val request = WebhookHttpRequest(
-      dispatch.webhook.url,
-      dispatch.events.map(_.content).mkString("\n"),
-      dispatch.events.last.headers
-    )
+    val requestContent =
+      dispatch.contentType match {
+        case Some(WebhookEventContentType.Json) =>
+          if (dispatch.size > 1)
+            "[" + dispatch.events.map(_.content).mkString(",") + "]"
+          else
+            dispatch.events.head.content
+        case _                                  =>
+          dispatch.events.map(_.content).mkString
+      }
+
+    val request = WebhookHttpRequest(dispatch.url, requestContent, dispatch.headers)
+
     for {
       _ <- httpClient.post(request).ignore // TODO: handle errors/non-200
       // TODO[design]: should have setEventStatus variant accepting multiple keys
