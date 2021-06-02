@@ -29,7 +29,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload",
-              Chunk(("Accept", "*/*"))
+              jsonContentHeaders
             )
 
             val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
@@ -48,7 +48,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload",
-              Chunk(("Accept", "*/*"))
+              jsonContentHeaders
             )
 
             val expectedStatuses = List(WebhookEventStatus.Delivering, WebhookEventStatus.Delivered)
@@ -66,7 +66,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           testM("can dispatch single event to n webhooks") {
             val n                 = 100
             val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
-            val eventsToNWebhooks = webhooks.map(_.id).flatMap(createWebhookEvents(1))
+            val eventsToNWebhooks = webhooks.map(_.id).flatMap(webhook => createWebhookEvents(1)(webhook))
 
             webhooksTestScenario(
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
@@ -124,7 +124,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookStatus.Enabled,
               WebhookDeliveryMode.BatchedAtMostOnce
             )
-            val events       = webhooks.map(_.id).flatMap(createWebhookEvents(maxBatchSize))
+            val events       = webhooks.map(_.id).flatMap(webhook => createWebhookEvents(maxBatchSize)(webhook))
 
             val expectedRequestsMade = maxBatchSize
 
@@ -179,7 +179,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
         ),
         testM("missing webhook errors are sent to stream") {
-          val missingWebhookId   = WebhookId(2)
+          val missingWebhookId   = WebhookId(404)
           val eventWithNoWebhook = WebhookEvent(
             WebhookEventKey(WebhookEventId(0), missingWebhookId),
             WebhookEventStatus.New,
@@ -196,7 +196,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         }
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-    ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ nonFlaky
+    ).provideCustomLayer(testEnv(BatchingConfig.default)) @@ nonFlaky @@ timeout(60.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -204,15 +204,19 @@ object WebhookServerSpecUtil {
   def createWebhooks(n: Int)(status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Iterable[Webhook] =
     (0 until n).map(i => singleWebhook(i.toLong, status, deliveryMode))
 
-  def createWebhookEvents(n: Int)(webhookId: WebhookId): Iterable[WebhookEvent] =
+  def createWebhookEvents(
+    n: Int
+  )(webhookId: WebhookId, headers: Chunk[(String, String)] = jsonContentHeaders): Iterable[WebhookEvent] =
     (0 until n).map { i =>
       WebhookEvent(
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
         WebhookEventStatus.New,
         "event payload " + i,
-        Chunk(("Accept", "*/*"))
+        headers
       )
     }
+
+  val jsonContentHeaders = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
 
   def singleWebhook(id: Long, status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Webhook =
     Webhook(
@@ -233,14 +237,14 @@ object WebhookServerSpecUtil {
     with Has[Option[BatchingConfig]]
     with Has[WebhookServer]
 
-  val testEnv: URLayer[Clock, SpecEnv] =
+  def testEnv(batchingConfig: ULayer[Has[Option[BatchingConfig]]]): URLayer[Clock, SpecEnv] =
     ZLayer
       .fromSomeMagic[Clock, SpecEnv](
         TestWebhookRepo.test,
         TestWebhookEventRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
-        BatchingConfig.live(maxSize = 10, maxWaitTime = 5.seconds),
+        batchingConfig,
         WebhookServer.live
       )
       .orDie

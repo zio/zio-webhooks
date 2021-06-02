@@ -162,6 +162,8 @@ object WebhookServer {
   // TODO: Smart constructor
   final case class BatchingConfig(maxSize: Int, maxWaitTime: Duration)
   object BatchingConfig {
+    val default: ULayer[Has[Option[BatchingConfig]]] = live(10, Duration.ofSeconds(5))
+
     val disabled: ULayer[Has[Option[BatchingConfig]]] =
       ZLayer.succeed(None)
 
