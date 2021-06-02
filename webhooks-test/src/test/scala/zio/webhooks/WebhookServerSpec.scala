@@ -205,6 +205,20 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM,
               adjustDuration = Some(5.seconds)
             )
+          },
+          testM("batches events on webhook and content-type") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+
+            val jsonEvents    = createWebhookEvents(4)(webhook.id, jsonContentHeaders)
+            val nonJsonEvents = createWebhookEvents(4)(webhook.id, plaintextHeaders)
+
+            webhooksTestScenario(
+              stubResponses = List.fill(2)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = jsonEvents ++ nonJsonEvents,
+              requestsAssertion = _.take(2).runDrain *> assertCompletesM,
+              adjustDuration = Some(5.seconds)
+            )
           }
         ).provideCustomLayer(testEnv(BatchingConfig.default))
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
@@ -219,7 +233,7 @@ object WebhookServerSpecUtil {
 
   def createWebhookEvents(
     n: Int
-  )(webhookId: WebhookId, headers: Chunk[(String, String)] = jsonContentHeaders): Iterable[WebhookEvent] =
+  )(webhookId: WebhookId, headers: Chunk[(String, String)] = plaintextHeaders): Iterable[WebhookEvent] =
     (0 until n).map { i =>
       WebhookEvent(
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
@@ -230,6 +244,7 @@ object WebhookServerSpecUtil {
     }
 
   val jsonContentHeaders = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+  val plaintextHeaders   = Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
 
   def singleWebhook(id: Long, status: WebhookStatus, deliveryMode: WebhookDeliveryMode): Webhook =
     Webhook(

@@ -18,7 +18,8 @@ import java.time.Instant
  * dispatches are attempted twice followed by exponential backoff. Retries are performed until some
  * duration after which webhooks will be marked `Unavailable` since some [[java.time.Instant]].
  *
- * Batched deliveries are enabled if `batchConfig` is defined.
+ * Dispatches are batched if and only if a `batchConfig` is defined *and* a webhook's delivery mode
+ * is set to `Batched`.
  *
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
@@ -31,7 +32,7 @@ final case class WebhookServer(
   batchingQueue: Queue[(Webhook, WebhookEvent)],
   errorHub: Hub[WebhookError],
   webhookState: Ref[Map[WebhookId, WebhookServer.WebhookState]],
-  batchingConfig: Option[BatchingConfig]
+  batchingConfig: Option[BatchingConfig] = None
 ) {
 
   private def consumeBatchElements(maxBatchSize: Int, maxWaitTime: Duration): URIO[Clock, Unit] =
