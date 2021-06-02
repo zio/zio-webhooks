@@ -68,17 +68,18 @@ final case class WebhookServer(
     } yield ()
   }
 
-  private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): IO[WebhookError, Unit] =
+  private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): IO[WebhookError, Unit] = {
     for {
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
-      _ <- webhook.batching match {
-             case Single  =>
-               dispatch(WebhookDispatch(webhook, NonEmptyChunk(event)))
-             case Batched =>
+      _ <- (webhook.batching, batchingConfig) match {
+             case (Batched, Some(_)) =>
                val deliveringEvent = event.copy(status = WebhookEventStatus.Delivering)
                batchingQueue.offer((webhook, deliveringEvent))
+             case _                  =>
+               dispatch(WebhookDispatch(webhook, NonEmptyChunk(event)))
            }
     } yield ()
+  }
 
   def getErrors: UStream[WebhookError] =
     UStream.fromHub(errorHub)

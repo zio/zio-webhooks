@@ -99,8 +99,37 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion =
                 requests => assertM(requests.take(1).timeout(50.millis).runHead.provideLayer(Clock.live))(isNone)
             )
+          },
+          testM("doesn't batch with disabled batching config ") {
+            val n       = 100
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+
+            webhooksTestScenario(
+              stubResponses = List.fill(n)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = createWebhookEvents(n)(webhook.id),
+              requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM,
+              sleepDuration = 100.millis
+            )
+          },
+          testM("missing webhook errors are sent to stream") {
+            val missingWebhookId   = WebhookId(404)
+            val eventWithNoWebhook = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), missingWebhookId),
+              WebhookEventStatus.New,
+              "test content",
+              Chunk.empty
+            )
+
+            webhooksTestScenario(
+              stubResponses = List(WebhookHttpResponse(200)),
+              webhooks = List.empty,
+              events = List(eventWithNoWebhook),
+              errorsAssertion =
+                errors => assertM(errors.runHead)(isSome(equalTo(MissingWebhookError(missingWebhookId))))
+            )
           }
-        ),
+        ).provideCustomLayer(testEnv(BatchingConfig.disabled)),
         suite("with batched dispatch")(
           testM("batches events by max batch size") {
             val n            = 100
@@ -176,38 +205,11 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM,
               adjustDuration = Some(5.seconds)
             )
-          },
-          testM("doesn't batch with batching config disabled") {
-            val n       = 100
-            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
-
-            webhooksTestScenario(
-              stubResponses = List.fill(n)(WebhookHttpResponse(200)),
-              webhooks = List(webhook),
-              events = createWebhookEvents(n)(webhook.id),
-              requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM
-            )
-          }.provideCustomLayer(testEnv(BatchingConfig.disabled))
-        ),
-        testM("missing webhook errors are sent to stream") {
-          val missingWebhookId   = WebhookId(404)
-          val eventWithNoWebhook = WebhookEvent(
-            WebhookEventKey(WebhookEventId(0), missingWebhookId),
-            WebhookEventStatus.New,
-            "test content",
-            Chunk.empty
-          )
-
-          webhooksTestScenario(
-            stubResponses = List(WebhookHttpResponse(200)),
-            webhooks = List.empty,
-            events = List(eventWithNoWebhook),
-            errorsAssertion = errors => assertM(errors.runHead)(isSome(equalTo(MissingWebhookError(missingWebhookId))))
-          )
-        }
+          }
+        ).provideCustomLayer(testEnv(BatchingConfig.default))
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-    ).provideCustomLayer(testEnv(BatchingConfig.default)) @@ timeout(10.seconds)
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -268,7 +270,7 @@ object WebhookServerSpecUtil {
     eventsAssertion: UStream[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     requestsAssertion: UStream[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
-    sleepDuration: Duration = 50.millis
+    sleepDuration: Duration = 128.millis
   ): RIO[SpecEnv with TestClock, TestResult] =
     for {
       errorsFiber   <- ZIO.service[WebhookServer].flatMap(server => errorsAssertion(server.getErrors).fork)
