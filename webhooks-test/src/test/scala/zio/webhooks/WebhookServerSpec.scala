@@ -221,17 +221,17 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
           },
           testM("JSON event contents are batched into a JSON array") {
-            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
-            val jsonEvents      = createJsonEvents(2)(webhook.id)
-            
+            val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+            val jsonEvents = createJsonEvents(2)(webhook.id)
+
             val expectedOutput = """[{"event":"payload0"},{"event":"payload1"}]"""
 
             webhooksTestScenario(
               stubResponses = List.fill(2)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = jsonEvents,
-              requestsAssertion = requests =>
-                assertM(requests.runHead.map(_.map(_.content)))(isSome(equalTo(expectedOutput))),
+              requestsAssertion =
+                requests => assertM(requests.runHead.map(_.map(_.content)))(isSome(equalTo(expectedOutput))),
               adjustDuration = Some(5.seconds)
             )
           }
