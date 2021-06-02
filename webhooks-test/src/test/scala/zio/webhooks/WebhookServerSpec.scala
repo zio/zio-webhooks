@@ -219,6 +219,21 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion = _.take(2).runDrain *> assertCompletesM,
               adjustDuration = Some(5.seconds)
             )
+          },
+          testM("JSON event contents are batched into a JSON array") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+            val jsonEvents      = createJsonEvents(2)(webhook.id)
+            
+            val expectedOutput = """[{"event":"payload0"},{"event":"payload1"}]"""
+
+            webhooksTestScenario(
+              stubResponses = List.fill(2)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = jsonEvents,
+              requestsAssertion = requests =>
+                assertM(requests.runHead.map(_.map(_.content)))(isSome(equalTo(expectedOutput))),
+              adjustDuration = Some(5.seconds)
+            )
           }
         ).provideCustomLayer(testEnv(BatchingConfig.default))
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
