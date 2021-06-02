@@ -38,7 +38,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = List(event),
-              requestsAssertion = requests => assertM(requests.runHead)(isSome(equalTo(expectedRequest)))
+              requestsAssertion = requests => assertM(requests.runHead)(isSome(equalTo(expectedRequest))),
+              sleepDuration = Some(10.millis)
             )
           },
           testM("event is marked Delivering, then Delivered on successful dispatch") {
@@ -60,7 +61,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               eventsAssertion = events => {
                 val eventStatuses = events.filter(!_.status.isNew).take(2).map(_.status).runCollect
                 assertM(eventStatuses)(hasSameElements(expectedStatuses))
-              }
+              },
+              sleepDuration = Some(50.millis)
             )
           },
           testM("can dispatch single event to n webhooks") {
@@ -72,7 +74,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = webhooks,
               events = eventsToNWebhooks,
-              requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM
+              requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM,
+              sleepDuration = Some(10.millis)
             )
           },
           testM("dispatches no events for disabled webhooks") {
@@ -113,7 +116,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = createWebhookEvents(n)(webhook.id),
-              requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM
+              requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM,
+              sleepDuration = Some(10.millis)
             )
           },
           testM("batches for multiple webhooks") {
@@ -132,7 +136,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(eventCount)(WebhookHttpResponse(200)),
               webhooks = webhooks,
               events = events,
-              requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM
+              requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM,
+              sleepDuration = Some(10.millis)
             )
           },
           testM("events dispatched by batch are marked delivered") {
@@ -144,7 +149,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = createWebhookEvents(eventCount)(webhook.id),
               eventsAssertion =
-                _.filter(_.status == WebhookEventStatus.Delivered).take(eventCount.toLong).runDrain *> assertCompletesM
+                _.filter(_.status == WebhookEventStatus.Delivered).take(eventCount.toLong).runDrain *> assertCompletesM,
+              sleepDuration = Some(10.millis)
             )
           },
           testM("doesn't batch before max wait time") {
@@ -192,12 +198,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             webhooks = List.empty,
             events = List(eventWithNoWebhook),
             errorsAssertion = errors => assertM(errors.runHead)(isSome(equalTo(MissingWebhookError(missingWebhookId)))),
-            sleepDuration = Some(1.milli)
+            sleepDuration = Some(10.millis)
           )
         }
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-    ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ timeout(10.seconds)
+    ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ nonFlaky @@ timeout(60.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -261,11 +267,9 @@ object WebhookServerSpecUtil {
       errorsFiber   <- errorsAssertion(WebhookServer.getErrors).fork
       requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
       eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
+      // let test fiber sleep to give time for fiber streams to come online
       _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
-      // let test fiber sleep as we have to let requests be made to fail some tests
-      // TODO[low-prio]: there's a better way to do this: poll the queue repeatedly with a timeout
-      // TODO: see https://github.com/zio/zio/blob/31d9eacbb400c668460735a8a44fb68af9e5c311/core-tests/shared/src/test/scala/zio/ZQueueSpec.scala#L862
       _             <- responseQueue.offerAll(stubResponses)
       _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
       _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
