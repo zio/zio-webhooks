@@ -84,7 +84,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = createWebhookEvents(n)(webhook.id),
               requestsAssertion =
-                requests => assertM(requests.take(1).timeout(100.millis).runHead.provideLayer(Clock.live))(isNone)
+                requests => assertM(requests.take(1).timeout(50.millis).runHead.provideLayer(Clock.live))(isNone)
             )
           },
           testM("dispatches no events for unavailable webhooks") {
@@ -97,7 +97,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = createWebhookEvents(n)(webhook.id),
               requestsAssertion =
-                requests => assertM(requests.take(1).timeout(100.millis).runHead.provideLayer(Clock.live))(isNone)
+                requests => assertM(requests.take(1).timeout(50.millis).runHead.provideLayer(Clock.live))(isNone)
             )
           }
         ),
@@ -196,7 +196,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         }
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-    ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ timeout(10.seconds)
+    ).injectSome[Has[Annotations.Service] with TestEnvironment with Clock](testEnv) @@ nonFlaky
 }
 
 object WebhookServerSpecUtil {
