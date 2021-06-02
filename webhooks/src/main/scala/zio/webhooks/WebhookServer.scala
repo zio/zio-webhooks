@@ -68,7 +68,7 @@ final case class WebhookServer(
     } yield ()
   }
 
-  private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): IO[WebhookError, Unit] = {
+  private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): IO[WebhookError, Unit] =
     for {
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
       _ <- (webhook.batching, batchingConfig) match {
@@ -79,7 +79,6 @@ final case class WebhookServer(
                dispatch(WebhookDispatch(webhook, NonEmptyChunk(event)))
            }
     } yield ()
-  }
 
   def getErrors: UStream[WebhookError] =
     UStream.fromHub(errorHub)
