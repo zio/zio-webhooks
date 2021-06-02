@@ -4,7 +4,7 @@ import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.magic._
-import zio.stream.ZStream
+import zio.stream._
 import zio.test.Assertion._
 import zio.test.DefaultRunnableSpec
 import zio.test.TestAspect._
@@ -38,7 +38,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = List(event),
-              requestsAssertion = queue => assertM(queue.take)(equalTo(expectedRequest))
+              requestsAssertion = requests => assertM(requests.runHead)(isSome(equalTo(expectedRequest)))
             )
           },
           testM("event is marked Delivering, then Delivered on successful dispatch") {
@@ -58,10 +58,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = List(event),
               eventsAssertion = events => {
-                val eventStatuses = events
-                  .filterOutput(!_.status.isNew)
-                  .takeN(2)
-                  .map(_.map(_.status))
+                val eventStatuses = events.filter(!_.status.isNew).take(2).map(_.status).runCollect
                 assertM(eventStatuses)(hasSameElements(expectedStatuses))
               }
             )
@@ -75,7 +72,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = webhooks,
               events = eventsToNWebhooks,
-              requestsAssertion = queue => assertM(queue.takeN(n))(hasSize(equalTo(n)))
+              requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM
             )
           },
           testM("dispatches no events for disabled webhooks") {
@@ -86,8 +83,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = createWebhookEvents(n)(webhook.id),
-              requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
-              sleepDuration = Some(100.millis)
+              requestsAssertion =
+                requests => assertM(requests.take(1).timeout(100.millis).runHead.provideLayer(Clock.live))(isNone)
             )
           },
           testM("dispatches no events for unavailable webhooks") {
@@ -99,8 +96,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = createWebhookEvents(n)(webhook.id),
-              requestsAssertion = queue => assertM(queue.takeAll.map(_.size))(equalTo(0)),
-              sleepDuration = Some(100.millis)
+              requestsAssertion =
+                requests => assertM(requests.take(1).timeout(100.millis).runHead.provideLayer(Clock.live))(isNone)
             )
           }
         ),
@@ -116,8 +113,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = createWebhookEvents(n)(webhook.id),
-              requestsAssertion =
-                queue => assertM(queue.takeBetween(expectedRequestsMade, n).map(_.size))(equalTo(expectedRequestsMade))
+              requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM
             )
           },
           testM("batches for multiple webhooks") {
@@ -136,10 +132,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(eventCount)(WebhookHttpResponse(200)),
               webhooks = webhooks,
               events = events,
-              requestsAssertion = queue =>
-                assertM(
-                  queue.takeBetween(expectedRequestsMade, eventCount).map(_.size)
-                )(equalTo(expectedRequestsMade))
+              requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM
             )
           },
           testM("events dispatched by batch are marked delivered") {
@@ -150,12 +143,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(10)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = createWebhookEvents(eventCount)(webhook.id),
-              eventsAssertion = events => {
-                events.filterOutput(_.status == WebhookEventStatus.Delivered).takeN(eventCount) *> assertCompletesM
-              }
+              eventsAssertion =
+                _.filter(_.status == WebhookEventStatus.Delivered).take(eventCount.toLong).runDrain *> assertCompletesM
             )
           },
-          // TODO: Ask how batch contents/headers should be put together
           testM("doesn't batch before max wait time") {
             val n       = 5 // less than max batch size 10
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
@@ -167,10 +158,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = events,
-              requestsAssertion = queue =>
-                assertM(
-                  queue.takeBetween(expectedRequestsMade, n).map(_.size)
-                )(equalTo(expectedRequestsMade)),
+              requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM,
               adjustDuration = Some(2.seconds)
             )
           },
@@ -185,10 +173,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = events,
-              requestsAssertion = queue =>
-                assertM(
-                  queue.takeBetween(expectedRequestsMade, n).map(_.size)
-                )(equalTo(expectedRequestsMade)),
+              requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM,
               adjustDuration = Some(5.seconds)
             )
           }
@@ -267,16 +252,15 @@ object WebhookServerSpecUtil {
     events: Iterable[WebhookEvent],
     errorsAssertion: ZStream[Has[WebhookServer], Nothing, WebhookError] => URIO[Has[WebhookServer], TestResult] = _ =>
       assertCompletesM,
-    eventsAssertion: Dequeue[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
-    // TODO[low-prio]: this should be a Dequeue so we don't inadvertently write to the Queue in tests
-    requestsAssertion: Queue[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
+    eventsAssertion: UStream[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
+    requestsAssertion: UStream[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
     sleepDuration: Option[Duration] = None
   ): RIO[SpecEnv with TestClock, TestResult] =
     for {
       errorsFiber   <- errorsAssertion(WebhookServer.getErrors).fork
-      requestQueue  <- TestWebhookHttpClient.requests
-      requestsFiber <- requestsAssertion(requestQueue).fork
+      requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
+      eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
       _             <- sleepDuration.map(Clock.Service.live.sleep(_)).getOrElse(ZIO.unit)
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
       // let test fiber sleep as we have to let requests be made to fail some tests
@@ -287,8 +271,6 @@ object WebhookServerSpecUtil {
       _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
       _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
       _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
-      eventsTest    <- TestWebhookEventRepo.subscribeToEvents(eventsAssertion)
-      requestsTest  <- requestsFiber.join
-      errorsTest    <- errorsFiber.join
-    } yield eventsTest && errorsTest && requestsTest
+      tests         <- Fiber.collectAll(List(errorsFiber, requestsFiber, eventsFiber)).join
+    } yield tests.foldLeft(assertCompletes)(_ && _)
 }
