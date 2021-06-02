@@ -176,7 +176,18 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion = _.take(expectedRequestsMade.toLong).runDrain *> assertCompletesM,
               adjustDuration = Some(5.seconds)
             )
-          }
+          },
+          testM("doesn't batch with batching config disabled") {
+            val n       = 100
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+
+            webhooksTestScenario(
+              stubResponses = List.fill(n)(WebhookHttpResponse(200)),
+              webhooks = List(webhook),
+              events = createWebhookEvents(n)(webhook.id),
+              requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM
+            )
+          }.provideCustomLayer(testEnv(BatchingConfig.disabled))
         ),
         testM("missing webhook errors are sent to stream") {
           val missingWebhookId   = WebhookId(404)
