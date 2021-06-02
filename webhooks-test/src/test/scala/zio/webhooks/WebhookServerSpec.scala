@@ -249,15 +249,14 @@ object WebhookServerSpecUtil {
     stubResponses: Iterable[WebhookHttpResponse],
     webhooks: Iterable[Webhook],
     events: Iterable[WebhookEvent],
-    errorsAssertion: ZStream[Has[WebhookServer], Nothing, WebhookError] => URIO[Has[WebhookServer], TestResult] = _ =>
-      assertCompletesM,
+    errorsAssertion: UStream[WebhookError] => UIO[TestResult] = _ => assertCompletesM,
     eventsAssertion: UStream[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     requestsAssertion: UStream[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
     sleepDuration: Duration = 50.millis
   ): RIO[SpecEnv with TestClock, TestResult] =
     for {
-      errorsFiber   <- errorsAssertion(WebhookServer.getErrors).fork
+      errorsFiber   <- ZIO.service[WebhookServer].flatMap(server => errorsAssertion(server.getErrors).fork)
       requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
       eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
       // let test fiber sleep to give time for fiber streams to come online
