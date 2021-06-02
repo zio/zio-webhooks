@@ -38,7 +38,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = List(event),
-              requestsAssertion = requests => assertM(requests.runHead)(isSome(equalTo(expectedRequest))),
+              requestsAssertion = requests => assertM(requests.runHead)(isSome(equalTo(expectedRequest)))
             )
           },
           testM("event is marked Delivering, then Delivered on successful dispatch") {
