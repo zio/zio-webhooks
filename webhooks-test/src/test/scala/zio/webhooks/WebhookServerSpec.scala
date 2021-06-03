@@ -84,7 +84,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               requestsAssertion =
-                requests => assertM(requests.take(1).timeout(50.millis).runHead.provideLayer(Clock.live))(isNone)
+                requests => assertM(requests.take(1).timeout(100.millis).runHead.provideLayer(Clock.live))(isNone)
             )
           },
           testM("dispatches no events for unavailable webhooks") {
@@ -97,7 +97,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               requestsAssertion =
-                requests => assertM(requests.take(1).timeout(50.millis).runHead.provideLayer(Clock.live))(isNone)
+                requests => assertM(requests.take(1).timeout(100.millis).runHead.provideLayer(Clock.live))(isNone)
             )
           },
           testM("doesn't batch with disabled batching config ") {
@@ -108,8 +108,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(200)),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
-              requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM,
-              sleepDuration = 100.millis
+              requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM
             )
           },
           testM("missing webhook errors are sent to stream") {
@@ -253,8 +252,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         ).provideCustomLayer(testEnv(BatchingConfig.default))
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-      // ) @@ timeout(5.seconds)
-    ) @@ nonFlaky @@ timeout(2.minutes)
+      // ) @@ timeout(10.seconds)
+    ) @@ nonFlaky(200) @@ timeout(3.minutes)
 }
 
 object WebhookServerSpecUtil {
@@ -322,22 +321,28 @@ object WebhookServerSpecUtil {
     errorsAssertion: UStream[WebhookError] => UIO[TestResult] = _ => assertCompletesM,
     eventsAssertion: UStream[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     requestsAssertion: UStream[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
-    adjustDuration: Option[Duration] = None,
-    sleepDuration: Duration = 64.millis
-  ): RIO[SpecEnv with TestClock, TestResult] =
+    adjustDuration: Option[Duration] = None
+  ): URIO[SpecEnv with TestClock, TestResult] = {
+    def waitForRunningOrSuspended[E, A](fiber: Fiber.Runtime[E, A]) =
+      fiber.status.repeat(Schedule.recurUntil[Fiber.Status] {
+        case _: Fiber.Status.Running   => true
+        case _: Fiber.Status.Suspended => true
+        case _                         => false
+      } && Schedule.spaced(10.millis))
+
     for {
       errorsFiber   <- ZIO.service[WebhookServer].flatMap(server => errorsAssertion(server.getErrors).fork)
       requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
       eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
-      // let test fiber sleep to give time for fiber streams 👆 to come online
-      // TODO[low-prio]: for optimization, see ZQueueSpec wait for value pattern
-      _             <- Clock.Service.live.sleep(sleepDuration)
+      fibers         = List(errorsFiber, requestsFiber, eventsFiber)
+      _             <- ZIO.foreach(fibers)(waitForRunningOrSuspended(_)).timeout(100.millis).provideLayer(Clock.live)
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
       _             <- responseQueue.offerAll(stubResponses)
       _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
       _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
       _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
       _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
-      tests         <- Fiber.collectAll(List(errorsFiber, requestsFiber, eventsFiber)).join
+      tests         <- Fiber.collectAll(fibers).join
     } yield tests.foldLeft(assertCompletes)(_ && _)
+  }
 }

@@ -15,7 +15,7 @@ final case class WebhookDispatch(
   webhook: Webhook,
   events: NonEmptyChunk[WebhookEvent]
 ) {
-  val contentType: Option[WebhookEventContentType] =
+  lazy val contentType: Option[WebhookEventContentType] =
     events.head.headers.find(_._1.toLowerCase == "content-type") match {
       case Some((_, contentTypeValue)) =>
         contentTypeValue match {
@@ -26,9 +26,9 @@ final case class WebhookDispatch(
       case None                        => None
     }
 
-  val headers: Chunk[(String, String)] = events.head.headers
+  lazy val headers: Chunk[(String, String)] = events.head.headers
 
-  val size: Int = events.size
+  lazy val size: Int = events.size
 
-  val url: String = webhook.url
+  lazy val url: String = webhook.url
 }
