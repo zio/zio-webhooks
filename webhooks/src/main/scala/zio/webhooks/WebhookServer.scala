@@ -69,11 +69,15 @@ final case class WebhookServer(
     val request = WebhookHttpRequest(dispatch.url, requestContent, dispatch.headers)
 
     for {
-      _ <- httpClient.post(request).ignore // TODO: handle errors/non-200
+      response <- httpClient.post(request).option
+      newStatus = response match {
+                    case Some(WebhookHttpResponse(200)) =>
+                      WebhookEventStatus.Delivered
+                    case _                              =>
+                      WebhookEventStatus.Failed
+                  }
+      _        <- ZIO.foreach(dispatch.events)(event => eventRepo.setEventStatus(event.key, newStatus).ignore)
       // TODO[design]: should have setEventStatus variant accepting multiple keys
-      _ <- ZIO.foreach(dispatch.events) { event =>
-             eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered).ignore
-           }
       // TODO: enqueue webhook/event errors
     } yield ()
   }

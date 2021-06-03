@@ -119,12 +119,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               stubResponses = List.fill(n)(WebhookHttpResponse(404)),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
-              eventsAssertion = events =>
-                assertM(events.take(100).map(_.status).filter(_ == WebhookEventStatus.Failed).runCollect)(
-                  hasSameElements(List.fill(n)(WebhookEventStatus.Failed))
-                )
+              eventsAssertion = _.collect { case e if e.status == WebhookEventStatus.Failed => e.status }
+                .filter(_ == WebhookEventStatus.Failed)
+                .take(100)
+                .runCollect *> assertCompletesM
             )
-          } @@ failing @@ nonFlaky,
+          },
           testM("missing webhook errors are sent to stream") {
             val idRange               = 401L to 404L
             val missingWebhookIds     = idRange.map(WebhookId(_))
@@ -335,28 +335,25 @@ object WebhookServerSpecUtil {
     eventsAssertion: UStream[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     requestsAssertion: UStream[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
-    fiberWaitTimeout: Duration = 100.millis
-  ): URIO[SpecEnv with TestClock, TestResult] = {
-    def waitForRunningOrSuspended[E, A](fiber: Fiber.Runtime[E, A]) =
-      fiber.status.repeat(Schedule.recurUntil[Fiber.Status] {
-        case _: Fiber.Status.Running   => true
-        case _: Fiber.Status.Suspended => true
-        case _                         => false
-      } && Schedule.spaced(10.millis))
-
+    fiberWaitTimeout: Duration = 128.millis
+  ): URIO[SpecEnv with TestClock, TestResult] =
     for {
       errorsFiber   <- ZIO.service[WebhookServer].flatMap(server => errorsAssertion(server.getErrors).fork)
       requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
       eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
       fibers         = List(errorsFiber, requestsFiber, eventsFiber)
-      _             <- ZIO.foreach(fibers)(waitForRunningOrSuspended(_)).timeout(fiberWaitTimeout).provideLayer(Clock.live)
+      _             <- ZIO.sleep(fiberWaitTimeout).provideLayer(Clock.live)
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
       _             <- responseQueue.offerAll(stubResponses)
       _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
       _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
       _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
       _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
-      tests         <- Fiber.collectAll(fibers).join
+      tests         <- Fiber
+                         .collectAll(fibers)
+                         .join
+                         .timeoutFail(new Throwable("Test failure"))(2.seconds)
+                         .orDie
+                         .provideLayer(Clock.live)
     } yield tests.foldLeft(assertCompletes)(_ && _)
-  }
 }
