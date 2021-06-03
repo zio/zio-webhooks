@@ -253,7 +253,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
       // ) @@ timeout(10.seconds)
-    ) @@ nonFlaky(200) @@ timeout(3.minutes)
+    ) @@ nonFlaky @@ timeout(3.minutes)
 }
 
 object WebhookServerSpecUtil {
