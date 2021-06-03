@@ -349,11 +349,6 @@ object WebhookServerSpecUtil {
       _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
       _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
       _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
-      tests         <- Fiber
-                         .collectAll(fibers)
-                         .join
-                         .timeoutFail(new Throwable("Test failure"))(2.seconds)
-                         .orDie
-                         .provideLayer(Clock.live)
+      tests         <- Fiber.collectAll(fibers).join
     } yield tests.foldLeft(assertCompletes)(_ && _)
 }
