@@ -111,6 +111,20 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               requestsAssertion = _.take(n.toLong).runDrain *> assertCompletesM
             )
           },
+          testM("an at-most-once webhook returning non-200 fails events") {
+            val n       = 100
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+
+            webhooksTestScenario(
+              stubResponses = List.fill(n)(WebhookHttpResponse(404)),
+              webhooks = List(webhook),
+              events = createPlaintextEvents(n)(webhook.id),
+              eventsAssertion = events =>
+                assertM(events.take(100).map(_.status).filter(_ == WebhookEventStatus.Failed).runCollect)(
+                  hasSameElements(List.fill(n)(WebhookEventStatus.Failed))
+                )
+            )
+          } @@ failing @@ nonFlaky,
           testM("missing webhook errors are sent to stream") {
             val idRange               = 401L to 404L
             val missingWebhookIds     = idRange.map(WebhookId(_))
@@ -252,7 +266,6 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         ).provideCustomLayer(testEnv(BatchingConfig.default))
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
-      // ) @@ timeout(10.seconds)
     ) @@ nonFlaky @@ timeout(3.minutes)
 }
 
@@ -321,7 +334,8 @@ object WebhookServerSpecUtil {
     errorsAssertion: UStream[WebhookError] => UIO[TestResult] = _ => assertCompletesM,
     eventsAssertion: UStream[WebhookEvent] => UIO[TestResult] = _ => assertCompletesM,
     requestsAssertion: UStream[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
-    adjustDuration: Option[Duration] = None
+    adjustDuration: Option[Duration] = None,
+    fiberWaitTimeout: Duration = 100.millis
   ): URIO[SpecEnv with TestClock, TestResult] = {
     def waitForRunningOrSuspended[E, A](fiber: Fiber.Runtime[E, A]) =
       fiber.status.repeat(Schedule.recurUntil[Fiber.Status] {
@@ -335,7 +349,7 @@ object WebhookServerSpecUtil {
       requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
       eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
       fibers         = List(errorsFiber, requestsFiber, eventsFiber)
-      _             <- ZIO.foreach(fibers)(waitForRunningOrSuspended(_)).timeout(100.millis).provideLayer(Clock.live)
+      _             <- ZIO.foreach(fibers)(waitForRunningOrSuspended(_)).timeout(fiberWaitTimeout).provideLayer(Clock.live)
       responseQueue <- Queue.unbounded[WebhookHttpResponse]
       _             <- responseQueue.offerAll(stubResponses)
       _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
