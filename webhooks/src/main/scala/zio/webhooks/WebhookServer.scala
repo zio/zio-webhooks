@@ -54,22 +54,9 @@ final case class WebhookServer(
       }
       .runDrain
 
-  private def dispatch(dispatch: WebhookDispatch): UIO[Unit] = {
-    val requestContent =
-      dispatch.contentType match {
-        case Some(WebhookEventContentType.Json) =>
-          if (dispatch.size > 1)
-            "[" + dispatch.events.map(_.content).mkString(",") + "]"
-          else
-            dispatch.events.head.content
-        case _                                  =>
-          dispatch.events.map(_.content).mkString
-      }
-
-    val request = WebhookHttpRequest(dispatch.url, requestContent, dispatch.headers)
-
+  private def dispatch(dispatch: WebhookDispatch): UIO[Unit] =
     for {
-      response <- httpClient.post(request).option
+      response <- httpClient.post(dispatch.toRequest).option
       newStatus = response match {
                     case Some(WebhookHttpResponse(200)) =>
                       WebhookEventStatus.Delivered
@@ -80,7 +67,6 @@ final case class WebhookServer(
       // TODO[design]: should have setEventStatus variant accepting multiple keys
       // TODO: enqueue webhook/event errors
     } yield ()
-  }
 
   private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): IO[WebhookError, Unit] =
     for {
