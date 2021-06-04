@@ -9,7 +9,7 @@ import zio.webhooks._
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
 
-  def getEvents: UIO[UStream[WebhookEvent]]
+  def getEvents: UStream[WebhookEvent]
 }
 
 object TestWebhookEventRepo {
@@ -29,8 +29,8 @@ object TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.createEvent(event))
 
-  def getEvents: URIO[Has[TestWebhookEventRepo], UStream[WebhookEvent]] =
-    ZIO.serviceWith(_.getEvents)
+  def getEvents: ZStream[Has[TestWebhookEventRepo], Nothing, WebhookEvent] =
+    ZStream.service[TestWebhookEventRepo].flatMap(_.getEvents)
 }
 
 final private case class TestWebhookEventRepoImpl(
@@ -80,7 +80,7 @@ final private case class TestWebhookEventRepoImpl(
                        }
     } yield ()
 
-  def getEvents: UIO[UStream[WebhookEvent]] = UIO(UStream.fromHub(hub))
+  def getEvents: UStream[WebhookEvent] = UStream.fromHub(hub)
 
   def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
     Stream.fromHub(hub).filter(event => statuses.contains(event.status))
