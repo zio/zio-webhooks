@@ -266,6 +266,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         ).provideCustomLayer(testEnv(BatchingConfig.default))
         // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       )
+      // ) @@ timeout(10.seconds)
     ) @@ nonFlaky @@ timeout(3.minutes)
 }
 
@@ -315,6 +316,12 @@ object WebhookServerSpecUtil {
     with Has[Option[BatchingConfig]]
     with Has[WebhookServer]
 
+  def spyOnHead[R, E, A](stream: ZStream[R, E, A]): UIO[(Promise[Nothing, Unit], ZStream[R, E, A])] =
+    for {
+      promise <- Promise.make[Nothing, Unit]
+      stream  <- UIO(stream.tap(_ => promise.isDone.flatMap(ZIO.when(_)(promise.succeed(())))))
+    } yield (promise, stream)
+
   def testEnv(batchingConfig: ULayer[Has[Option[BatchingConfig]]]): URLayer[Clock, SpecEnv] =
     ZLayer
       .fromSomeMagic[Clock, SpecEnv](
@@ -327,6 +334,7 @@ object WebhookServerSpecUtil {
       )
       .orDie
 
+  // TODO: make generic on A since we're only asserting on one stream at a time
   def webhooksTestScenario(
     stubResponses: Iterable[WebhookHttpResponse],
     webhooks: Iterable[Webhook],
@@ -336,19 +344,26 @@ object WebhookServerSpecUtil {
     requestsAssertion: UStream[WebhookHttpRequest] => UIO[TestResult] = _ => assertCompletesM,
     adjustDuration: Option[Duration] = None,
     fiberWaitTimeout: Duration = 128.millis
-  ): URIO[SpecEnv with TestClock, TestResult] =
+  ): URIO[SpecEnv with TestClock, TestResult] = {
     for {
-      errorsFiber   <- ZIO.service[WebhookServer].flatMap(server => errorsAssertion(server.getErrors).fork)
-      requestsFiber <- TestWebhookHttpClient.requests.flatMap(requestsAssertion(_).fork)
-      eventsFiber   <- TestWebhookEventRepo.getEvents.flatMap(eventsAssertion(_).fork)
-      fibers         = List(errorsFiber, requestsFiber, eventsFiber)
-      _             <- ZIO.sleep(fiberWaitTimeout).provideLayer(Clock.live)
-      responseQueue <- Queue.unbounded[WebhookHttpResponse]
-      _             <- responseQueue.offerAll(stubResponses)
-      _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-      _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
-      _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
-      _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
-      tests         <- Fiber.collectAll(fibers).join
+      (errPromise, errStream) <- ZIO.service[WebhookServer].flatMap(s => spyOnHead(s.getErrors))
+      errorsFiber             <- errorsAssertion(errStream).fork
+      (reqPromise, reqStream) <- TestWebhookHttpClient.requests.flatMap(spyOnHead(_))
+      requestsFiber           <- requestsAssertion(reqStream).fork
+      (evPromise, evStream)   <- TestWebhookEventRepo.getEvents.flatMap(spyOnHead(_))
+      eventsFiber             <- eventsAssertion(evStream).fork
+      fibers                   = List(errorsFiber, requestsFiber, eventsFiber)
+      promises                 = List[Promise[Nothing, Unit]](errPromise, reqPromise, evPromise)
+      timeoutPromises          = ZIO.sleep(fiberWaitTimeout) *> ZIO.foreachPar_(promises)(_.succeed(()))
+      _                       <- timeoutPromises.fork.provideLayer(Clock.live)
+      _                       <- ZIO.foreachPar_(promises)(_.await)
+      responseQueue           <- Queue.unbounded[WebhookHttpResponse]
+      _                       <- responseQueue.offerAll(stubResponses)
+      _                       <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
+      _                       <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
+      _                       <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
+      _                       <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
+      tests                   <- Fiber.collectAll(fibers).join
     } yield tests.foldLeft(assertCompletes)(_ && _)
+  }.orDie
 }
