@@ -179,7 +179,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               hasSameElements(List(WebhookStatus.Enabled, WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
             )
           )
-        } @@ timeout(5.seconds) @@ failing
+        } @@ timeout(1.second) @@ failing
       ).provideCustomLayer(specEnv(BatchingConfig.disabled)),
       suite("batching enabled")(
         testM("batches events by max batch size") {
