@@ -19,7 +19,7 @@ import java.time.Instant
 object WebhookServerSpec extends DefaultRunnableSpec {
   def spec =
     suite("WebhookServerSpec")(
-      suite("with single dispatch")(
+      suite("batching disabled")(
         testM("dispatches correct request given event") {
           val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
@@ -151,9 +151,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             events = events,
             ScenarioInterest.Requests
           )(_.take(2).runDrain *> assertCompletesM)
-        } @@ timeout(100.millis) @@ failing
+        } @@ timeout(200.millis) @@ failing
       ).provideCustomLayer(specEnv(BatchingConfig.disabled)),
-      suite("with batched dispatch")(
+      suite("batching enabled")(
         testM("batches events by max batch size") {
           val n            = 100
           val maxBatchSize = 10
@@ -349,7 +349,6 @@ object WebhookServerSpecUtil {
         batchingConfig,
         WebhookServer.live
       )
-      .orDie
 
   def webhooksTestScenario[A](
     stubResponses: Iterable[WebhookHttpResponse],

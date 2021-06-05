@@ -6,6 +6,7 @@ import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.stream.ZStream
 import zio.webhooks.WebhookDeliveryBatching._
+import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer._
 
@@ -57,15 +58,21 @@ final case class WebhookServer(
   private def dispatch(dispatch: WebhookDispatch): UIO[Unit] =
     for {
       response <- httpClient.post(dispatch.toRequest).option
-      newStatus = response match {
-                    case Some(WebhookHttpResponse(200)) =>
-                      WebhookEventStatus.Delivered
-                    case _                              =>
-                      WebhookEventStatus.Failed
-                  }
-      _        <- ZIO.foreach(dispatch.events)(event => eventRepo.setEventStatus(event.key, newStatus).ignore)
-      // TODO[design]: should have setEventStatus variant accepting multiple keys
-      // TODO: enqueue webhook/event errors
+      _        <- {
+        (dispatch.semantics, response) match {
+          case (_, Some(WebhookHttpResponse(200))) =>
+            if (dispatch.size == 1)
+              eventRepo.setEventStatus(dispatch.head.key, WebhookEventStatus.Delivered)
+            else
+              eventRepo.setEventStatusMany(dispatch.keys, WebhookEventStatus.Delivered)
+          case (AtLeastOnce, Some(response @ _))   =>
+            ???
+          case (AtLeastOnce, None)                 =>
+            ???
+          case (AtMostOnce, _)                     =>
+            eventRepo.setEventStatusMany(dispatch.events.map(_.key), WebhookEventStatus.Failed)
+        }
+      }.catchAll(errorHub.publish(_))
     } yield ()
 
   private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): IO[WebhookError, Unit] =

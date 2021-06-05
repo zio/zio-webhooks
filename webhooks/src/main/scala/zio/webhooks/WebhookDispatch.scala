@@ -26,7 +26,13 @@ final case class WebhookDispatch(
       case None                        => None
     }
 
+  lazy val head = events.head
+
   lazy val headers: Chunk[(String, String)] = events.head.headers
+
+  lazy val keys: NonEmptyChunk[WebhookEventKey] = events.map(_.key)
+
+  lazy val semantics = webhook.deliveryMode.semantics
 
   lazy val size: Int = events.size
 

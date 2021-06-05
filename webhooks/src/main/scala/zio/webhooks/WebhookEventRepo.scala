@@ -13,12 +13,17 @@ trait WebhookEventRepo {
   /**
    * Marks all events by the specified webhook id as failed.
    */
-  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit]
+  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit]
 
   /**
    * Sets the status of the specified event.
    */
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit]
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingEventError, Unit]
+
+  /**
+   * Sets the status of multiple events.
+   */
+  def setEventStatusMany(keys: NonEmptyChunk[WebhookEventKey], status: WebhookEventStatus): IO[MissingEventsError, Unit]
 
   /**
    * Subscribes to events given a non-empty set of statuses. Implementations are responsible for
