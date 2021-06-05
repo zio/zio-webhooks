@@ -51,11 +51,11 @@ final case class WebhookServer(
             .groupedWithin(maxBatchSize, maxWaitTime)
             .map(NonEmptyChunk.fromChunk(_))
             .collectSome
-            .mapM(events => dispatch(WebhookDispatch(events.head._1, events.map(_._2))))
+            .mapM(events => deliver(WebhookDispatch(events.head._1, events.map(_._2))))
       }
       .runDrain
 
-  private def dispatch(dispatch: WebhookDispatch): UIO[Unit] =
+  private def deliver(dispatch: WebhookDispatch): UIO[Unit] =
     for {
       response <- httpClient.post(dispatch.toRequest).option
       _        <- {
@@ -65,10 +65,8 @@ final case class WebhookServer(
               eventRepo.setEventStatus(dispatch.head.key, WebhookEventStatus.Delivered)
             else
               eventRepo.setEventStatusMany(dispatch.keys, WebhookEventStatus.Delivered)
-          case (AtLeastOnce, Some(response @ _))   =>
-            ???
-          case (AtLeastOnce, None)                 =>
-            ???
+          case (AtLeastOnce, _)                    =>
+            deliver(dispatch)
           case (AtMostOnce, _)                     =>
             eventRepo.setEventStatusMany(dispatch.events.map(_.key), WebhookEventStatus.Failed)
         }
@@ -83,7 +81,7 @@ final case class WebhookServer(
                val deliveringEvent = event.copy(status = WebhookEventStatus.Delivering)
                batchingQueue.offer((webhook, deliveringEvent))
              case _                  =>
-               dispatch(WebhookDispatch(webhook, NonEmptyChunk(event)))
+               deliver(WebhookDispatch(webhook, NonEmptyChunk(event)))
            }
     } yield ()
 
