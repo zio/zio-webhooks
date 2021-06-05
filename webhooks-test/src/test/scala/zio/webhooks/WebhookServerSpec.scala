@@ -163,7 +163,23 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             events = events,
             ScenarioInterest.Requests
           )(_.take(2).runDrain *> assertCompletesM)
-        }
+        },
+        testM("retrying sets webhook to status to Retrying, then Enabled on success") {
+          val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+
+          val events = createPlaintextEvents(1)(webhook.id)
+
+          webhooksTestScenario(
+            stubResponses = List(None, Some(WebhookHttpResponse(200))),
+            webhooks = List(webhook),
+            events = events,
+            ScenarioInterest.Webhooks
+          )(webhooks =>
+            assertM(webhooks.drop(1).take(2).runCollect)(
+              hasSameElements(List(WebhookStatus.Enabled, WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
+            )
+          )
+        } @@ timeout(5.seconds) @@ failing
       ).provideCustomLayer(specEnv(BatchingConfig.disabled)),
       suite("batching enabled")(
         testM("batches events by max batch size") {
@@ -377,7 +393,7 @@ object WebhookServerSpecUtil {
     for {
       testFiber     <- assertion(ScenarioInterest.streamFor(scenarioInterest)).fork
       // TODO: sleep hack. how to wait for stream fiber to be ready?
-      _             <- ZIO.sleep(128.millis).provideLayer(Clock.live)
+      _             <- ZIO.sleep(200.millis).provideLayer(Clock.live)
       responseQueue <- Queue.unbounded[Option[WebhookHttpResponse]]
       _             <- responseQueue.offerAll(stubResponses)
       _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
