@@ -17,8 +17,8 @@ object TestWebhookEventRepo {
 
   val test: ULayer[Has[WebhookEventRepo] with Has[TestWebhookEventRepo]] = {
     for {
-      ref <- Ref.makeManaged(Map.empty[WebhookEventKey, WebhookEvent])
-      hub <- Hub.unbounded[WebhookEvent].toManaged_
+      ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
+      hub <- Hub.unbounded[WebhookEvent]
       impl = TestWebhookEventRepoImpl(ref, hub)
     } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo](impl, impl)
   }.toLayerMany
@@ -39,12 +39,10 @@ final private case class TestWebhookEventRepoImpl(
     with TestWebhookEventRepo {
 
   def createEvent(event: WebhookEvent): UIO[Unit] =
-    for {
-      _ <- ref.update(_.updated(event.key, event))
-      _ <- hub.publish(event)
-    } yield ()
+    ref.update(_.updated(event.key, event)) <* hub.publish(event)
 
-  def getEvents: UStream[WebhookEvent] = UStream.fromHub(hub)
+  def getEvents: UStream[WebhookEvent] =
+    UStream.fromHub(hub)
 
   def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
     Stream.fromHub(hub).filter(event => statuses.contains(event.status))

@@ -1,11 +1,14 @@
 package zio.webhooks.testkit
 
 import zio._
+import zio.stream._
 import zio.webhooks.WebhookError._
 import zio.webhooks._
 
 trait TestWebhookRepo {
   def createWebhook(webhook: Webhook): UIO[Unit]
+
+  def getWebhooks: UStream[Webhook]
 }
 
 object TestWebhookRepo {
@@ -14,7 +17,8 @@ object TestWebhookRepo {
   val test: ULayer[Has[TestWebhookRepo] with Has[WebhookRepo]] = {
     for {
       ref <- Ref.make(Map.empty[WebhookId, Webhook])
-      impl = TestWebhookRepoImpl(ref)
+      hub <- Hub.unbounded[Webhook]
+      impl = TestWebhookRepoImpl(ref, hub)
     } yield Has.allOf[TestWebhookRepo, WebhookRepo](impl, impl)
   }.toLayerMany
 
@@ -22,14 +26,20 @@ object TestWebhookRepo {
 
   def createWebhook(webhook: Webhook): URIO[Has[TestWebhookRepo], Unit] =
     ZIO.serviceWith(_.createWebhook(webhook))
+
+  def getWebhooks: ZStream[Has[TestWebhookRepo], Nothing, Webhook] =
+    ZStream.service[TestWebhookRepo].flatMap(_.getWebhooks)
 }
 
-final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]])
+final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], hub: Hub[Webhook])
     extends WebhookRepo
     with TestWebhookRepo {
 
   def createWebhook(webhook: Webhook): UIO[Unit] =
-    ref.update(_ + ((webhook.id, webhook)))
+    ref.update(_ + ((webhook.id, webhook))) <* hub.publish(webhook)
+
+  def getWebhooks: UStream[Webhook] =
+    UStream.fromHub(hub)
 
   def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]] =
     ref.get.map(_.get(webhookId))
@@ -39,11 +49,15 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]])
       webhookExists <- ref.modify { map =>
                          map.get(id) match {
                            case None          =>
-                             (false, map)
+                             (None, map)
                            case Some(webhook) =>
-                             (true, map.updated(id, webhook.copy(status = status)))
+                             val updatedWebhook = webhook.copy(status = status)
+                             (Some(updatedWebhook), map.updated(id, updatedWebhook))
                          }
                        }
-      _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(id)))
+      _             <- webhookExists match {
+                         case Some(updatedWebhook) => hub.publish(updatedWebhook)
+                         case None                 => ZIO.fail(MissingWebhookError(id))
+                       }
     } yield ()
 }

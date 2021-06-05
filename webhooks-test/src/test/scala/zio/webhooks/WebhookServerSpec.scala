@@ -320,6 +320,7 @@ object WebhookServerSpecUtil {
     case object Errors   extends ScenarioInterest[WebhookError]
     case object Events   extends ScenarioInterest[WebhookEvent]
     case object Requests extends ScenarioInterest[WebhookHttpRequest]
+    case object Webhooks extends ScenarioInterest[Webhook]
 
     final def streamFor[A](scenarioInterest: ScenarioInterest[A]): ZStream[SpecEnv, Nothing, A] =
       scenarioInterest match {
@@ -329,6 +330,8 @@ object WebhookServerSpecUtil {
           TestWebhookEventRepo.getEvents
         case ScenarioInterest.Requests =>
           TestWebhookHttpClient.requests
+        case ScenarioInterest.Webhooks =>
+          TestWebhookRepo.getWebhooks
       }
   }
 
