@@ -284,8 +284,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         }
       ).provideCustomLayer(specEnv(BatchingConfig.default))
       // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
-    ) @@ timeout(5.seconds)
-  // ) @@ nonFlaky @@ timeout(3.minutes)
+      // ) @@ timeout(5.seconds)
+    ) @@ nonFlaky @@ timeout(3.minutes)
 }
 
 object WebhookServerSpecUtil {
