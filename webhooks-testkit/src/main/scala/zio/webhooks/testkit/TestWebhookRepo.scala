@@ -8,7 +8,7 @@ import zio.webhooks._
 trait TestWebhookRepo {
   def createWebhook(webhook: Webhook): UIO[Unit]
 
-  def getWebhooks: UStream[Webhook]
+  def getWebhooks: UManaged[UStream[Webhook]]
 }
 
 object TestWebhookRepo {
@@ -27,8 +27,8 @@ object TestWebhookRepo {
   def createWebhook(webhook: Webhook): URIO[Has[TestWebhookRepo], Unit] =
     ZIO.serviceWith(_.createWebhook(webhook))
 
-  def getWebhooks: ZStream[Has[TestWebhookRepo], Nothing, Webhook] =
-    ZStream.service[TestWebhookRepo].flatMap(_.getWebhooks)
+  def getWebhooks: URManaged[Has[TestWebhookRepo], UStream[Webhook]] =
+    ZManaged.service[TestWebhookRepo].flatMap(_.getWebhooks)
 }
 
 final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], hub: Hub[Webhook])
@@ -38,8 +38,8 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], 
   def createWebhook(webhook: Webhook): UIO[Unit] =
     ref.update(_ + ((webhook.id, webhook))) <* hub.publish(webhook)
 
-  def getWebhooks: UStream[Webhook] =
-    UStream.fromHub(hub)
+  def getWebhooks: UManaged[UStream[Webhook]] =
+    UStream.fromHubManaged(hub)
 
   def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]] =
     ref.get.map(_.get(webhookId))

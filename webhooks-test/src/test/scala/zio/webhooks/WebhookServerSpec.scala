@@ -164,7 +164,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ScenarioInterest.Requests
           )(_.take(2).runDrain *> assertCompletesM)
         },
-        testM("retrying sets webhook to status to Retrying, then Enabled on success") {
+        testM("retrying sets webhook status to Retrying, then Enabled on success") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
 
           val events = createPlaintextEvents(1)(webhook.id)
@@ -179,8 +179,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               hasSameElements(List(WebhookStatus.Enabled, WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
             )
           )
-        } @@ timeout(1.second) @@ failing
-      ).provideCustomLayer(specEnv(BatchingConfig.disabled)),
+        } @@ timeout(256.millis) @@ failing
+      ).injectSome[TestEnvironment](specEnv, BatchingConfig.disabled),
       suite("batching enabled")(
         testM("batches events by max batch size") {
           val n            = 100
@@ -298,7 +298,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             adjustDuration = Some(5.seconds)
           )(requests => assertM(requests.runHead.map(_.map(_.content)))(isSome(equalTo(expectedOutput))))
         }
-      ).provideCustomLayer(specEnv(BatchingConfig.default))
+      ).injectSome[TestEnvironment](specEnv, BatchingConfig.default)
       // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       // ) @@ timeout(5.seconds)
     ) @@ nonFlaky @@ timeout(3.minutes)
@@ -338,10 +338,10 @@ object WebhookServerSpecUtil {
     case object Requests extends ScenarioInterest[WebhookHttpRequest]
     case object Webhooks extends ScenarioInterest[Webhook]
 
-    final def streamFor[A](scenarioInterest: ScenarioInterest[A]): ZStream[SpecEnv, Nothing, A] =
+    final def streamFor[A](scenarioInterest: ScenarioInterest[A]): URManaged[SpecEnv, UStream[A]] =
       scenarioInterest match {
         case ScenarioInterest.Errors   =>
-          ZStream.service[WebhookServer].flatMap(_.getErrors)
+          ZManaged.service[WebhookServer].flatMap(_.getErrors)
         case ScenarioInterest.Events   =>
           TestWebhookEventRepo.getEvents
         case ScenarioInterest.Requests =>
@@ -367,19 +367,46 @@ object WebhookServerSpecUtil {
     with Has[WebhookStateRepo]
     with Has[TestWebhookHttpClient]
     with Has[WebhookHttpClient]
-    with Has[Option[BatchingConfig]]
     with Has[WebhookServer]
 
-  def specEnv(batchingConfig: ULayer[Has[Option[BatchingConfig]]]): URLayer[Clock, SpecEnv] =
+  lazy val specEnv: URLayer[Clock with Has[Option[BatchingConfig]], SpecEnv] =
     ZLayer
-      .fromSomeMagic[Clock, SpecEnv](
+      .fromSomeMagic[Clock with Has[Option[BatchingConfig]], SpecEnv](
         TestWebhookRepo.test,
         TestWebhookEventRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
-        batchingConfig,
         WebhookServer.live
       )
+
+  val testServer: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
+    for {
+      state          <- Ref.make(Map.empty[WebhookId, WebhookServer.WebhookState])
+      batchQueue     <- Queue.bounded[(Webhook, WebhookEvent)](1024)
+      errorHub       <- Hub.sliding[WebhookError](128)
+      batchingConfig <- ZIO.service[Option[BatchingConfig]]
+      repo           <- ZIO.service[WebhookRepo]
+      stateRepo      <- ZIO.service[WebhookStateRepo]
+      eventRepo      <- ZIO.service[WebhookEventRepo]
+      httpClient     <- ZIO.service[WebhookHttpClient]
+      server          = WebhookServer(
+                          repo,
+                          stateRepo,
+                          eventRepo,
+                          httpClient,
+                          batchQueue,
+                          errorHub,
+                          state,
+                          batchingConfig
+                        )
+    } yield server
+  }.toLayer
+
+  type TestServerEnv = Has[WebhookRepo]
+    with Has[WebhookStateRepo]
+    with Has[WebhookEventRepo]
+    with Has[WebhookHttpClient]
+    with Clock
 
   def webhooksTestScenario[A](
     stubResponses: Iterable[Option[WebhookHttpResponse]],
@@ -389,17 +416,19 @@ object WebhookServerSpecUtil {
     adjustDuration: Option[Duration] = None
   )(
     assertion: ZStream[SpecEnv, Nothing, A] => URIO[SpecEnv, TestResult]
-  ): URIO[SpecEnv with TestClock with Has[WebhookServer], TestResult] =
-    for {
-      testFiber     <- assertion(ScenarioInterest.streamFor(scenarioInterest)).fork
-      // TODO: sleep hack. how to wait for stream fiber to be ready?
-      _             <- ZIO.sleep(200.millis).provideLayer(Clock.live)
-      responseQueue <- Queue.unbounded[Option[WebhookHttpResponse]]
-      _             <- responseQueue.offerAll(stubResponses)
-      _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-      _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
-      _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
-      _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
-      testResult    <- testFiber.join
-    } yield testResult
+  ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
+    (ScenarioInterest.streamFor(scenarioInterest).map(assertion).flatMap(_.forkManaged)).use { testFiber =>
+      for {
+        // _             <- ZIO.service[WebhookServer].flatMap(_.start)
+        // TODO: sleep hack. wait for server to be ready
+        _             <- ZIO.sleep(160.millis).provideLayer(Clock.live)
+        responseQueue <- Queue.unbounded[Option[WebhookHttpResponse]]
+        _             <- responseQueue.offerAll(stubResponses)
+        _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
+        _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
+        _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
+        _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
+        testResult    <- testFiber.join
+      } yield testResult
+    }
 }

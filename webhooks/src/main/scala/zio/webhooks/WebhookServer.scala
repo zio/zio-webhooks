@@ -4,7 +4,6 @@ import zio._
 import zio.clock._
 import zio.prelude.NonEmptySet
 import zio.stream.UStream
-import zio.stream.ZStream
 import zio.webhooks.WebhookDeliveryBatching._
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
@@ -85,8 +84,8 @@ final case class WebhookServer(
            }
     } yield ()
 
-  def getErrors: UStream[WebhookError] =
-    UStream.fromHub(errorHub)
+  def getErrors: UManaged[UStream[WebhookError]] =
+    UStream.fromHubManaged(errorHub)
 
   /**
    * Starts the webhook server. Kicks off the following to run concurrently:
@@ -183,8 +182,8 @@ object WebhookServer {
     with Has[Option[BatchingConfig]]
     with Clock
 
-  def getErrors: ZStream[Has[WebhookServer], Nothing, WebhookError] =
-    ZStream.service[WebhookServer].flatMap(_.getErrors)
+  def getErrors: URManaged[Has[WebhookServer], UStream[WebhookError]] =
+    ZManaged.service[WebhookServer].flatMap(_.getErrors)
 
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {

@@ -17,8 +17,9 @@ final case class Webhook(
 
   final def isOnline: Boolean =
     status match {
-      case Enabled     => true
-      case Retrying(_) => true
-      case _           => false
+      case Enabled        => true
+      case Retrying(_)    => true
+      case Disabled       => false
+      case Unavailable(_) => false
     }
 }
