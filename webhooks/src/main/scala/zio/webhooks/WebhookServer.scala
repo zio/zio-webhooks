@@ -94,17 +94,28 @@ final case class WebhookServer(
    * - dispatch retry monitoring
    * - batching
    */
-  // TODO: should retry monitoring just be dispatch?
   def start: URIO[Clock, Any] =
-    startNewEventSubscription *> startEventRecovery *> startRetryMonitoring *> startBatching
+    for {
+      f1 <- startNewEventSubscription
+      _  <- startEventRecovery
+      _  <- startRetryMonitoring // TODO[design]: should retry monitoring just be dispatch?
+      _  <- startBatching
+      // wait for fibers to suspend, indicating streams are ready for input
+      _  <- f1.status
+              .repeat(Schedule.recurUntil[Fiber.Status] {
+                case _: Fiber.Status.Suspended => true
+                case _                         => false
+              } && Schedule.fixed(Duration.ofMillis(10)))
+              .provideLayer(Clock.live)
+    } yield ()
 
   /**
    * Starts a fiber that listens to events queued for batched webhook dispatch
    */
-  private def startBatching: URIO[Clock, Any] =
+  private def startBatching: URIO[Clock, Fiber.Runtime[Nothing, Unit]] =
     batchingConfig match {
       case None                                       =>
-        ZIO.unit
+        ZIO.unit.fork
       case Some(BatchingConfig(maxSize, maxWaitTime)) =>
         consumeBatchElements(maxSize, maxWaitTime).forkAs("batching")
     }
@@ -115,7 +126,7 @@ final case class WebhookServer(
    * Starts recovery of events whose status is `Delivering` for webhooks with `AtLeastOnce`
    * delivery semantics.
    */
-  private def startEventRecovery: UIO[Any] = ZIO.unit.fork
+  private def startEventRecovery: UIO[Unit] = ZIO.unit
 
   // Call webhookEventRepo.getEventsByStatus looking for new events
   //
@@ -135,7 +146,7 @@ final case class WebhookServer(
   /**
    * Kicks off new [[WebhookEvent]] subscription.
    */
-  private def startNewEventSubscription: UIO[Any] = {
+  private def startNewEventSubscription: URIO[Any, Fiber.Runtime[Nothing, Unit]] = {
     for (newEvent <- eventRepo.getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))) {
       val webhookId = newEvent.key.webhookId
       webhookRepo
@@ -154,7 +165,8 @@ final case class WebhookServer(
   /**
    * Kicks off backoff retries for every [[WebhookEvent]] pending delivery.
    */
-  private def startRetryMonitoring: UIO[Any] = ZIO.unit.fork
+  private def startRetryMonitoring =
+    ZIO.unit
 
   /**
    * Waits until all work in progress is finished, then shuts down.

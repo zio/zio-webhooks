@@ -179,7 +179,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               hasSameElements(List(WebhookStatus.Enabled, WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
             )
           )
-        } @@ timeout(256.millis) @@ failing
+        } @@ timeout(128.millis) @@ failing
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.disabled),
       suite("batching enabled")(
         testM("batches events by max batch size") {
@@ -301,7 +301,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.default)
       // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       // ) @@ timeout(5.seconds)
-    ) @@ nonFlaky @@ timeout(3.minutes)
+    ) @@ nonFlaky
 }
 
 object WebhookServerSpecUtil {
@@ -379,29 +379,6 @@ object WebhookServerSpecUtil {
         WebhookServer.live
       )
 
-  val testServer: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
-    for {
-      state          <- Ref.make(Map.empty[WebhookId, WebhookServer.WebhookState])
-      batchQueue     <- Queue.bounded[(Webhook, WebhookEvent)](1024)
-      errorHub       <- Hub.sliding[WebhookError](128)
-      batchingConfig <- ZIO.service[Option[BatchingConfig]]
-      repo           <- ZIO.service[WebhookRepo]
-      stateRepo      <- ZIO.service[WebhookStateRepo]
-      eventRepo      <- ZIO.service[WebhookEventRepo]
-      httpClient     <- ZIO.service[WebhookHttpClient]
-      server          = WebhookServer(
-                          repo,
-                          stateRepo,
-                          eventRepo,
-                          httpClient,
-                          batchQueue,
-                          errorHub,
-                          state,
-                          batchingConfig
-                        )
-    } yield server
-  }.toLayer
-
   type TestServerEnv = Has[WebhookRepo]
     with Has[WebhookStateRepo]
     with Has[WebhookEventRepo]
@@ -419,9 +396,6 @@ object WebhookServerSpecUtil {
   ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
     (ScenarioInterest.streamFor(scenarioInterest).map(assertion).flatMap(_.forkManaged)).use { testFiber =>
       for {
-        // _             <- ZIO.service[WebhookServer].flatMap(_.start)
-        // TODO: sleep hack. wait for server to be ready
-        _             <- ZIO.sleep(160.millis).provideLayer(Clock.live)
         responseQueue <- Queue.unbounded[Option[WebhookHttpResponse]]
         _             <- responseQueue.offerAll(stubResponses)
         _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
