@@ -297,8 +297,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             stubResponses = List.fill(2)(Some(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = jsonEvents,
-            ScenarioInterest.Requests,
-            streamTimeout = 1.second
+            ScenarioInterest.Requests
           )(requests => assertM(requests.runHead.map(_.map(_.content)))(isSome(equalTo(expectedOutput))))
         },
         testM("batched plain text event contents are appended") {
@@ -408,7 +407,7 @@ object WebhookServerSpecUtil {
     events: Iterable[WebhookEvent],
     scenarioInterest: ScenarioInterest[A],
     adjustDuration: Option[Duration] = None,
-    streamTimeout: Duration = 256.millis
+    streamTimeout: Duration = 1.second
   )(
     assertion: ZStream[SpecEnv, Nothing, A] => URIO[SpecEnv, TestResult]
   ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
