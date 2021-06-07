@@ -100,7 +100,7 @@ final case class WebhookServer(
       _  <- startEventRecovery
       _  <- startRetryMonitoring // TODO[design]: should retry monitoring just be dispatch?
       _  <- startBatching
-      // wait for fibers to suspend, indicating streams are ready for input
+      // wait for fibers to suspend, indicating streams have started pulling
       _  <- f1.status
               .repeat(Schedule.recurUntil[Fiber.Status] {
                 case _: Fiber.Status.Suspended => true
