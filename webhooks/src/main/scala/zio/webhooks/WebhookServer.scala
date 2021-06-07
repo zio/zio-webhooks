@@ -18,7 +18,8 @@ import java.time.Instant
  * dispatches are attempted twice followed by exponential backoff. Retries are performed until some
  * duration after which webhooks will be marked `Unavailable` since some [[java.time.Instant]].
  *
- * Batched deliveries are enabled if `batchConfig` is defined.
+ * Dispatches are batched if and only if a `batchConfig` is defined *and* a webhook's delivery mode
+ * is set to `Batched`.
  *
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
@@ -31,39 +32,52 @@ final case class WebhookServer(
   batchingQueue: Queue[(Webhook, WebhookEvent)],
   errorHub: Hub[WebhookError],
   webhookState: Ref[Map[WebhookId, WebhookServer.WebhookState]],
-  batchingConfig: Option[BatchingConfig]
+  batchingConfig: Option[BatchingConfig] = None
 ) {
 
   private def consumeBatchElements(maxBatchSize: Int, maxWaitTime: Duration): URIO[Clock, Unit] =
     UStream
       .fromQueue(batchingQueue)
-      // TODO: make key (webhook ID, content type) combo
-      .groupByKey(_._1, maxBatchSize) { (webhook, stream) =>
-        stream
-          .map(_._2)
-          .groupedWithin(maxBatchSize, maxWaitTime)
-          .map(NonEmptyChunk.fromChunk(_))
-          .collectSome
-          .mapM(events => dispatch(WebhookDispatch(webhook, events)))
+      .groupByKey(
+        pair => {
+          val (webhook, event) = pair
+          (webhook.id, event.headers.find(_._1.toLowerCase == "content-type"))
+        },
+        maxBatchSize
+      ) {
+        case (_, stream) =>
+          stream
+            .groupedWithin(maxBatchSize, maxWaitTime)
+            .map(NonEmptyChunk.fromChunk(_))
+            .collectSome
+            .mapM(events => dispatch(WebhookDispatch(events.head._1, events.map(_._2))))
       }
       .runDrain
 
   private def dispatch(dispatch: WebhookDispatch): UIO[Unit] = {
-    // TODO: Events may have different headers,
-    // TODO: we're just taking the last one's for now.
-    // TODO: WebhookEvents' contents are just being appended.
-    // TODO: Content is stringly-typed, may need more structure
-    val request = WebhookHttpRequest(
-      dispatch.webhook.url,
-      dispatch.events.map(_.content).mkString("\n"),
-      dispatch.events.last.headers
-    )
+    val requestContent =
+      dispatch.contentType match {
+        case Some(WebhookEventContentType.Json) =>
+          if (dispatch.size > 1)
+            "[" + dispatch.events.map(_.content).mkString(",") + "]"
+          else
+            dispatch.events.head.content
+        case _                                  =>
+          dispatch.events.map(_.content).mkString
+      }
+
+    val request = WebhookHttpRequest(dispatch.url, requestContent, dispatch.headers)
+
     for {
-      _ <- httpClient.post(request).ignore // TODO: handle errors/non-200
+      response <- httpClient.post(request).option
+      newStatus = response match {
+                    case Some(WebhookHttpResponse(200)) =>
+                      WebhookEventStatus.Delivered
+                    case _                              =>
+                      WebhookEventStatus.Failed
+                  }
+      _        <- ZIO.foreach(dispatch.events)(event => eventRepo.setEventStatus(event.key, newStatus).ignore)
       // TODO[design]: should have setEventStatus variant accepting multiple keys
-      _ <- ZIO.foreach(dispatch.events) { event =>
-             eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivered).ignore
-           }
       // TODO: enqueue webhook/event errors
     } yield ()
   }
@@ -71,12 +85,12 @@ final case class WebhookServer(
   private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): IO[WebhookError, Unit] =
     for {
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
-      _ <- webhook.batching match {
-             case Single  =>
-               dispatch(WebhookDispatch(webhook, NonEmptyChunk(event)))
-             case Batched =>
+      _ <- (webhook.batching, batchingConfig) match {
+             case (Batched, Some(_)) =>
                val deliveringEvent = event.copy(status = WebhookEventStatus.Delivering)
                batchingQueue.offer((webhook, deliveringEvent))
+             case _                  =>
+               dispatch(WebhookDispatch(webhook, NonEmptyChunk(event)))
            }
     } yield ()
 
@@ -162,6 +176,8 @@ object WebhookServer {
   // TODO: Smart constructor
   final case class BatchingConfig(maxSize: Int, maxWaitTime: Duration)
   object BatchingConfig {
+    val default: ULayer[Has[Option[BatchingConfig]]] = live(10, Duration.ofSeconds(5))
+
     val disabled: ULayer[Has[Option[BatchingConfig]]] =
       ZLayer.succeed(None)
 

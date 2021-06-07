@@ -5,7 +5,7 @@ package zio.webhooks
  * delivery.
  */
 final case class WebhookHttpResponse(statusCode: Int) {
-  def isSuccess: Boolean = statusCode == 200
-
   def isFailure: Boolean = !isSuccess
+
+  def isSuccess: Boolean = statusCode == 200
 }
