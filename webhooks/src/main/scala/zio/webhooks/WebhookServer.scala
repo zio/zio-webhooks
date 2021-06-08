@@ -96,17 +96,13 @@ final case class WebhookServer(
    */
   def start: URIO[Clock, Any] =
     for {
-      f1 <- startNewEventSubscription
-      _  <- startEventRecovery
-      _  <- startRetryMonitoring // TODO[design]: should retry monitoring just be dispatch?
-      _  <- startBatching
-      // wait for fibers to suspend, indicating streams have started pulling
-      _  <- f1.status
-              .repeat(Schedule.recurUntil[Fiber.Status] {
-                case _: Fiber.Status.Suspended => true
-                case _                         => false
-              } && Schedule.fixed(Duration.ofMillis(10)))
-              .provideLayer(Clock.live)
+      latch <- Promise.make[Nothing, Unit]
+      _     <- startNewEventSubscription(latch)
+      _     <- startEventRecovery
+      _     <- startRetryMonitoring // TODO[design]: should retry monitoring just be dispatch?
+      _     <- startBatching
+      // wait for subscriptions to be ready
+      _     <- latch.await
     } yield ()
 
   /**
@@ -146,16 +142,20 @@ final case class WebhookServer(
   /**
    * Kicks off new [[WebhookEvent]] subscription.
    */
-  private def startNewEventSubscription: URIO[Any, Fiber.Runtime[Nothing, Unit]] = {
-    for (newEvent <- eventRepo.getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))) {
-      val webhookId = newEvent.key.webhookId
-      webhookRepo
-        .getWebhookById(webhookId)
-        .flatMap(ZIO.fromOption(_).mapError(_ => MissingWebhookError(webhookId)))
-        .flatMap(webhook => ZIO.when(webhook.isOnline)(dispatchNewEvent(webhook, newEvent)))
-        .catchAll(errorHub.publish(_).unit)
-    }
-  }.forkAs("new-event-subscription")
+  private def startNewEventSubscription(latch: Promise[Nothing, Unit]): URIO[Any, Fiber.Runtime[Nothing, Unit]] =
+    eventRepo
+      .getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
+      .use { dequeue =>
+        dequeue.poll *> latch.succeed(()) *> UStream.fromQueue(dequeue).foreach { newEvent =>
+          val webhookId = newEvent.key.webhookId
+          webhookRepo
+            .getWebhookById(webhookId)
+            .flatMap(ZIO.fromOption(_).mapError(_ => MissingWebhookError(webhookId)))
+            .flatMap(webhook => ZIO.when(webhook.isOnline)(dispatchNewEvent(webhook, newEvent)))
+            .catchAll(errorHub.publish(_).unit)
+        }
+      }
+      .forkAs("new-event-subscription")
 
   // retry dispatching every WebhookEvent in queues twice, then exponentially
   // if we've retried for >7 days,
