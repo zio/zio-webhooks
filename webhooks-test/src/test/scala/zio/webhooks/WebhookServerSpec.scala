@@ -166,8 +166,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             stubResponses = List(Some(WebhookHttpResponse(500)), Some(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = events,
-            ScenarioInterest.Requests,
-            streamTimeout = 5.seconds
+            ScenarioInterest.Requests
           )(requests => assertM(requests.take(2).runCount)(equalTo(2L)))
         },
         testM("immediately retries once on IOException") {
@@ -197,7 +196,21 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               hasSameElements(List(WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
             )
           )
+        },
+        testM("retries until success before 7-day retry timeout") {
+          val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+
+          val events = createPlaintextEvents(1)(webhook.id)
+
+          webhooksTestScenario(
+            stubResponses = List(None, None, Some(WebhookHttpResponse(200))),
+            webhooks = List(webhook),
+            events = events,
+            ScenarioInterest.Requests
+          )(requests => assertM(requests.take(3).runCount)(equalTo(3L)))
         }
+        // TODO: test that retries past first one back off exponentially
+        // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.disabled),
       suite("batching enabled")(
         testM("batches events by max batch size") {
@@ -317,8 +330,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         }
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.default)
       // TODO: write webhook status change tests
-      // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
-      // ) @@ nonFlaky @@ timeout(2.minutes)
+      //    ) @@ nonFlaky @@ timeout(2.minutes)
     )
 }
 

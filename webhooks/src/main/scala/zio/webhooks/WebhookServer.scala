@@ -66,7 +66,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
       } yield map.updated(id, retryingState)
 
     for {
-      response <- httpClient.post(dispatch.toRequest).option
+      response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
       _        <- {
         (dispatch.semantics, response) match {
           case (_, Some(WebhookHttpResponse(200))) =>
@@ -144,6 +144,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
 
   // get events that are Delivering whose webhooks have AtLeastOnce delivery semantics.
   // reconstruct webhookState
+
   /**
    * Starts recovery of events whose status is `Delivering` for webhooks with `AtLeastOnce`
    * delivery semantics.
@@ -165,6 +166,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
   //          - create a queue in the state
   //          - enqueue the event into the queue
   //
+
   /**
    * Kicks off new [[WebhookEvent]] subscription.
    */
@@ -188,6 +190,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
   //   mark Webhook as Unavailable
   //   clear WebhookState for that Webhook
   //   make sure that startNewEventSubscription does _not_ try to deliver to an unavailable webhook
+
   /**
    * Kicks off backoff retries for every [[WebhookEvent]] pending delivery.
    */
@@ -217,7 +220,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
   private def takeAndRetry(queue: Queue[WebhookDispatch]) =
     for {
       dispatch    <- queue.take
-      response    <- httpClient.post(dispatch.toRequest).option
+      response    <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
       _           <- response match {
                        case Some(WebhookHttpResponse(200)) =>
                          if (dispatch.size == 1)
@@ -225,8 +228,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
                          else
                            eventRepo.setEventStatusMany(dispatch.keys, WebhookEventStatus.Delivered)
                        case _                              =>
-                         ???
-                       // queue.offer(dispatch)
+                         queue.offer(dispatch)
                      }
       currentSize <- queue.size
     } yield currentSize
@@ -235,6 +237,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
 object WebhookServer {
   // TODO: Smart constructor
   final case class BatchingConfig(maxSize: Int, maxWaitTime: Duration)
+
   object BatchingConfig {
     val default: ULayer[Has[Option[BatchingConfig]]] = live(10, Duration.ofSeconds(5))
 
@@ -283,16 +286,21 @@ object WebhookServer {
   }.toLayer
 
   sealed trait WebhookState
+
   object WebhookState {
     final case class Change(id: WebhookId, from: WebhookState, to: WebhookState)
 
-    case object Disabled                                                         extends WebhookState
-    case object Enabled                                                          extends WebhookState
+    case object Disabled extends WebhookState
+
+    case object Enabled extends WebhookState
+
     final case class Retrying(sinceTime: Instant, queue: Queue[WebhookDispatch]) extends WebhookState
+
     object Retrying {
       def make(capacity: Int): URIO[Clock, Retrying] =
         ZIO.mapN(instant, Queue.bounded[WebhookDispatch](capacity))(Retrying(_, _))
     }
+
     case object Unavailable extends WebhookState
   }
 }
