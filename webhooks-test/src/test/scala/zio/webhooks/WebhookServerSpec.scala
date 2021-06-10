@@ -6,7 +6,7 @@ import zio.duration._
 import zio.magic._
 import zio.stream._
 import zio.test.Assertion._
-import zio.test.TestAspect._
+//import zio.test.TestAspect._
 import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
@@ -141,7 +141,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         },
         testM("missing webhook errors are sent to stream") {
           val idRange               = 401L to 404L
-          val missingWebhookIds     = idRange.map(WebhookId(_))
+          val missingWebhookIds     = idRange.map(WebhookId)
           val eventsMissingWebhooks = missingWebhookIds.flatMap(id => createPlaintextEvents(1)(id))
 
           val expectedErrorCount = missingWebhookIds.size
@@ -166,8 +166,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             stubResponses = List(Some(WebhookHttpResponse(500)), Some(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = events,
-            ScenarioInterest.Requests
-          )(_.take(2).runDrain *> assertCompletesM)
+            ScenarioInterest.Requests,
+            streamTimeout = 5.seconds
+          )(requests => assertM(requests.take(2).runCount)(equalTo(2L)))
         },
         testM("immediately retries once on IOException") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -179,7 +180,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             webhooks = List(webhook),
             events = events,
             ScenarioInterest.Requests
-          )(_.take(2).runDrain *> assertCompletesM)
+          )(requests => assertM(requests.take(2).runCount)(equalTo(2L)))
         },
         testM("retrying sets webhook status to Retrying, then Enabled on success") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -192,11 +193,11 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             events = events,
             ScenarioInterest.Webhooks
           )(webhooks =>
-            assertM(webhooks.drop(1).take(2).runCollect)(
-              hasSameElements(List(WebhookStatus.Enabled, WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
+            assertM(webhooks.drop(1).take(2).map(_.status).runCollect)(
+              hasSameElements(List(WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
             )
           )
-        } @@ timeout(128.millis) @@ failing
+        }
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.disabled),
       suite("batching enabled")(
         testM("batches events by max batch size") {
@@ -315,6 +316,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           )(requests => assertM(requests.runHead.map(_.map(_.content)))(isSome(equalTo(expectedOutput))))
         }
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.default)
+      // TODO: write webhook status change tests
       // TODO: test that after 7 days have passed since webhook event delivery failure, a webhook is set unavailable
       // ) @@ nonFlaky @@ timeout(2.minutes)
     )
@@ -345,7 +347,7 @@ object WebhookServerSpecUtil {
       )
     }
 
-  val jsonContentHeaders = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+  val jsonContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
 
   sealed trait ScenarioInterest[A]
   object ScenarioInterest {
@@ -411,17 +413,17 @@ object WebhookServerSpecUtil {
   )(
     assertion: ZStream[SpecEnv, Nothing, A] => URIO[SpecEnv, TestResult]
   ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
-    (ScenarioInterest
+    ScenarioInterest
       .streamFor(scenarioInterest)
       .map(stream => assertion(stream.timeout(streamTimeout).provideLayer(Clock.live)))
-      .flatMap(_.forkManaged))
+      .flatMap(_.forkManaged)
       .use { testFiber =>
         for {
           responseQueue <- Queue.unbounded[Option[WebhookHttpResponse]]
           _             <- responseQueue.offerAll(stubResponses)
           _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-          _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook(_))
-          _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent(_))
+          _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook)
+          _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
           _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
           testResult    <- testFiber.join
         } yield testResult

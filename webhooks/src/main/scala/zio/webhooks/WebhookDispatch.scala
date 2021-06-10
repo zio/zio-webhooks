@@ -4,7 +4,7 @@ import zio.NonEmptyChunk
 import zio.Chunk
 
 /**
- * A [[Dispatch]] represents a unit of delivery to a [[Webhook]]. It can have one or more
+ * A [[WebhookDispatch()]] represents a unit of delivery to a [[Webhook]]. It can have one or more
  * [[WebhookEvent]]s. Retries are done on dispatches since status updates on webhooks and their
  * respective events depend on the outcome of each
  *
@@ -26,15 +26,11 @@ final case class WebhookDispatch(
       case None                        => None
     }
 
-  lazy val head = events.head
-
-  lazy val headers: Chunk[(String, String)] = events.head.headers
-
+  lazy val head: WebhookEvent                   = events.head
+  lazy val headers: Chunk[(String, String)]     = events.head.headers
   lazy val keys: NonEmptyChunk[WebhookEventKey] = events.map(_.key)
-
-  lazy val semantics = webhook.deliveryMode.semantics
-
-  lazy val size: Int = events.size
+  lazy val semantics: WebhookDeliverySemantics  = webhook.deliveryMode.semantics
+  lazy val size: Int                            = events.size
 
   def toRequest: WebhookHttpRequest = {
     val requestContent =

@@ -46,8 +46,8 @@ final case class TestWebhookHttpClientImpl(
     for {
       _        <- received.publish(request)
       f        <- ref.get
-      queue    <- ZIO.fromOption(f(request)).mapError(_ => new IOException("No response set for given request."))
-      response <- queue.take.flatMap(ZIO.fromOption(_)).mapError(_ => new IOException("Query failed"))
+      queue    <- ZIO.fromOption(f(request)).orElseFail(new IOException("No response set for given request."))
+      response <- queue.take.flatMap(ZIO.fromOption(_)).orElseFail(new IOException("Query failed"))
     } yield response
 
   def setResponse(f: WebhookHttpRequest => Option[Queue[Option[WebhookHttpResponse]]]): UIO[Unit] =
