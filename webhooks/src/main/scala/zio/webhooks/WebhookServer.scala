@@ -110,8 +110,8 @@ final case class WebhookServer( // TODO: split server into components, this is l
            }
     } yield ()
 
-  def getErrors: UManaged[UStream[WebhookError]] =
-    UStream.fromHubManaged(errorHub)
+  def getErrors: UManaged[Dequeue[WebhookError]] =
+    errorHub.subscribe
 
   /**
    * Starts the webhook server. Kicks off the following to run concurrently:
@@ -202,9 +202,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
                   case WebhookState.Change(id, WebhookState.Retrying(sinceTime @ _, queue)) =>
                     {
                       for {
-                        _         <- clock.instant.map(println)
                         success   <- takeAndRetry(queue).repeatUntil(_ == 0).timeoutTo(None)(Some(_))(7.days)
-                        _         <- UIO(println(s"retryQueueSuccess $success"))
                         _         <- queue.shutdown
                         newStatus <- if (success.isDefined) ZIO.succeed(WebhookStatus.Enabled)
                                      else clock.instant.map(WebhookStatus.Unavailable)
@@ -261,7 +259,7 @@ object WebhookServer {
     with Has[Option[BatchingConfig]]
     with Clock
 
-  def getErrors: URManaged[Has[WebhookServer], UStream[WebhookError]] =
+  def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.getErrors)
 
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {

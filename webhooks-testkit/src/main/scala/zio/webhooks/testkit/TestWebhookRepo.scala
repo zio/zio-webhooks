@@ -1,14 +1,13 @@
 package zio.webhooks.testkit
 
 import zio._
-import zio.stream._
 import zio.webhooks.WebhookError._
 import zio.webhooks._
 
 trait TestWebhookRepo {
   def createWebhook(webhook: Webhook): UIO[Unit]
 
-  def getWebhooks: UManaged[UStream[Webhook]]
+  def getWebhooks: UManaged[Dequeue[Webhook]]
 }
 
 object TestWebhookRepo {
@@ -27,7 +26,7 @@ object TestWebhookRepo {
   def createWebhook(webhook: Webhook): URIO[Has[TestWebhookRepo], Unit] =
     ZIO.serviceWith(_.createWebhook(webhook))
 
-  def getWebhooks: URManaged[Has[TestWebhookRepo], UStream[Webhook]] =
+  def getWebhooks: URManaged[Has[TestWebhookRepo], Dequeue[Webhook]] =
     ZManaged.service[TestWebhookRepo].flatMap(_.getWebhooks)
 }
 
@@ -38,8 +37,8 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], 
   def createWebhook(webhook: Webhook): UIO[Unit] =
     ref.update(_ + ((webhook.id, webhook))) <* hub.publish(webhook)
 
-  def getWebhooks: UManaged[UStream[Webhook]] =
-    UStream.fromHubManaged(hub)
+  def getWebhooks: UManaged[Dequeue[Webhook]] =
+    hub.subscribe
 
   def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]] =
     ref.get.map(_.get(webhookId))

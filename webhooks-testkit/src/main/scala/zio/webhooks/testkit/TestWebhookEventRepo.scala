@@ -2,14 +2,13 @@ package zio.webhooks.testkit
 
 import zio._
 import zio.prelude.NonEmptySet
-import zio.stream._
 import zio.webhooks.WebhookError._
 import zio.webhooks._
 
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
 
-  def getEvents: UManaged[UStream[WebhookEvent]]
+  def getEvents: UManaged[Dequeue[WebhookEvent]]
 }
 
 object TestWebhookEventRepo {
@@ -28,7 +27,7 @@ object TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.createEvent(event))
 
-  def getEvents: URManaged[Has[TestWebhookEventRepo], UStream[WebhookEvent]] =
+  def getEvents: URManaged[Has[TestWebhookEventRepo], Dequeue[WebhookEvent]] =
     ZManaged.service[TestWebhookEventRepo].flatMap(_.getEvents)
 }
 
@@ -41,8 +40,8 @@ final private case class TestWebhookEventRepoImpl(
   def createEvent(event: WebhookEvent): UIO[Unit] =
     ref.update(_.updated(event.key, event)) <* hub.publish(event)
 
-  def getEvents: UManaged[UStream[WebhookEvent]] =
-    UStream.fromHubManaged(hub)
+  def getEvents: UManaged[Dequeue[WebhookEvent]] =
+    hub.subscribe
 
   def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UManaged[Dequeue[WebhookEvent]] =
     hub.subscribe.map(_.filterOutput(event => statuses.contains(event.status)))

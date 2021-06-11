@@ -1,14 +1,13 @@
 package zio.webhooks.testkit
 
 import zio._
-import zio.stream.UStream
 import zio.webhooks._
 
 import java.io.IOException
 
 // TODO: scaladoc
 trait TestWebhookHttpClient {
-  def requests: UManaged[UStream[WebhookHttpRequest]]
+  def requests: UManaged[Dequeue[WebhookHttpRequest]]
 
   def setResponse(f: WebhookHttpRequest => Option[Queue[Option[WebhookHttpResponse]]]): UIO[Unit]
 }
@@ -16,7 +15,7 @@ trait TestWebhookHttpClient {
 object TestWebhookHttpClient {
   // Accessors
 
-  def requests: URManaged[Has[TestWebhookHttpClient], UStream[WebhookHttpRequest]] =
+  def requests: URManaged[Has[TestWebhookHttpClient], Dequeue[WebhookHttpRequest]] =
     ZManaged.service[TestWebhookHttpClient].flatMap(_.requests)
 
   def setResponse(
@@ -39,8 +38,8 @@ final case class TestWebhookHttpClientImpl(
 ) extends WebhookHttpClient
     with TestWebhookHttpClient {
 
-  def requests: UManaged[UStream[WebhookHttpRequest]] =
-    UStream.fromHubManaged(received)
+  def requests: UManaged[Dequeue[WebhookHttpRequest]] =
+    received.subscribe
 
   def post(request: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] =
     for {
