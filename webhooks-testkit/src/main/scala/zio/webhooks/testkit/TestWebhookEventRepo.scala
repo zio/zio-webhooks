@@ -94,7 +94,7 @@ final private case class TestWebhookEventRepoImpl(
                     (NonEmptyChunk.fromChunk(missingKeys).toLeft(Iterable.empty[WebhookEvent]), map)
                   else {
                     val updated =
-                      for ((key, event) <- map if (keys.contains(key)))
+                      for ((key, event) <- map if keys.contains(key))
                         yield (key, event.copy(status = status))
                     (Right(updated.values), map ++ updated)
                   }

@@ -1,7 +1,8 @@
 package zio.webhooks
 
 import zio._
-import zio.clock.{ instant, Clock }
+import zio.clock.Clock
+import zio.duration._
 import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.webhooks.WebhookDeliveryBatching._
@@ -60,7 +61,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
         instant       <- clock.instant
         _             <- webhookRepo.setWebhookStatus(id, WebhookStatus.Retrying(instant))
         retryingState <- WebhookState.Retrying.make(128)
-        stateChange    = WebhookState.Change(id, WebhookState.Enabled, retryingState)
+        stateChange    = WebhookState.Change(id, retryingState)
         _             <- retryingState.queue.offer(dispatch)
         _             <- changeQueue.offer(stateChange)
       } yield map.updated(id, retryingState)
@@ -198,15 +199,20 @@ final case class WebhookServer( // TODO: split server into components, this is l
     for {
       update <- changeQueue.take
       _      <- update match {
-                  case WebhookState.Change(id, WebhookState.Enabled, WebhookState.Retrying(sinceTime @ _, queue)) => {
+                  case WebhookState.Change(id, WebhookState.Retrying(sinceTime @ _, queue)) =>
+                    {
                       for {
-                        _ <- takeAndRetry(queue).repeatUntil(_ == 0)
-                        _ <- queue.shutdown
-                        _ <- webhookRepo.setWebhookStatus(id, WebhookStatus.Enabled)
-                        _ <- webhookState.get.map(_.updated(id, WebhookState.Enabled))
+                        _         <- clock.instant.map(println)
+                        success   <- takeAndRetry(queue).repeatUntil(_ == 0).timeoutTo(None)(Some(_))(7.days)
+                        _         <- UIO(println(s"retryQueueSuccess $success"))
+                        _         <- queue.shutdown
+                        newStatus <- if (success.isDefined) ZIO.succeed(WebhookStatus.Enabled)
+                                     else clock.instant.map(WebhookStatus.Unavailable)
+                        _         <- webhookRepo.setWebhookStatus(id, newStatus)
+                        _         <- webhookState.update(map => UIO(map.updated(id, WebhookState.Enabled)))
                       } yield ()
                     }.fork
-                  case _                                                                                          =>
+                  case _                                                                    =>
                     ???
                 }
     } yield ()
@@ -239,7 +245,7 @@ object WebhookServer {
   final case class BatchingConfig(maxSize: Int, maxWaitTime: Duration)
 
   object BatchingConfig {
-    val default: ULayer[Has[Option[BatchingConfig]]] = live(10, Duration.ofSeconds(5))
+    val default: ULayer[Has[Option[BatchingConfig]]] = live(10, 5.seconds)
 
     val disabled: ULayer[Has[Option[BatchingConfig]]] =
       ZLayer.succeed(None)
@@ -286,9 +292,8 @@ object WebhookServer {
   }.toLayer
 
   sealed trait WebhookState
-
   object WebhookState {
-    final case class Change(id: WebhookId, from: WebhookState, to: WebhookState)
+    final case class Change(id: WebhookId, newState: WebhookState)
 
     case object Disabled extends WebhookState
 
@@ -298,7 +303,7 @@ object WebhookServer {
 
     object Retrying {
       def make(capacity: Int): URIO[Clock, Retrying] =
-        ZIO.mapN(instant, Queue.bounded[WebhookDispatch](capacity))(Retrying(_, _))
+        ZIO.mapN(clock.instant, Queue.bounded[WebhookDispatch](capacity))(Retrying(_, _))
     }
 
     case object Unavailable extends WebhookState
