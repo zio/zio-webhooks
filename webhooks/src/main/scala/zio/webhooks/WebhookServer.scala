@@ -190,10 +190,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
     for {
       // TODO: replace 7-day timeout, 10.millis base with config
       success   <- takeAndRetry(queue)
-                     .repeat(
-                       Schedule.recurUntil[Int](_ == 0) &&
-                         (Schedule.once andThen Schedule.exponential(10.millis))
-                     )
+                     .repeat(Schedule.recurUntil[Int](_ == 0) && Schedule.exponential(10.millis))
                      .timeoutTo(None)(Some(_))(7.days)
       newStatus <- if (success.isDefined) ZIO.succeed(WebhookStatus.Enabled)
                    else clock.instant.map(WebhookStatus.Unavailable)

@@ -208,7 +208,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             webhooks = List(webhook),
             events = events,
             ScenarioInterest.Requests
-          )(requests => assertM(requests.takeBetween(3, 4))(hasSize(equalTo(3))))
+          ) { requests =>
+            for {
+              request1 <- requests.take.as(true)
+              request2 <- requests.take.as(true)
+              _        <- TestClock.adjust(10.millis)
+              request3 <- requests.take.as(true)
+            } yield assertTrue(request1 && request2 && request3)
+          }
         },
         testM("webhook is set unavailable after 7-day retry timeout") {
           val webhook     = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -225,8 +232,31 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               status2 <- webhooks.take *> webhooks.take.map(_.status)
               _       <- TestClock.adjust(timeElapsed)
               status3 <- webhooks.take.map(_.status)
-            } yield assert(status2)(equalTo(Retrying(Instant.EPOCH))) &&
-              assert(status3)(equalTo(Unavailable(Instant.EPOCH.plus(timeElapsed))))
+            } yield assertTrue(status2 == Retrying(Instant.EPOCH)) &&
+              assertTrue(status3 == Unavailable(Instant.EPOCH.plus(timeElapsed)))
+          )
+        },
+        testM("retries past first one backs off exponentially") {
+          val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+          val events  = createPlaintextEvents(1)(webhook.id)
+
+          webhooksTestScenario(
+            stubResponses = UStream.repeat(None).take(6) ++ UStream(Some(WebhookHttpResponse(200))),
+            webhooks = List(webhook),
+            events = events,
+            ScenarioInterest.Requests
+          )(requests =>
+            for {
+              request1 <- requests.take.as(true)
+              request2 <- requests.take.as(true)
+              _        <- TestClock.adjust(10.millis)
+              request3 <- requests.take.as(true)
+              _        <- TestClock.adjust(10.millis)
+              request4 <- requests.poll
+              _        <- TestClock.adjust(10.millis)
+              request5 <- requests.take.as(true)
+            } yield assertTrue(request1 && request2 && request3 && request5) &&
+              assertTrue(request4.isEmpty)
           )
         }
         // TODO: test that retries past first one back off exponentially
