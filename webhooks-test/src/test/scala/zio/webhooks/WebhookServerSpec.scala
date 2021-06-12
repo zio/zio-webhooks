@@ -18,7 +18,7 @@ import zio.webhooks.testkit._
 import java.time.Instant
 
 object WebhookServerSpec extends DefaultRunnableSpec {
-  def spec =
+  val spec =
     suite("WebhookServerSpec")(
       suite("batching disabled")(
         suite("webhooks with at-most-once delivery")(
@@ -244,7 +244,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events  = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(None).take(6) ++ UStream(Some(WebhookHttpResponse(200))),
+              stubResponses = UStream.repeat(None).take(7) ++ UStream(Some(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
@@ -258,10 +258,29 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 request4 <- requests.poll
                 _        <- TestClock.adjust(10.millis)
                 request5 <- requests.take.as(true)
-              } yield assertTrue(request1 && request2 && request3 && request5) &&
-                assertTrue(request4.isEmpty)
+                _        <- TestClock.adjust(10.millis)
+                request6 <- requests.poll
+                _        <- TestClock.adjust(30.millis)
+                request7 <- requests.take.as(true)
+              } yield assertTrue(request1 && request2 && request3 && request5 && request7) &&
+                assertTrue(request4.isEmpty && request6.isEmpty)
             )
-          }
+          },
+          testM("doesn't retry requests after requests succeed again") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+
+            val events = createPlaintextEvents(3)(webhook.id)
+
+            webhooksTestScenario(
+              stubResponses = UStream(None) ++ UStream.repeat(Some(WebhookHttpResponse(200))),
+              webhooks = List(webhook),
+              events = events,
+              ScenarioInterest.Requests
+            )(requests => assertM(requests.takeBetween(4, 5))(hasSize(equalTo(4))))
+          },
+          testM("retries for multiple webhooks") {
+            assertCompletesM // TODO: to write this test, make a map variant for stubResponses
+          } @@ ignore
         )
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.disabled),
       suite("batching enabled")(

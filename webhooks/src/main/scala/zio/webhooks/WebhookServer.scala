@@ -14,12 +14,11 @@ import java.io.IOException
 import java.time.{ Duration, Instant }
 
 /**
- * A [[WebhookServer]] subscribes to webhook events and reliably dispatches them, i.e. failed
- * dispatches are attempted twice followed by exponential backoff. Retries are performed until some
- * duration after which webhooks will be marked `Unavailable` since some [[java.time.Instant]].
- *
- * Dispatches are batched if and only if a `batchConfig` is defined ''and'' a webhook's delivery mode
- * is set to `Batched`.
+ * A [[WebhookServer]] subscribes to [[WebhookEvent]]s and reliably delivers them, i.e. failed
+ * dispatches are retried once, followed by retries with exponential backoff. Retries are performed
+ * until some duration after which webhooks will be marked `Unavailable` since some
+ * [[java.time.Instant]]. Dispatches are batched iff a `batchConfig` is defined ''and'' a webhook's
+ * delivery mode is set to `Batched`.
  *
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
@@ -36,34 +35,14 @@ final case class WebhookServer( // TODO: split server into components, this is l
   batchingConfig: Option[BatchingConfig] = None
 ) {
 
-  private def consumeBatchElements(maxBatchSize: Int, maxWaitTime: Duration): URIO[Clock, Unit] =
-    UStream
-      .fromQueue(batchingQueue)
-      .groupByKey(
-        pair => {
-          val (webhook, event) = pair
-          (webhook.id, event.headers.find(_._1.toLowerCase == "content-type"))
-        },
-        maxBatchSize
-      ) {
-        case (_, stream) =>
-          stream
-            .groupedWithin(maxBatchSize, maxWaitTime)
-            .map(NonEmptyChunk.fromChunk)
-            .collectSome
-            .mapM(events => deliver(WebhookDispatch(events.head._1, events.map(_._2))))
-      }
-      .runDrain
-
   private def deliver(dispatch: WebhookDispatch): URIO[Clock, Unit] = {
     def startRetrying(id: WebhookId, map: Map[WebhookId, WebhookState]) =
       for {
         instant       <- clock.instant
         _             <- webhookRepo.setWebhookStatus(id, WebhookStatus.Retrying(instant))
-        retryingState <- WebhookState.Retrying.make(128)
-        stateChange    = WebhookState.Change(id, retryingState)
+        retryingState <- WebhookState.Retrying.make(128) // TODO: add retry capacity to config
         _             <- retryingState.queue.offer(dispatch)
-        _             <- changeQueue.offer(stateChange)
+        _             <- changeQueue.offer(WebhookState.Change.ToRetrying(id, retryingState.queue))
       } yield map.updated(id, retryingState)
 
     for {
@@ -86,9 +65,9 @@ final case class WebhookServer( // TODO: split server into components, this is l
                 case Some(WebhookState.Retrying(_, queue)) =>
                   queue.offer(dispatch) *> UIO(map)
                 case Some(WebhookState.Disabled)           =>
-                  ???
+                  ??? // TODO: handle
                 case Some(WebhookState.Unavailable)        =>
-                  ???
+                  ??? // TODO: handle
               }
             }
           case (AtMostOnce, _)                     =>
@@ -103,8 +82,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
       _ <- (webhook.batching, batchingConfig) match {
              case (Batched, Some(_)) =>
-               val deliveringEvent = event.copy(status = WebhookEventStatus.Delivering)
-               batchingQueue.offer((webhook, deliveringEvent))
+               batchingQueue.offer((webhook, event.copy(status = WebhookEventStatus.Delivering)))
              case _                  =>
                deliver(WebhookDispatch(webhook, NonEmptyChunk(event)))
            }
@@ -119,14 +97,14 @@ final case class WebhookServer( // TODO: split server into components, this is l
    *   - new webhook event subscription
    *   - event recovery for webhooks which need to deliver at least once
    *   - dispatch retry monitoring
-   *   - batching
+   *   - dispatch batching, if configured and enabled per webhook
    */
   def start: URIO[Clock, Any] =
     for {
       latch <- Promise.make[Nothing, Unit]
       _     <- startNewEventSubscription(latch)
       _     <- startEventRecovery
-      _     <- startRetryMonitoring // TODO[design]: should retry monitoring just be dispatch?
+      _     <- startRetryMonitoring
       _     <- startBatching
       // wait for subscriptions to be ready
       _     <- latch.await
@@ -139,8 +117,22 @@ final case class WebhookServer( // TODO: split server into components, this is l
     batchingConfig match {
       case None                                       =>
         ZIO.unit.fork
-      case Some(BatchingConfig(maxSize, maxWaitTime)) =>
-        consumeBatchElements(maxSize, maxWaitTime).forkAs("batching")
+      case Some(BatchingConfig(maxSize, maxWaitTime)) => {
+          val getWebhookIdAndContentType = (webhook: Webhook, event: WebhookEvent) =>
+            (webhook.id, event.headers.find(_._1.toLowerCase == "content-type"))
+
+          UStream
+            .fromQueue(batchingQueue)
+            .groupByKey(getWebhookIdAndContentType.tupled, maxSize) {
+              case (_, stream) =>
+                stream
+                  .groupedWithin(maxSize, maxWaitTime)
+                  .map(NonEmptyChunk.fromChunk)
+                  .collectSome
+                  .mapM(events => deliver(WebhookDispatch(events.head._1, events.map(_._2))))
+            }
+            .runDrain
+        }.forkAs("batching")
     }
 
   // get events that are Delivering whose webhooks have AtLeastOnce delivery semantics.
@@ -148,28 +140,14 @@ final case class WebhookServer( // TODO: split server into components, this is l
 
   /**
    * Starts recovery of events whose status is `Delivering` for webhooks with `AtLeastOnce`
-   * delivery semantics.
+   * delivery semantics. Recovery is done by reconstructing [[WebhookServer.WebhookState]], the
+   * server's internal representation of webhooks it handles. This is especially important.
    */
   private def startEventRecovery: UIO[Unit] = ZIO.unit
 
-  // Call webhookEventRepo.getEventsByStatus looking for new events
-  //
-  // For each new event:
-  //  - mark event as Delivering
-  //  - check to see if webhookId is retrying
-  //    - if there are queues, we're retrying
-  //      - enqueue the event
-  //    - otherwise:
-  //      - send it
-  //        - if successful
-  //          - mark it as Delivered
-  //        - if unsuccessful
-  //          - create a queue in the state
-  //          - enqueue the event into the queue
-  //
-
   /**
-   * Kicks off new [[WebhookEvent]] subscription.
+   * Starts new [[WebhookEvent]] subscription. Takes a latch which succeeds when the server is ready
+   * to receive events.
    */
   private def startNewEventSubscription(latch: Promise[Nothing, Unit]) =
     eventRepo
@@ -210,11 +188,8 @@ final case class WebhookServer( // TODO: split server into components, this is l
     for {
       update <- changeQueue.take
       _      <- update match {
-                  // TODO: Make enum
-                  case WebhookState.Change(id, WebhookState.Retrying(_, queue)) =>
+                  case WebhookState.Change.ToRetrying(id, queue) =>
                     startRetrying(id, queue).fork
-                  case _                                                        =>
-                    ???
                 }
     } yield ()
   }.forever.forkAs("retry-monitoring")
@@ -294,7 +269,10 @@ object WebhookServer {
 
   sealed trait WebhookState extends Product with Serializable
   object WebhookState {
-    final case class Change(id: WebhookId, newState: WebhookState)
+    sealed trait Change
+    object Change {
+      final case class ToRetrying(id: WebhookId, queue: Queue[WebhookDispatch]) extends Change
+    }
 
     case object Disabled extends WebhookState
 
