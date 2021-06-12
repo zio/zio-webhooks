@@ -186,12 +186,26 @@ final case class WebhookServer( // TODO: split server into components, this is l
       }
       .forkAs("new-event-subscription")
 
-  // retry dispatching every WebhookDispatch in queues twice, then exponentially
+  private def startRetrying(id: WebhookId, queue: Queue[WebhookDispatch]) =
+    for {
+      // TODO: replace 7-day timeout, 10.millis base with config
+      success   <- takeAndRetry(queue)
+                     .repeat(
+                       Schedule.recurUntil[Int](_ == 0) &&
+                         (Schedule.once andThen Schedule.exponential(10.millis))
+                     )
+                     .timeoutTo(None)(Some(_))(7.days)
+      newStatus <- if (success.isDefined) ZIO.succeed(WebhookStatus.Enabled)
+                   else clock.instant.map(WebhookStatus.Unavailable)
+      _         <- webhookRepo.setWebhookStatus(id, newStatus)
+      _         <- webhookState.update(map => UIO(map.updated(id, WebhookState.Enabled)))
+    } yield ()
+
+  // try dispatching every WebhookDispatch in queues twice, then exponentially
   // if we've retried for >7 days,
   //   mark Webhook as Unavailable
   //   clear WebhookState for that Webhook
   //   make sure that startNewEventSubscription does _not_ try to deliver to an unavailable webhook
-
   /**
    * Kicks off backoff retries for every [[WebhookEvent]] pending delivery.
    */
@@ -199,18 +213,9 @@ final case class WebhookServer( // TODO: split server into components, this is l
     for {
       update <- changeQueue.take
       _      <- update match {
-                  case WebhookState.Change(id, WebhookState.Retrying(sinceTime @ _, queue)) =>
-                    {
-                      for {
-                        success   <- takeAndRetry(queue).repeatUntil(_ == 0).timeoutTo(None)(Some(_))(7.days)
-                        _         <- queue.shutdown
-                        newStatus <- if (success.isDefined) ZIO.succeed(WebhookStatus.Enabled)
-                                     else clock.instant.map(WebhookStatus.Unavailable)
-                        _         <- webhookRepo.setWebhookStatus(id, newStatus)
-                        _         <- webhookState.update(map => UIO(map.updated(id, WebhookState.Enabled)))
-                      } yield ()
-                    }.fork
-                  case _                                                                    =>
+                  case WebhookState.Change(id, WebhookState.Retrying(_, queue)) =>
+                    startRetrying(id, queue).fork
+                  case _                                                        =>
                     ???
                 }
     } yield ()
@@ -289,7 +294,7 @@ object WebhookServer {
     } yield server
   }.toLayer
 
-  sealed trait WebhookState
+  sealed trait WebhookState extends Product with Serializable
   object WebhookState {
     final case class Change(id: WebhookId, newState: WebhookState)
 

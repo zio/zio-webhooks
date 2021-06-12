@@ -12,6 +12,7 @@ import zio.test.environment._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer.BatchingConfig
 import zio.webhooks.WebhookServerSpecUtil._
+import zio.webhooks.WebhookStatus._
 import zio.webhooks.testkit._
 
 import java.time.Instant
@@ -54,7 +55,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             webhooks = List(webhook),
             events = List(event),
             ScenarioInterest.Webhooks
-          )(webhooks => assertM(webhooks.takeBetween(1, 2))(hasSameElements(List(webhook))))
+          )(webhooks => assertM(webhooks.take)(equalTo(webhook)))
         },
         testM("event is marked Delivering, then Delivered on successful dispatch") {
           val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
@@ -212,22 +213,22 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         testM("webhook is set unavailable after 7-day retry timeout") {
           val webhook     = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
           val events      = createPlaintextEvents(1)(webhook.id)
-          val timeElapsed = 7.days + 1.minute
+          val timeElapsed = 7.days
 
           webhooksTestScenario(
             stubResponses = UStream.repeat(None),
             webhooks = List(webhook),
             events = events,
-            ScenarioInterest.Webhooks,
-            adjustDuration = Some(timeElapsed) // TODO: assert on dequeues, replacing streams
+            ScenarioInterest.Webhooks
           )(webhooks =>
-            assertM(webhooks.map(_.status).takeBetween(3, 4).map(_.drop(1)))(
-              hasSameElements(
-                List(WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Unavailable(Instant.EPOCH.plus(timeElapsed)))
-              )
-            )
+            for {
+              status2 <- webhooks.take *> webhooks.take.map(_.status)
+              _       <- TestClock.adjust(timeElapsed)
+              status3 <- webhooks.take.map(_.status)
+            } yield assert(status2)(equalTo(Retrying(Instant.EPOCH))) &&
+              assert(status3)(equalTo(Unavailable(Instant.EPOCH.plus(timeElapsed))))
           )
-        } @@ ignore
+        }
         // TODO: test that retries past first one back off exponentially
         // TODO: test that it retries for multiple webhooks
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.disabled),
@@ -362,7 +363,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.default)
       // TODO: write webhook status change tests
       //    ) @@ nonFlaky @@ timeout(2.minutes)
-    )
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -453,7 +454,7 @@ object WebhookServerSpecUtil {
     scenarioInterest: ScenarioInterest[A],
     adjustDuration: Option[Duration] = None
   )(
-    assertion: Dequeue[A] => UIO[TestResult]
+    assertion: Dequeue[A] => URIO[TestClock, TestResult]
   ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
     ScenarioInterest
       .dequeueFor(scenarioInterest)
