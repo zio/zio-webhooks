@@ -210,6 +210,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
     for {
       update <- changeQueue.take
       _      <- update match {
+                  // TODO: Make enum
                   case WebhookState.Change(id, WebhookState.Retrying(_, queue)) =>
                     startRetrying(id, queue).fork
                   case _                                                        =>
