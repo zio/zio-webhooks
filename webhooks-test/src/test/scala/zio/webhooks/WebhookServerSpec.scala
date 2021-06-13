@@ -10,7 +10,6 @@ import zio.test.TestAspect._
 import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
-import zio.webhooks.WebhookServer.BatchingConfig
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.WebhookStatus._
 import zio.webhooks.testkit._
@@ -326,7 +325,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             } yield testResult
           }
         )
-      ).injectSome[TestEnvironment](specEnv, BatchingConfig.disabled),
+      ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
         testM("batches events by max batch size") {
           val n            = 100
@@ -455,7 +454,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             adjustDuration = Some(5.seconds)
           )(requests => assertM(requests.take.map(_.content))(equalTo(expectedOutput)))
         }
-      ).injectSome[TestEnvironment](specEnv, BatchingConfig.default)
+      ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests
       //    ) @@ nonFlaky @@ timeout(2.minutes) @@ timed
     ) @@ timeout(10.seconds)
@@ -526,9 +525,9 @@ object WebhookServerSpecUtil {
     with Has[WebhookHttpClient]
     with Has[WebhookServer]
 
-  lazy val specEnv: URLayer[Clock with Has[Option[BatchingConfig]], SpecEnv] =
+  lazy val specEnv: URLayer[Clock with Has[WebhookServerConfig], SpecEnv] =
     ZLayer
-      .fromSomeMagic[Clock with Has[Option[BatchingConfig]], SpecEnv](
+      .fromSomeMagic[Clock with Has[WebhookServerConfig], SpecEnv](
         TestWebhookRepo.test,
         TestWebhookEventRepo.test,
         TestWebhookStateRepo.test,
