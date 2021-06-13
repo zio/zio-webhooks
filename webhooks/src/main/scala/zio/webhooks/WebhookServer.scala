@@ -16,9 +16,9 @@ import java.time.{ Duration, Instant }
 /**
  * A [[WebhookServer]] subscribes to [[WebhookEvent]]s and reliably delivers them, i.e. failed
  * dispatches are retried once, followed by retries with exponential backoff. Retries are performed
- * until some duration after which webhooks will be marked `Unavailable` since some
+ * until some duration after which webhooks will be marked [[WebhookStatus.Unavailable]] since some
  * [[java.time.Instant]]. Dispatches are batched iff a `batchConfig` is defined ''and'' a webhook's
- * delivery mode is set to `Batched`.
+ * delivery batching is [[WebhookDeliveryBatching.Batched]].
  *
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
@@ -171,11 +171,12 @@ final case class WebhookServer( // TODO: split server into components, this is l
                      .repeat(Schedule.recurUntil[Int](_ == 0) && Schedule.exponential(10.millis))
                      .timeoutTo(None)(Some(_))(7.days)
       newStatus <- if (success.isDefined) ZIO.succeed(WebhookStatus.Enabled)
-                   else clock.instant.map(WebhookStatus.Unavailable)
+                   else clock.instant.map(WebhookStatus.Unavailable) <& eventRepo.setAllAsFailedByWebhookId(id)
       _         <- webhookRepo.setWebhookStatus(id, newStatus)
       _         <- webhookState.update(map => UIO(map.updated(id, WebhookState.Enabled)))
     } yield ()
 
+  // TODO: add some of below to docs
   // try dispatching every WebhookDispatch in queues twice, then exponentially
   // if we've retried for >7 days,
   //   mark Webhook as Unavailable
@@ -199,6 +200,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
    */
   def shutdown: IO[IOException, Any] = ZIO.unit
 
+  // TODO: Scaladoc
   private def takeAndRetry(queue: Queue[WebhookDispatch]) =
     for {
       dispatch    <- queue.take
@@ -247,12 +249,12 @@ object WebhookServer {
       errorHub       <- Hub.sliding[WebhookError](128).toManaged_
       changeQueue    <- Queue.bounded[WebhookState.Change](1).toManaged_
       batchingConfig <- ZManaged.service[Option[BatchingConfig]]
-      repo           <- ZManaged.service[WebhookRepo]
+      webhookRepo    <- ZManaged.service[WebhookRepo]
       stateRepo      <- ZManaged.service[WebhookStateRepo]
       eventRepo      <- ZManaged.service[WebhookEventRepo]
       httpClient     <- ZManaged.service[WebhookHttpClient]
       server          = WebhookServer(
-                          repo,
+                          webhookRepo,
                           stateRepo,
                           eventRepo,
                           httpClient,
