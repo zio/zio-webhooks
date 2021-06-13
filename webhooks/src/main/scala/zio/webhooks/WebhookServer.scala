@@ -23,7 +23,7 @@ import java.time.{ Duration, Instant }
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
  */
-final case class WebhookServer( // TODO: split server into components, this is looking a little too much 😬
+final case class WebhookServer( // TODO: split server into components? this is looking a little too much 😬
   webhookRepo: WebhookRepo,
   stateRepo: WebhookStateRepo,
   eventRepo: WebhookEventRepo,
@@ -45,6 +45,24 @@ final case class WebhookServer( // TODO: split server into components, this is l
         _             <- changeQueue.offer(WebhookState.Change.ToRetrying(id, retryingState.queue))
       } yield map.updated(id, retryingState)
 
+    def updateWebhookState = {
+      val id = dispatch.webhook.id
+      webhookState.update { map =>
+        map.get(id) match {
+          case Some(WebhookState.Enabled)            =>
+            startRetrying(id, map)
+          case None                                  =>
+            startRetrying(id, map)
+          case Some(WebhookState.Retrying(_, queue)) =>
+            queue.offer(dispatch) *> UIO(map)
+          case Some(WebhookState.Disabled)           =>
+            ??? // TODO: handle
+          case Some(WebhookState.Unavailable)        =>
+            ??? // TODO: handle
+        }
+      }
+    }
+
     for {
       response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
       _        <- {
@@ -55,21 +73,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
             else
               eventRepo.setEventStatusMany(dispatch.keys, WebhookEventStatus.Delivered)
           case (AtLeastOnce, _)                    =>
-            val id = dispatch.webhook.id
-            webhookState.update { map =>
-              map.get(id) match {
-                case Some(WebhookState.Enabled)            =>
-                  startRetrying(id, map)
-                case None                                  =>
-                  startRetrying(id, map)
-                case Some(WebhookState.Retrying(_, queue)) =>
-                  queue.offer(dispatch) *> UIO(map)
-                case Some(WebhookState.Disabled)           =>
-                  ??? // TODO: handle
-                case Some(WebhookState.Unavailable)        =>
-                  ??? // TODO: handle
-              }
-            }
+            updateWebhookState
           case (AtMostOnce, _)                     =>
             eventRepo.setEventStatusMany(dispatch.events.map(_.key), WebhookEventStatus.Failed)
         }
@@ -183,7 +187,7 @@ final case class WebhookServer( // TODO: split server into components, this is l
   //   clear WebhookState for that Webhook
   //   make sure that startNewEventSubscription does _not_ try to deliver to an unavailable webhook
   /**
-   * Kicks off backoff retries for every [[WebhookEvent]] pending delivery.
+   * Starts backoff retries for every [[]] pending delivery.
    */
   private def startRetryMonitoring = {
     for {

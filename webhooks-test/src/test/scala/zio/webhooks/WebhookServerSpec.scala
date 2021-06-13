@@ -250,11 +250,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               events = events,
               ScenarioInterest.Events
             ) { events =>
-              val pollNext = events.poll <* TestClock.adjust(1.hours)
-
-              ZIO
-                .collectAll(List.fill(n)(pollNext.repeatUntil(_.exists(_.status == WebhookEventStatus.Failed))))
-                .map(_.collect { case Some(event) => event }) *> assertCompletesM
+              val pollNext     = events.poll <* TestClock.adjust(1.day)
+              val failedEvents = List.fill(n)(pollNext.repeatUntil(_.exists(_.status == WebhookEventStatus.Failed)))
+              ZIO.collectAll(failedEvents).map(_.collect { case Some(event) => event }) *> assertCompletesM
             }
           },
           testM("retries past first one backs off exponentially") {
@@ -298,8 +296,35 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )(requests => assertM(requests.takeBetween(4, 5))(hasSize(equalTo(4))))
           },
           testM("retries for multiple webhooks") {
-            assertCompletesM // TODO: to write this test, make a function variant for stubResponses
-          } @@ ignore
+            val n                 = 100
+            val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+            val eventsToNWebhooks = webhooks.map(_.id).map { webhookId =>
+              WebhookEvent(
+                WebhookEventKey(WebhookEventId(0), webhookId),
+                WebhookEventStatus.New,
+                webhookId.value.toString,
+                Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
+              )
+            }
+
+            val expectedCount = n * 2
+
+            for {
+              queues     <- ZIO.collectAll(Chunk.fill(100)(Queue.bounded[Option[WebhookHttpResponse]](2)))
+              _          <- ZIO.collectAll(queues.map(_.offerAll(List(None, Some(WebhookHttpResponse(200))))))
+              testResult <- webhooksTestScenario(
+                              stubResponses = request => queues.lift(request.content.toInt),
+                              webhooks = webhooks,
+                              events = eventsToNWebhooks,
+                              ScenarioInterest.Requests,
+                              adjustDuration = None
+                            ) { requests =>
+                              assertM(requests.takeBetween(expectedCount, expectedCount + 1))(
+                                hasSize(equalTo(expectedCount))
+                              )
+                            }
+            } yield testResult
+          }
         )
       ).injectSome[TestEnvironment](specEnv, BatchingConfig.disabled),
       suite("batching enabled")(
@@ -517,6 +542,26 @@ object WebhookServerSpecUtil {
     with Has[WebhookHttpClient]
     with Clock
 
+  // TODO: keep an eye on the duplication here
+  def webhooksTestScenario[A](
+    stubResponses: WebhookHttpRequest => Option[Queue[Option[WebhookHttpResponse]]],
+    webhooks: Iterable[Webhook],
+    events: Iterable[WebhookEvent],
+    scenarioInterest: ScenarioInterest[A],
+    adjustDuration: Option[Duration]
+  )(
+    assertion: Dequeue[A] => URIO[TestClock, TestResult]
+  ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
+    ScenarioInterest.dequeueFor(scenarioInterest).map(assertion).flatMap(_.forkManaged).use { testFiber =>
+      for {
+        _          <- TestWebhookHttpClient.setResponse(stubResponses)
+        _          <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook)
+        _          <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
+        _          <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
+        testResult <- testFiber.join
+      } yield testResult
+    }
+
   def webhooksTestScenario[A](
     stubResponses: UStream[Option[WebhookHttpResponse]],
     webhooks: Iterable[Webhook],
@@ -526,19 +571,15 @@ object WebhookServerSpecUtil {
   )(
     assertion: Dequeue[A] => URIO[TestClock, TestResult]
   ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
-    ScenarioInterest
-      .dequeueFor(scenarioInterest)
-      .map(assertion)
-      .flatMap(_.forkManaged)
-      .use { testFiber =>
-        for {
-          responseQueue <- Queue.bounded[Option[WebhookHttpResponse]](1)
-          _             <- stubResponses.run(ZSink.fromQueue(responseQueue)).fork
-          _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-          _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook)
-          _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
-          _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
-          testResult    <- testFiber.join
-        } yield testResult
-      }
+    ScenarioInterest.dequeueFor(scenarioInterest).map(assertion).flatMap(_.forkManaged).use { testFiber =>
+      for {
+        responseQueue <- Queue.bounded[Option[WebhookHttpResponse]](1)
+        _             <- stubResponses.run(ZSink.fromQueue(responseQueue)).fork
+        _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
+        _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook)
+        _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
+        _             <- adjustDuration.map(TestClock.adjust(_)).getOrElse(ZIO.unit)
+        testResult    <- testFiber.join
+      } yield testResult
+    }
 }
