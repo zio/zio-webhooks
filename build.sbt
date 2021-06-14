@@ -86,9 +86,9 @@ lazy val examples = module("zio-webhooks-examples", "examples")
     publish / skip := true,
     fork := true,
     libraryDependencies ++= Seq(
-      "dev.zio"              %% "zio-test"     % zioVersion      % "test",
-      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "test",
-      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "test"
+      "dev.zio"              %% "zio-test"     % zioVersion % "test",
+      "dev.zio"              %% "zio-test-sbt" % zioVersion % "test",
+      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
