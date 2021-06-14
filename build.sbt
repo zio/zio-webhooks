@@ -50,6 +50,7 @@ lazy val zioWebhooks = module("zio-webhooks", "webhooks")
       "dev.zio"                      %% "zio"                           % zioVersion,
       "dev.zio"                      %% "zio-prelude"                   % zioPreludeVersion,
       "dev.zio"                      %% "zio-streams"                   % zioVersion,
+      "dev.zio"                      %% "zio-test"                      % zioVersion,
       "com.softwaremill.sttp.client" %% "core"                          % sttpVersion,
       "com.softwaremill.sttp.client" %% "async-http-client-backend-zio" % sttpVersion
     )
@@ -90,7 +91,7 @@ lazy val examples = module("zio-webhooks-examples", "examples")
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioWebhooks)
+  .dependsOn(zioWebhooks, webhooksTestkit)
 
 def module(moduleName: String, fileName: String): Project =
   Project(moduleName, file(fileName))
