@@ -31,7 +31,7 @@ inThisBuild(
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
-val zioVersion        = "1.0.8"
+val zioVersion        = "1.0.9"
 val zioMagicVersion   = "0.3.2"
 val zioPreludeVersion = "1.0.0-RC5"
 val sttpVersion       = "2.2.9"
@@ -49,6 +49,8 @@ lazy val zioWebhooks = module("zio-webhooks", "webhooks")
     libraryDependencies ++= Seq(
       "dev.zio"                      %% "zio"                           % zioVersion,
       "dev.zio"                      %% "zio-prelude"                   % zioPreludeVersion,
+      "dev.zio"                      %% "zio-streams"                   % zioVersion,
+      "dev.zio"                      %% "zio-test"                      % zioVersion,
       "com.softwaremill.sttp.client" %% "core"                          % sttpVersion,
       "com.softwaremill.sttp.client" %% "async-http-client-backend-zio" % sttpVersion
     )
@@ -89,7 +91,7 @@ lazy val examples = module("zio-webhooks-examples", "examples")
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioWebhooks)
+  .dependsOn(zioWebhooks, webhooksTestkit)
 
 def module(moduleName: String, fileName: String): Project =
   Project(moduleName, file(fileName))

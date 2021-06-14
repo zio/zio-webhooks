@@ -2,25 +2,23 @@ package zio.webhooks.testkit
 
 import zio._
 import zio.prelude.NonEmptySet
-import zio.stream._
 import zio.webhooks.WebhookError._
 import zio.webhooks._
 
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
 
-  def getEvents: UStream[WebhookEvent]
+  def getEvents: UManaged[Dequeue[WebhookEvent]]
 }
 
 object TestWebhookEventRepo {
   // Layer Definitions
 
-  val test: RLayer[Has[WebhookRepo], Has[WebhookEventRepo] with Has[TestWebhookEventRepo]] = {
+  val test: ULayer[Has[WebhookEventRepo] with Has[TestWebhookEventRepo]] = {
     for {
-      ref         <- Ref.makeManaged(Map.empty[WebhookEventKey, WebhookEvent])
-      hub         <- Hub.unbounded[WebhookEvent].toManaged_
-      webhookRepo <- ZManaged.service[WebhookRepo]
-      impl         = TestWebhookEventRepoImpl(ref, hub, webhookRepo)
+      ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
+      hub <- Hub.unbounded[WebhookEvent]
+      impl = TestWebhookEventRepoImpl(ref, hub)
     } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo](impl, impl)
   }.toLayerMany
 
@@ -29,65 +27,82 @@ object TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.createEvent(event))
 
-  def getEvents: ZStream[Has[TestWebhookEventRepo], Nothing, WebhookEvent] =
-    ZStream.service[TestWebhookEventRepo].flatMap(_.getEvents)
+  def getEvents: URManaged[Has[TestWebhookEventRepo], Dequeue[WebhookEvent]] =
+    ZManaged.service[TestWebhookEventRepo].flatMap(_.getEvents)
 }
 
 final private case class TestWebhookEventRepoImpl(
   ref: Ref[Map[WebhookEventKey, WebhookEvent]],
-  hub: Hub[WebhookEvent],
-  webhookRepo: WebhookRepo
+  hub: Hub[WebhookEvent]
 ) extends WebhookEventRepo
     with TestWebhookEventRepo {
 
   def createEvent(event: WebhookEvent): UIO[Unit] =
-    for {
-      _ <- ref.update(_.updated(event.key, event))
-      _ <- hub.publish(event)
-    } yield ()
+    ref.update(_.updated(event.key, event)) <* hub.publish(event)
 
-  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit] =
-    for {
-      webhookExists <- webhookRepo.getWebhookById(webhookId).map(_.isDefined)
-      _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(webhookId)))
-      updatedMap    <- ref.updateAndGet { map =>
-                         map ++ (
-                           for ((key, event) <- map if (key.webhookId == webhookId))
-                             yield (key, event.copy(status = WebhookEventStatus.Failed))
-                         )
-                       }
-      _             <- hub.publishAll(updatedMap.values)
-    } yield ()
+  def getEvents: UManaged[Dequeue[WebhookEvent]] =
+    hub.subscribe
 
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit] =
-    for {
-      webhookExists <- webhookRepo.getWebhookById(key.webhookId).map(_.isDefined)
-      _             <- ZIO.unless(webhookExists)(ZIO.fail(MissingWebhookError(key.webhookId)))
-      eventOpt      <- ref.modify { map =>
-                         map.get(key) match {
-                           case None        =>
-                             (None, map)
-                           case Some(event) =>
-                             val updatedEvent = event.copy(status = status)
-                             (Some(updatedEvent), map.updated(key, updatedEvent))
-                         }
-                       }
-      _             <- eventOpt match {
-                         case None        =>
-                           ZIO.fail(MissingWebhookEventError(key))
-                         case Some(event) =>
-                           hub.publish(event).unit
-                       }
-    } yield ()
-
-  def getEvents: UStream[WebhookEvent] = UStream.fromHub(hub)
-
-  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent] =
-    Stream.fromHub(hub).filter(event => statuses.contains(event.status))
+  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UManaged[Dequeue[WebhookEvent]] =
+    hub.subscribe.map(_.filterOutput(event => statuses.contains(event.status)))
 
   def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
-  ): Stream[WebhookError.MissingWebhookError, WebhookEvent] =
-    getEventsByStatuses(statuses).filter(_.key.webhookId == id)
+  ): UManaged[Dequeue[WebhookEvent]] =
+    getEventsByStatuses(statuses).map(_.filterOutput(_.key.webhookId == id))
+
+  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit] =
+    for {
+      updatedMap <- ref.updateAndGet { map =>
+                      map ++ (
+                        for ((key, event) <- map if (key.webhookId == webhookId))
+                          yield (key, event.copy(status = WebhookEventStatus.Failed))
+                      )
+                    }
+      _          <- hub.publishAll(updatedMap.values)
+    } yield ()
+
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingEventError, Unit] =
+    for {
+      eventOpt <- ref.modify { map =>
+                    map.get(key) match {
+                      case None        =>
+                        (None, map)
+                      case Some(event) =>
+                        val updatedEvent = event.copy(status = status)
+                        (Some(updatedEvent), map.updated(key, updatedEvent))
+                    }
+                  }
+      _        <- eventOpt match {
+                    case None        =>
+                      ZIO.fail(MissingEventError(key))
+                    case Some(event) =>
+                      hub.publish(event).unit
+                  }
+    } yield ()
+
+  def setEventStatusMany(
+    keys: NonEmptyChunk[WebhookEventKey],
+    status: WebhookEventStatus
+  ): IO[MissingEventsError, Unit] =
+    for {
+      result <- ref.modify { map =>
+                  val missingKeys = keys.filter(!map.contains(_))
+                  if (missingKeys.nonEmpty)
+                    (NonEmptyChunk.fromChunk(missingKeys).toLeft(Iterable.empty[WebhookEvent]), map)
+                  else {
+                    val updated =
+                      for ((key, event) <- map if keys.contains(key))
+                        yield (key, event.copy(status = status))
+                    (Right(updated.values), map ++ updated)
+                  }
+                }
+      _      <- result match {
+                  case Left(missingKeys)    =>
+                    ZIO.fail(MissingEventsError(missingKeys))
+                  case Right(updatedEvents) =>
+                    hub.publishAll(updatedEvents)
+                }
+    } yield ()
 }

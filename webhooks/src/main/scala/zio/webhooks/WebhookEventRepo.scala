@@ -2,7 +2,6 @@ package zio.webhooks
 
 import zio._
 import zio.prelude.NonEmptySet
-import zio.stream._
 import zio.webhooks.WebhookError._
 
 /**
@@ -11,20 +10,10 @@ import zio.webhooks.WebhookError._
 trait WebhookEventRepo {
 
   /**
-   * Marks all events by the specified webhook id as failed.
-   */
-  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingWebhookError, Unit]
-
-  /**
-   * Sets the status of the specified event.
-   */
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[WebhookError, Unit]
-
-  /**
    * Subscribes to events given a non-empty set of statuses. Implementations are responsible for
    * ordering events.
    */
-  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UStream[WebhookEvent]
+  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UManaged[Dequeue[WebhookEvent]]
 
   /**
    * Retrieves events by [[WebhookId]] and a non-empty set of [[WebhookEventStatus]]es.
@@ -33,5 +22,20 @@ trait WebhookEventRepo {
   def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
-  ): Stream[MissingWebhookError, WebhookEvent]
+  ): UManaged[Dequeue[WebhookEvent]]
+
+  /**
+   * Marks all events by the specified webhook id as failed.
+   */
+  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit]
+
+  /**
+   * Sets the status of the specified event.
+   */
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingEventError, Unit]
+
+  /**
+   * Sets the status of multiple events.
+   */
+  def setEventStatusMany(keys: NonEmptyChunk[WebhookEventKey], status: WebhookEventStatus): IO[MissingEventsError, Unit]
 }

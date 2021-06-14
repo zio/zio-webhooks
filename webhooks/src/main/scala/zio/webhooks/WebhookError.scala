@@ -1,5 +1,7 @@
 package zio.webhooks
 
+import zio.NonEmptyChunk
+
 /**
  * Represents errors that can be raised during the operation of a webhook server.
  */
@@ -12,7 +14,12 @@ object WebhookError {
   case class MissingWebhookError(id: WebhookId) extends WebhookError
 
   /**
-   * A [[MissingWebhookEventError]] occurs when a webhook event we expect to exist is missing.
+   * A [[MissingEventError]] occurs when a webhook event we expect to exist is missing.
    */
-  case class MissingWebhookEventError(key: WebhookEventKey) extends WebhookError
+  case class MissingEventError(key: WebhookEventKey) extends WebhookError
+
+  /**
+   * A [[MissingEventsError]] occurs when multiple events we expect to exist are missing.
+   */
+  case class MissingEventsError(keys: NonEmptyChunk[WebhookEventKey]) extends WebhookError
 }

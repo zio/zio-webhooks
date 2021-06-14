@@ -11,14 +11,13 @@ import zio.webhooks.WebhookHttpResponse
 import java.io.IOException
 
 /**
- * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] backend which is in turn backed by
- * sttp's ZIO backend, specifically the [[AsyncHttpClientZioBackend]].
+ * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] using sttp's ZIO backend, i.e.
+ * [[sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend]].
  */
 final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpClient {
 
   def post(webhookRequest: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] =
     ZIO.effectSuspendTotal {
-      // handrolled WebhookHttpRequest => sttp.client.RequestT
       val sttpRequest = basicRequest
         .post(Uri(webhookRequest.url))
         .body(webhookRequest.content)
