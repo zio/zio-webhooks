@@ -6,14 +6,17 @@ import zio.webhooks.WebhookServerConfig.Batching
 
 import java.time.Duration
 
+/**
+ * A [[WebhookServerConfig]] contains configuration settings for a [[WebhookServer]]'s error hub
+ * capacity, retrying, and batching.
+ */
 case class WebhookServerConfig(
   errorSlidingCapacity: Int,
   retry: WebhookServerConfig.Retry,
   batching: Option[Batching] = None
 )
 
-// TODO: pull in zio-config, add this in solution
-object WebhookServerConfig {
+object WebhookServerConfig { // TODO: make example
   val default: ULayer[Has[WebhookServerConfig]] = ZLayer.succeed(
     WebhookServerConfig(
       errorSlidingCapacity = 128,
@@ -31,18 +34,27 @@ object WebhookServerConfig {
       Has(serverConfig.get.copy(batching = Some(batching.get)))
   }
 
-  final case class Batching(queue: Queue[(Webhook, WebhookEvent)], maxSize: Int, maxWaitTime: Duration)
+  /**
+   * Batching configuration settings
+   *
+   * @param capacity Max number of elements to hold in batching
+   * @param maxSize Max number of events that should be in a batch
+   * @param maxWaitTime Max amount of time to wait before a batch is made
+   */
+  final case class Batching(capacity: Int, maxSize: Int, maxWaitTime: Duration)
 
   object Batching {
-    val default: ULayer[Has[Batching]] = make(128)
-
-    def make(capacity: Int): ULayer[Has[Batching]] =
-      Queue
-        .bounded[(Webhook, WebhookEvent)](capacity)
-        .map(queue => Batching(queue, maxSize = 10, maxWaitTime = 5.seconds))
-        .toLayer
+    val default: ULayer[Has[Batching]] = ZLayer.succeed(Batching(128, 10, 5.seconds))
   }
 
+  /**
+   * Retry configuration settings
+   *
+   * @param capacity Max number of dispatches to hold for each webhook
+   * @param exponentialBase Base duration for spacing out retries
+   * @param exponentialFactor Factor applied to `exponentialBase` to space out retries exponentially
+   * @param timeout Max duration to wait before retries for a webhook time out
+   */
   final case class Retry(
     capacity: Int,
     exponentialBase: Duration,

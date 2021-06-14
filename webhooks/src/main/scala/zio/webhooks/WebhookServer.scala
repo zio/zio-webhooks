@@ -29,10 +29,16 @@ final case class WebhookServer( // TODO: split server into components? this is l
   httpClient: WebhookHttpClient,
   errorHub: Hub[WebhookError],
   webhookState: RefM[Map[WebhookId, WebhookServer.WebhookState]],
+  batchingQueue: Option[Queue[(Webhook, WebhookEvent)]],
   changeQueue: Queue[WebhookState.Change],
   config: WebhookServerConfig
 ) {
 
+  /**
+   * Attempts delivery of a [[WebhookDispatch]] to the webhook receiver. On successful delivery,
+   * dispatched events are marked [[WebhookEventStatus.Delivered]]. On failure, retries are
+   * enqueued for events from webhooks with at-least-once delivery semantics.
+   */
   private def deliver(dispatch: WebhookDispatch): URIO[Clock, Unit] = {
     def startRetrying(id: WebhookId, map: Map[WebhookId, WebhookState]) =
       for {
@@ -82,24 +88,30 @@ final case class WebhookServer( // TODO: split server into components? this is l
   private def dispatchNewEvent(webhook: Webhook, event: WebhookEvent): ZIO[Clock, WebhookError, Unit] =
     for {
       _ <- eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering)
-      _ <- (webhook.batching, config.batching) match {
-             case (Batched, Some(batching)) =>
-               batching.queue.offer((webhook, event.copy(status = WebhookEventStatus.Delivering)))
-             case _                         =>
+      _ <- (webhook.batching, batchingQueue) match {
+             case (Batched, Some(queue)) =>
+               queue.offer((webhook, event.copy(status = WebhookEventStatus.Delivering)))
+             case _                      =>
                deliver(WebhookDispatch(webhook, NonEmptyChunk(event)))
            }
     } yield ()
 
+  /**
+   * Exposes a way to listen for [[WebhookError]]s, namely missing webhooks or events. This provides
+   * clients a way to handle server errors that would otherwise just fail silently.
+   */
   def getErrors: UManaged[Dequeue[WebhookError]] =
     errorHub.subscribe
 
   /**
-   * Starts the webhook server. Kicks off the following to run concurrently:
+   * Starts the webhook server. The following are run concurrently:
    *
    *   - new webhook event subscription
    *   - event recovery for webhooks which need to deliver at least once
    *   - dispatch retry monitoring
    *   - dispatch batching, if configured and enabled per webhook
+   *
+   * The server is ready once it signals readiness to accept new events.
    */
   def start: URIO[Clock, Any] =
     for {
@@ -108,23 +120,20 @@ final case class WebhookServer( // TODO: split server into components? this is l
       _     <- startEventRecovery
       _     <- startRetryMonitoring
       _     <- startBatching
-      // wait for subscriptions to be ready
       _     <- latch.await
     } yield ()
 
   /**
-   * Starts a fiber that listens to events queued for batched webhook dispatch
+   * Starts a fiber that listens to events queued for batched webhook dispatch.
    */
   private def startBatching: URIO[Clock, Fiber.Runtime[Nothing, Unit]] =
-    config.batching match {
-      case None                                                            =>
-        ZIO.unit.fork
-      case Some(WebhookServerConfig.Batching(queue, maxSize, maxWaitTime)) => {
+    (config.batching, batchingQueue) match {
+      case (Some(WebhookServerConfig.Batching(_, maxSize, maxWaitTime)), Some(batchingQueue)) => {
           val getWebhookIdAndContentType = (webhook: Webhook, event: WebhookEvent) =>
             (webhook.id, event.headers.find(_._1.toLowerCase == "content-type"))
 
           UStream
-            .fromQueue(queue)
+            .fromQueue(batchingQueue)
             .groupByKey(getWebhookIdAndContentType.tupled, maxSize) {
               case (_, stream) =>
                 stream
@@ -135,15 +144,15 @@ final case class WebhookServer( // TODO: split server into components? this is l
             }
             .runDrain
         }.forkAs("batching")
+      case _                                                                                  =>
+        ZIO.unit.fork
     }
 
-  // get events that are Delivering whose webhooks have AtLeastOnce delivery semantics.
-  // reconstruct webhookState
-
   /**
-   * Starts recovery of events whose status is `Delivering` for webhooks with `AtLeastOnce`
-   * delivery semantics. Recovery is done by reconstructing [[WebhookServer.WebhookState]], the
-   * server's internal representation of webhooks it handles. This is especially important.
+   * Starts recovery of events with status [[WebhookEventStatus.Delivering]] for webhooks with
+   * [[WebhookDeliverySemantics.AtLeastOnce]]. Recovery is done by reconstructing
+   * [[WebhookServer.WebhookState]], the server's internal representation of webhooks it handles.
+   * This is especially important.
    */
   private def startEventRecovery: UIO[Unit] = ZIO.unit
 
@@ -166,37 +175,37 @@ final case class WebhookServer( // TODO: split server into components? this is l
       }
       .forkAs("new-event-subscription")
 
+  /**
+   * Starts retries a webhook's queue of dispatches. Retrying is done until the queue is exhausted.
+   * If retrying times out, the webhook is set to [[WebhookStatus.Unavailable]] and all its events
+   * are marked [[WebhookEventStatus.Failed]].
+   */
   private def startRetrying(id: WebhookId, queue: Queue[WebhookDispatch]) =
     for {
-      // TODO: replace 7-day timeout, 10.millis base with config
       success   <- takeAndRetry(queue)
                      .repeat(
-                       Schedule.recurUntil[Int](_ == 0) && Schedule
-                         .exponential(config.retry.exponentialBase, config.retry.exponentialFactor)
+                       Schedule.recurUntil[Int](_ == 0) &&
+                         Schedule.exponential(config.retry.exponentialBase, config.retry.exponentialFactor)
                      )
                      .timeoutTo(None)(Some(_))(config.retry.timeout)
-      newStatus <- if (success.isDefined) ZIO.succeed(WebhookStatus.Enabled)
-                   else clock.instant.map(WebhookStatus.Unavailable) <& eventRepo.setAllAsFailedByWebhookId(id)
+      newStatus <- if (success.isDefined)
+                     ZIO.succeed(WebhookStatus.Enabled)
+                   else
+                     clock.instant.map(WebhookStatus.Unavailable) <& eventRepo.setAllAsFailedByWebhookId(id)
       _         <- webhookRepo.setWebhookStatus(id, newStatus)
       _         <- webhookState.update(map => UIO(map.updated(id, WebhookState.Enabled)))
     } yield ()
 
-  // TODO: add some of below to docs
-  // try dispatching every WebhookDispatch in queues twice, then exponentially
-  // if we've retried for >7 days,
-  //   mark Webhook as Unavailable
-  //   clear WebhookState for that Webhook
-  //   make sure that startNewEventSubscription does _not_ try to deliver to an unavailable webhook
   /**
-   * Starts backoff retries for every [[]] pending delivery.
+   * Starts monitoring for internal webhook state changes, i.e. [[WebhookState.Change.ToRetrying]].
    */
   private def startRetryMonitoring = {
     for {
       update <- changeQueue.take
-      _      <- update match {
-                  case WebhookState.Change.ToRetrying(id, queue) =>
-                    startRetrying(id, queue).fork
-                }
+      _      <- (update match {
+                    case WebhookState.Change.ToRetrying(id, queue) =>
+                      startRetrying(id, queue).catchAll(errorHub.publish).fork
+                  })
     } yield ()
   }.forever.forkAs("retry-monitoring")
 
@@ -205,10 +214,15 @@ final case class WebhookServer( // TODO: split server into components? this is l
    */
   def shutdown: IO[IOException, Any] = ZIO.unit
 
-  // TODO: Scaladoc
-  private def takeAndRetry(queue: Queue[WebhookDispatch]) =
+  /**
+   * Takes a dispatch from a retry queue and attempts delivery. When successful, dispatch events are
+   * marked [[WebhookEventStatus.Delivered]]. On failure, dispatch is put back into the queue.
+   *
+   * Returns the current queue size.
+   */
+  private def takeAndRetry(retryQueue: Queue[WebhookDispatch]) =
     for {
-      dispatch    <- queue.take
+      dispatch    <- retryQueue.take
       response    <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
       _           <- response match {
                        case Some(WebhookHttpResponse(200)) =>
@@ -217,9 +231,9 @@ final case class WebhookServer( // TODO: split server into components? this is l
                          else
                            eventRepo.setEventStatusMany(dispatch.keys, WebhookEventStatus.Delivered)
                        case _                              =>
-                         queue.offer(dispatch)
+                         retryQueue.offer(dispatch)
                      }
-      currentSize <- queue.size
+      currentSize <- retryQueue.size
     } yield currentSize
 }
 
@@ -238,26 +252,31 @@ object WebhookServer {
 
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
-      serverConfig <- ZManaged.service[WebhookServerConfig]
-      state        <- RefM.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
-      errorHub     <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity).toManaged_
-      changeQueue  <- Queue.bounded[WebhookState.Change](1).toManaged_
-      webhookRepo  <- ZManaged.service[WebhookRepo]
-      stateRepo    <- ZManaged.service[WebhookStateRepo]
-      eventRepo    <- ZManaged.service[WebhookEventRepo]
-      httpClient   <- ZManaged.service[WebhookHttpClient]
-      server        = WebhookServer(
-                        webhookRepo,
-                        stateRepo,
-                        eventRepo,
-                        httpClient,
-                        errorHub,
-                        state,
-                        changeQueue,
-                        serverConfig
-                      )
-      _            <- server.start.toManaged_
-      _            <- ZManaged.finalizer(server.shutdown.orDie)
+      serverConfig  <- ZManaged.service[WebhookServerConfig]
+      state         <- RefM.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
+      errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity).toManaged_
+      batchingQueue <-
+        ZIO
+          .foreach(serverConfig.batching)(batching => Queue.bounded[(Webhook, WebhookEvent)](batching.capacity))
+          .toManaged_
+      changeQueue   <- Queue.bounded[WebhookState.Change](1).toManaged_
+      webhookRepo   <- ZManaged.service[WebhookRepo]
+      stateRepo     <- ZManaged.service[WebhookStateRepo]
+      eventRepo     <- ZManaged.service[WebhookEventRepo]
+      httpClient    <- ZManaged.service[WebhookHttpClient]
+      server         = WebhookServer(
+                         webhookRepo,
+                         stateRepo,
+                         eventRepo,
+                         httpClient,
+                         errorHub,
+                         state,
+                         batchingQueue,
+                         changeQueue,
+                         serverConfig
+                       )
+      _             <- server.start.toManaged_
+      _             <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server
   }.toLayer
 
