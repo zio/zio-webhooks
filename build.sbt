@@ -63,9 +63,9 @@ lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
   .settings(
     publish / skip := true,
     libraryDependencies ++= Seq(
-      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "test",
       "dev.zio"              %% "zio-test"     % zioVersion      % "test",
-      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "test"
+      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "test",
+      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "test"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
@@ -86,8 +86,9 @@ lazy val examples = module("zio-webhooks-examples", "examples")
     publish / skip := true,
     fork := true,
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio-test"     % zioVersion % "test",
-      "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
+      "dev.zio"              %% "zio-test"     % zioVersion      % "test",
+      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "test",
+      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "test"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
