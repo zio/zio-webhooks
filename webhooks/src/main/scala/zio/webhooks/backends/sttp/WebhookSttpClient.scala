@@ -2,7 +2,6 @@ package zio.webhooks.backends.sttp
 
 import _root_.sttp.client._
 import _root_.sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend
-import _root_.sttp.model.Uri
 import zio._
 import zio.webhooks.WebhookHttpClient
 import zio.webhooks.WebhookHttpRequest
@@ -19,7 +18,7 @@ final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpCl
   def post(webhookRequest: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] =
     ZIO.effectSuspendTotal {
       val sttpRequest = basicRequest
-        .post(Uri(webhookRequest.url))
+        .post(uri"${webhookRequest.url}")
         .body(webhookRequest.content)
         .headers(webhookRequest.headers.toMap)
       sttpClient
