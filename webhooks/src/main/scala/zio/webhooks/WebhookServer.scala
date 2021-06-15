@@ -201,10 +201,10 @@ final class WebhookServer private (
   private def startRetryMonitoring = {
     for {
       update <- changeQueue.take
-      _      <- (update match {
-                    case WebhookState.Change.ToRetrying(id, queue) =>
-                      startRetrying(id, queue).catchAll(errorHub.publish).fork
-                  })
+      _      <- update match {
+                  case WebhookState.Change.ToRetrying(id, queue) =>
+                    startRetrying(id, queue).catchAll(errorHub.publish).fork
+                }
     } yield ()
   }.forever.forkAs("retry-monitoring")
 
@@ -237,6 +237,7 @@ final class WebhookServer private (
 }
 
 object WebhookServer {
+
   type Env = Has[WebhookRepo]
     with Has[WebhookStateRepo]
     with Has[WebhookEventRepo]
@@ -249,31 +250,28 @@ object WebhookServer {
 
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
-      serverConfig <- ZManaged.service[WebhookServerConfig]
-      webhookRepo  <- ZManaged.service[WebhookRepo]
-      eventRepo    <- ZManaged.service[WebhookEventRepo]
-      httpClient   <- ZManaged.service[WebhookHttpClient]
-      server       <- WebhookServer.make(serverConfig, webhookRepo, eventRepo, httpClient)
-      _            <- server.start.toManaged_
-      _            <- ZManaged.finalizer(server.shutdown.orDie)
+      server <- WebhookServer.create.toManaged_
+      _      <- server.start.toManaged_
+      _      <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server
   }.toLayer
 
-  def make(
-    serverConfig: WebhookServerConfig,
-    webhookRepo: WebhookRepo,
-    eventRepo: WebhookEventRepo,
-    httpClient: WebhookHttpClient
-  ): UManaged[WebhookServer] =
+  /**
+   * Creates a server, pulling dependencies from the environment while initializing internal state.
+   */
+  def create: URIO[Env, WebhookServer] =
     for {
-      state         <- RefM.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
-      errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity).toManaged_
+      serverConfig  <- ZIO.service[WebhookServerConfig]
+      webhookRepo   <- ZIO.service[WebhookRepo]
+      eventRepo     <- ZIO.service[WebhookEventRepo]
+      httpClient    <- ZIO.service[WebhookHttpClient]
+      state         <- RefM.make(Map.empty[WebhookId, WebhookServer.WebhookState])
+      errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity)
       batchingQueue <- ZIO
                          .foreach(serverConfig.batching) { batching =>
                            Queue.bounded[(Webhook, WebhookEvent)](batching.capacity)
                          }
-                         .toManaged_
-      changeQueue   <- Queue.bounded[WebhookState.Change](1).toManaged_
+      changeQueue   <- Queue.bounded[WebhookState.Change](1)
     } yield new WebhookServer(
       webhookRepo,
       eventRepo,
