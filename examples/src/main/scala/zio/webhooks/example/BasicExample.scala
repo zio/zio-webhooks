@@ -11,14 +11,14 @@ import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
-object DefaultConfigApp extends App {
+object BasicExample extends App {
 
   private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
     WebhookEvent(
       WebhookEventKey(WebhookEventId(i), webhook.id),
       WebhookEventStatus.New,
-      "event payload " + i,
-      Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
+      s"""{"payload":$i}""",
+      Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
     )
   }
 

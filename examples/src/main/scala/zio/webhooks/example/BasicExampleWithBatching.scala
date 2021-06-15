@@ -11,27 +11,7 @@ import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
-object CustomConfigApp extends App {
-
-  private lazy val customConfig: ULayer[Has[WebhookServerConfig]] =
-    ZLayer.succeed(
-      WebhookServerConfig(
-        errorSlidingCapacity = 128,
-        WebhookServerConfig.Retry(
-          capacity = 64,
-          exponentialBase = 1.second,
-          exponentialFactor = 1.5,
-          timeout = 1.day
-        ),
-        Some(
-          WebhookServerConfig.Batching(
-            capacity = 256,
-            maxSize = 5,
-            maxWaitTime = 1.second
-          )
-        )
-      )
-    )
+object BasicExampleWithBatching extends App {
 
   private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
     WebhookEvent(
@@ -42,7 +22,7 @@ object CustomConfigApp extends App {
     )
   }
 
-  private lazy val httpApp = HttpApp.collectM {
+  private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       ZIO
         .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
@@ -56,7 +36,7 @@ object CustomConfigApp extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.schedule(Schedule.fixed(200.millis)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- events.schedule(Schedule.fixed(500.millis)).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
@@ -66,7 +46,7 @@ object CustomConfigApp extends App {
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
         WebhookSttpClient.live,
-        customConfig,
+        WebhookServerConfig.defaultWithBatching,
         WebhookServer.live
       )
       .exitCode

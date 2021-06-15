@@ -2,6 +2,6 @@ package zio.webhooks.example
 
 import zio._
 
-object ServerShutdownOnFirstErrorApp extends App {
+object ServerShutdownOnFirstErrorExample extends App {
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] = ???
 }

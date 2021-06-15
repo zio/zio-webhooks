@@ -2,6 +2,6 @@ package zio.webhooks.example
 
 import zio._
 
-object ManualServerLayerApp extends App {
+object ManualServerExample extends App {
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] = ???
 }
