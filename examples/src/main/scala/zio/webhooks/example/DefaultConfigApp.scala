@@ -13,13 +13,6 @@ import zio.webhooks.testkit._
 
 object DefaultConfigApp extends App {
 
-  private val httpApp = HttpApp.collectM {
-    case request @ Method.POST -> Root / "endpoint" =>
-      ZIO
-        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-        .as(Response.status(Status.OK))
-  }
-
   private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
     WebhookEvent(
       WebhookEventKey(WebhookEventId(i), webhook.id),
@@ -27,6 +20,13 @@ object DefaultConfigApp extends App {
       "event payload " + i,
       Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
     )
+  }
+
+  private val httpApp = HttpApp.collectM {
+    case request @ Method.POST -> Root / "endpoint" =>
+      ZIO
+        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+        .as(Response.status(Status.OK))
   }
 
   private lazy val port = 8080
