@@ -22,16 +22,15 @@ import java.time.Instant
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
  */
-final case class WebhookServer( // TODO: split server into components? this is looking a little too much 😬
-  webhookRepo: WebhookRepo,
-  stateRepo: WebhookStateRepo,
-  eventRepo: WebhookEventRepo,
-  httpClient: WebhookHttpClient,
-  errorHub: Hub[WebhookError],
-  webhookState: RefM[Map[WebhookId, WebhookServer.WebhookState]],
-  batchingQueue: Option[Queue[(Webhook, WebhookEvent)]],
-  changeQueue: Queue[WebhookState.Change],
-  config: WebhookServerConfig
+final class WebhookServer private (
+  private val webhookRepo: WebhookRepo,
+  private val eventRepo: WebhookEventRepo,
+  private val httpClient: WebhookHttpClient,
+  private val errorHub: Hub[WebhookError],
+  private val webhookState: RefM[Map[WebhookId, WebhookServer.WebhookState]],
+  private val batchingQueue: Option[Queue[(Webhook, WebhookEvent)]],
+  private val changeQueue: Queue[WebhookState.Change],
+  private val config: WebhookServerConfig
 ) {
 
   /**
@@ -238,8 +237,6 @@ final case class WebhookServer( // TODO: split server into components? this is l
 }
 
 object WebhookServer {
-  // TODO: Smart constructor
-
   type Env = Has[WebhookRepo]
     with Has[WebhookStateRepo]
     with Has[WebhookEventRepo]
@@ -252,36 +249,44 @@ object WebhookServer {
 
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
-      serverConfig  <- ZManaged.service[WebhookServerConfig]
-      state         <- RefM.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
-      errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity).toManaged_
-      batchingQueue <-
-        ZIO
-          .foreach(serverConfig.batching)(batching => Queue.bounded[(Webhook, WebhookEvent)](batching.capacity))
-          .toManaged_
-      changeQueue   <- Queue.bounded[WebhookState.Change](1).toManaged_
-      webhookRepo   <- ZManaged.service[WebhookRepo]
-      stateRepo     <- ZManaged.service[WebhookStateRepo]
-      eventRepo     <- ZManaged.service[WebhookEventRepo]
-      httpClient    <- ZManaged.service[WebhookHttpClient]
-      server         = WebhookServer(
-                         webhookRepo,
-                         stateRepo,
-                         eventRepo,
-                         httpClient,
-                         errorHub,
-                         state,
-                         batchingQueue,
-                         changeQueue,
-                         serverConfig
-                       )
-      _             <- server.start.toManaged_
-      _             <- ZManaged.finalizer(server.shutdown.orDie)
+      serverConfig <- ZManaged.service[WebhookServerConfig]
+      webhookRepo  <- ZManaged.service[WebhookRepo]
+      eventRepo    <- ZManaged.service[WebhookEventRepo]
+      httpClient   <- ZManaged.service[WebhookHttpClient]
+      server       <- WebhookServer.make(serverConfig, webhookRepo, eventRepo, httpClient)
+      _            <- server.start.toManaged_
+      _            <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server
   }.toLayer
 
-  sealed trait WebhookState extends Product with Serializable
-  object WebhookState {
+  def make(
+    serverConfig: WebhookServerConfig,
+    webhookRepo: WebhookRepo,
+    eventRepo: WebhookEventRepo,
+    httpClient: WebhookHttpClient
+  ): UManaged[WebhookServer] =
+    for {
+      state         <- RefM.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
+      errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity).toManaged_
+      batchingQueue <- ZIO
+                         .foreach(serverConfig.batching) { batching =>
+                           Queue.bounded[(Webhook, WebhookEvent)](batching.capacity)
+                         }
+                         .toManaged_
+      changeQueue   <- Queue.bounded[WebhookState.Change](1).toManaged_
+    } yield new WebhookServer(
+      webhookRepo,
+      eventRepo,
+      httpClient,
+      errorHub,
+      state,
+      batchingQueue,
+      changeQueue,
+      serverConfig
+    )
+
+  private sealed trait WebhookState extends Product with Serializable
+  private object WebhookState {
     sealed trait Change
     object Change {
       final case class ToRetrying(id: WebhookId, queue: Queue[WebhookDispatch]) extends Change

@@ -16,7 +16,7 @@ case class WebhookServerConfig(
   batching: Option[Batching] = None
 )
 
-object WebhookServerConfig { // TODO: make example
+object WebhookServerConfig {
   val default: ULayer[Has[WebhookServerConfig]] = ZLayer.succeed(
     WebhookServerConfig(
       errorSlidingCapacity = 128,
