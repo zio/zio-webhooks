@@ -237,7 +237,6 @@ final class WebhookServer private (
 }
 
 object WebhookServer {
-
   type Env = Has[WebhookRepo]
     with Has[WebhookStateRepo]
     with Has[WebhookEventRepo]
@@ -282,6 +281,9 @@ object WebhookServer {
       changeQueue,
       serverConfig
     )
+
+  def shutdown: ZIO[Has[WebhookServer], IOException, Any] =
+    ZIO.serviceWith(_.shutdown)
 
   private sealed trait WebhookState extends Product with Serializable
   private object WebhookState {
