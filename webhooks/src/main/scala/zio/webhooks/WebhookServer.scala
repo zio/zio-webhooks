@@ -22,16 +22,15 @@ import java.time.Instant
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
  */
-final case class WebhookServer( // TODO: split server into components? this is looking a little too much 😬
-  webhookRepo: WebhookRepo,
-  stateRepo: WebhookStateRepo,
-  eventRepo: WebhookEventRepo,
-  httpClient: WebhookHttpClient,
-  errorHub: Hub[WebhookError],
-  webhookState: RefM[Map[WebhookId, WebhookServer.WebhookState]],
-  batchingQueue: Option[Queue[(Webhook, WebhookEvent)]],
-  changeQueue: Queue[WebhookState.Change],
-  config: WebhookServerConfig
+final class WebhookServer private (
+  private val webhookRepo: WebhookRepo,
+  private val eventRepo: WebhookEventRepo,
+  private val httpClient: WebhookHttpClient,
+  private val errorHub: Hub[WebhookError],
+  private val webhookState: RefM[Map[WebhookId, WebhookServer.WebhookState]],
+  private val batchingQueue: Option[Queue[(Webhook, WebhookEvent)]],
+  private val changeQueue: Queue[WebhookState.Change],
+  private val config: WebhookServerConfig
 ) {
 
   /**
@@ -49,7 +48,7 @@ final case class WebhookServer( // TODO: split server into components? this is l
         _             <- changeQueue.offer(WebhookState.Change.ToRetrying(id, retryingState.queue))
       } yield map.updated(id, retryingState)
 
-    def updateWebhookState = {
+    def handleAtLeastOnce = {
       val id = dispatch.webhook.id
       webhookState.update { map =>
         map.get(id) match {
@@ -77,7 +76,7 @@ final case class WebhookServer( // TODO: split server into components? this is l
             else
               eventRepo.setEventStatusMany(dispatch.keys, WebhookEventStatus.Delivered)
           case (AtLeastOnce, _)                    =>
-            updateWebhookState
+            handleAtLeastOnce
           case (AtMostOnce, _)                     =>
             eventRepo.setEventStatusMany(dispatch.events.map(_.key), WebhookEventStatus.Failed)
         }
@@ -152,7 +151,7 @@ final case class WebhookServer( // TODO: split server into components? this is l
    * Starts recovery of events with status [[WebhookEventStatus.Delivering]] for webhooks with
    * [[WebhookDeliverySemantics.AtLeastOnce]]. Recovery is done by reconstructing
    * [[WebhookServer.WebhookState]], the server's internal representation of webhooks it handles.
-   * This is especially important.
+   * This ensures retries continue after a server is restarted.
    */
   private def startEventRecovery: UIO[Unit] = ZIO.unit
 
@@ -202,16 +201,20 @@ final case class WebhookServer( // TODO: split server into components? this is l
   private def startRetryMonitoring = {
     for {
       update <- changeQueue.take
-      _      <- (update match {
-                    case WebhookState.Change.ToRetrying(id, queue) =>
-                      startRetrying(id, queue).catchAll(errorHub.publish).fork
-                  })
+      _      <- update match {
+                  case WebhookState.Change.ToRetrying(id, queue) =>
+                    startRetrying(id, queue).catchAll(errorHub.publish).fork
+                }
     } yield ()
   }.forever.forkAs("retry-monitoring")
 
   /**
    * Waits until all work in progress is finished, then shuts down.
    */
+  // let batching finish
+  // let in-flight retry requests finish (maybe fork them uninterruptibly)
+  // persist retry state for each webhook
+  // check for shutdown before handling new events
   def shutdown: IO[IOException, Any] = ZIO.unit
 
   /**
@@ -238,7 +241,33 @@ final case class WebhookServer( // TODO: split server into components? this is l
 }
 
 object WebhookServer {
-  // TODO: Smart constructor
+
+  /**
+   * Creates a server, pulling dependencies from the environment while initializing internal state.
+   */
+  def create: URIO[Env, WebhookServer] =
+    for {
+      serverConfig  <- ZIO.service[WebhookServerConfig]
+      webhookRepo   <- ZIO.service[WebhookRepo]
+      eventRepo     <- ZIO.service[WebhookEventRepo]
+      httpClient    <- ZIO.service[WebhookHttpClient]
+      state         <- RefM.make(Map.empty[WebhookId, WebhookServer.WebhookState])
+      errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity)
+      batchingQueue <- ZIO
+                         .foreach(serverConfig.batching) { batching =>
+                           Queue.bounded[(Webhook, WebhookEvent)](batching.capacity)
+                         }
+      changeQueue   <- Queue.bounded[WebhookState.Change](1)
+    } yield new WebhookServer(
+      webhookRepo,
+      eventRepo,
+      httpClient,
+      errorHub,
+      state,
+      batchingQueue,
+      changeQueue,
+      serverConfig
+    )
 
   type Env = Has[WebhookRepo]
     with Has[WebhookStateRepo]
@@ -250,38 +279,22 @@ object WebhookServer {
   def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.getErrors)
 
+  /**
+   * Creates a server, ensuring shutdown on release.
+   */
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
-      serverConfig  <- ZManaged.service[WebhookServerConfig]
-      state         <- RefM.makeManaged(Map.empty[WebhookId, WebhookServer.WebhookState])
-      errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity).toManaged_
-      batchingQueue <-
-        ZIO
-          .foreach(serverConfig.batching)(batching => Queue.bounded[(Webhook, WebhookEvent)](batching.capacity))
-          .toManaged_
-      changeQueue   <- Queue.bounded[WebhookState.Change](1).toManaged_
-      webhookRepo   <- ZManaged.service[WebhookRepo]
-      stateRepo     <- ZManaged.service[WebhookStateRepo]
-      eventRepo     <- ZManaged.service[WebhookEventRepo]
-      httpClient    <- ZManaged.service[WebhookHttpClient]
-      server         = WebhookServer(
-                         webhookRepo,
-                         stateRepo,
-                         eventRepo,
-                         httpClient,
-                         errorHub,
-                         state,
-                         batchingQueue,
-                         changeQueue,
-                         serverConfig
-                       )
-      _             <- server.start.toManaged_
-      _             <- ZManaged.finalizer(server.shutdown.orDie)
+      server <- WebhookServer.create.toManaged_
+      _      <- server.start.toManaged_
+      _      <- ZManaged.finalizer(server.shutdown.orDie)
     } yield server
   }.toLayer
 
-  sealed trait WebhookState extends Product with Serializable
-  object WebhookState {
+  def shutdown: ZIO[Has[WebhookServer], IOException, Any] =
+    ZIO.serviceWith(_.shutdown)
+
+  private sealed trait WebhookState extends Product with Serializable
+  private object WebhookState {
     sealed trait Change
     object Change {
       final case class ToRetrying(id: WebhookId, queue: Queue[WebhookDispatch]) extends Change

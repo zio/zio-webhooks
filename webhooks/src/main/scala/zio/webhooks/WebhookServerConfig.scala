@@ -8,7 +8,7 @@ import java.time.Duration
 
 /**
  * A [[WebhookServerConfig]] contains configuration settings for a [[WebhookServer]]'s error hub
- * capacity, retrying, and batching.
+ * capacity, retrying, and batching. For optimal performance, use capacities that are powers of 2.
  */
 case class WebhookServerConfig(
   errorSlidingCapacity: Int,
@@ -16,7 +16,7 @@ case class WebhookServerConfig(
   batching: Option[Batching] = None
 )
 
-object WebhookServerConfig { // TODO: make example
+object WebhookServerConfig {
   val default: ULayer[Has[WebhookServerConfig]] = ZLayer.succeed(
     WebhookServerConfig(
       errorSlidingCapacity = 128,
