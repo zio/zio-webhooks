@@ -211,6 +211,10 @@ final class WebhookServer private (
   /**
    * Waits until all work in progress is finished, then shuts down.
    */
+  // let batching finish
+  // let in-flight retry requests finish (maybe fork them uninterruptibly)
+  // persist retry state for each webhook
+  // check for shutdown before handling new events
   def shutdown: IO[IOException, Any] = ZIO.unit
 
   /**
@@ -237,26 +241,6 @@ final class WebhookServer private (
 }
 
 object WebhookServer {
-  type Env = Has[WebhookRepo]
-    with Has[WebhookStateRepo]
-    with Has[WebhookEventRepo]
-    with Has[WebhookHttpClient]
-    with Has[WebhookServerConfig]
-    with Clock
-
-  def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
-    ZManaged.service[WebhookServer].flatMap(_.getErrors)
-
-  /**
-   * Creates a server, ensuring shutdown on release.
-   */
-  val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
-    for {
-      server <- WebhookServer.create.toManaged_
-      _      <- server.start.toManaged_
-      _      <- ZManaged.finalizer(server.shutdown.orDie)
-    } yield server
-  }.toLayer
 
   /**
    * Creates a server, pulling dependencies from the environment while initializing internal state.
@@ -284,6 +268,27 @@ object WebhookServer {
       changeQueue,
       serverConfig
     )
+
+  type Env = Has[WebhookRepo]
+    with Has[WebhookStateRepo]
+    with Has[WebhookEventRepo]
+    with Has[WebhookHttpClient]
+    with Has[WebhookServerConfig]
+    with Clock
+
+  def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
+    ZManaged.service[WebhookServer].flatMap(_.getErrors)
+
+  /**
+   * Creates a server, ensuring shutdown on release.
+   */
+  val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
+    for {
+      server <- WebhookServer.create.toManaged_
+      _      <- server.start.toManaged_
+      _      <- ZManaged.finalizer(server.shutdown.orDie)
+    } yield server
+  }.toLayer
 
   def shutdown: ZIO[Has[WebhookServer], IOException, Any] =
     ZIO.serviceWith(_.shutdown)
