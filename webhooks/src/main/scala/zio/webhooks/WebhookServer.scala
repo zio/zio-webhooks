@@ -208,13 +208,13 @@ final class WebhookServer private (
     } yield ()
   }.forever.forkAs("retry-monitoring")
 
-  /**
-   * Waits until all work in progress is finished, then shuts down.
-   */
   // let batching finish
   // let in-flight retry requests finish (maybe fork them uninterruptibly)
   // persist retry state for each webhook
   // check for shutdown before handling new events
+  /**
+   * Waits until all work in progress is finished, then shuts down.
+   */
   def shutdown: IO[IOException, Any] = ZIO.unit
 
   /**

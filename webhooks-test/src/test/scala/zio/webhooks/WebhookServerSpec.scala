@@ -453,10 +453,39 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ScenarioInterest.Requests,
             adjustDuration = Some(5.seconds)
           )(requests => assertM(requests.take.map(_.content))(equalTo(expectedOutput)))
+        },
+        testM("failed batched deliveries are retried") {
+          val n       = 100
+          val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtLeastOnce)
+          val events  = (0L until n.toLong).map { i =>
+            WebhookEvent(
+              WebhookEventKey(WebhookEventId(i), WebhookId(0)),
+              WebhookEventStatus.New,
+              i.toString + "\n",
+              Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
+            )
+          }
+
+          val expectedCount = n / 10 * 2
+
+          for {
+            queues     <- ZIO.collectAll(Chunk.fill(n)(Queue.bounded[Option[WebhookHttpResponse]](2)))
+            _          <- ZIO.collectAll(queues.map(_.offerAll(List(None, Some(WebhookHttpResponse(200))))))
+            testResult <- webhooksTestScenario(
+                            stubResponses = request => queues.lift(request.content.takeWhile(_ != '\n').toInt),
+                            webhooks = List(webhook),
+                            events = events,
+                            ScenarioInterest.Requests,
+                            adjustDuration = None
+                          ) { requests =>
+                            assertM(requests.takeBetween(expectedCount, expectedCount + 1))(
+                              hasSize(equalTo(expectedCount))
+                            )
+                          }
+          } yield testResult
         }
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests
-      // TODO: write test for batched retries
       //    ) @@ nonFlaky @@ timeout(2.minutes) @@ timed
     ) @@ timeout(10.seconds)
 }
