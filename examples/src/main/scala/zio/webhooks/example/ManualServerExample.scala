@@ -11,6 +11,10 @@ import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
+/**
+ * An example of manually starting and shutting down the webhook server manually. Other than that,
+ * this is the same scenario as in the [[BasicExample]].
+ */
 object ManualServerExample extends App {
 
   private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
@@ -31,6 +35,8 @@ object ManualServerExample extends App {
 
   private lazy val port = 8080
 
+  // Server is created and shut down manually. On shutdown, all existing work is finished before
+  // the example finishes.
   private def program =
     for {
       server <- WebhookServer.create
@@ -38,7 +44,7 @@ object ManualServerExample extends App {
       _      <- server.start
       _      <- Server.start(port, httpApp).fork
       _      <- TestWebhookRepo.createWebhook(webhook)
-      _      <- events.schedule(Schedule.fixed(1.second)).foreach(TestWebhookEventRepo.createEvent)
+      _      <- events.schedule(Schedule.fixed(1.second)).take(100).foreach(TestWebhookEventRepo.createEvent)
       _      <- server.shutdown
     } yield ()
 
@@ -58,6 +64,6 @@ object ManualServerExample extends App {
     url = s"http://0.0.0.0:$port/endpoint",
     label = "test webhook",
     WebhookStatus.Enabled,
-    WebhookDeliveryMode.SingleAtLeastOnce
+    WebhookDeliveryMode.SingleAtMostOnce
   )
 }

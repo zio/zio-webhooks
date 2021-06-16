@@ -11,8 +11,16 @@ import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
+/**
+ * Runs a webhook server and a zio-http server to deliver webhook events to. The webhook server is
+ * started as part of layer construction, and shut down when the example finishes.
+ *
+ * Errors are printed to the console's error channel. A webhook and a stream of events are created
+ * and the events are delivered to an endpoint one-by-one.
+ */
 object BasicExample extends App {
 
+  // JSON webhook event stream
   private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
     WebhookEvent(
       WebhookEventKey(WebhookEventId(i), webhook.id),
@@ -22,6 +30,7 @@ object BasicExample extends App {
     )
   }
 
+  // reliable endpoint
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       ZIO
@@ -39,6 +48,9 @@ object BasicExample extends App {
       _ <- events.schedule(Schedule.fixed(1.second)).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
+  /**
+   * The webhook server is started as part of the layer construction. See [[WebhookServer.live]].
+   */
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
       .injectCustom(
@@ -56,6 +68,6 @@ object BasicExample extends App {
     url = s"http://0.0.0.0:$port/endpoint",
     label = "test webhook",
     WebhookStatus.Enabled,
-    WebhookDeliveryMode.SingleAtLeastOnce
+    WebhookDeliveryMode.SingleAtMostOnce
   )
 }

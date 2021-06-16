@@ -48,7 +48,7 @@ final class WebhookServer private (
         _             <- changeQueue.offer(WebhookState.Change.ToRetrying(id, retryingState.queue))
       } yield map.updated(id, retryingState)
 
-    def updateWebhookState = {
+    def handleAtLeastOnce = {
       val id = dispatch.webhook.id
       webhookState.update { map =>
         map.get(id) match {
@@ -76,7 +76,7 @@ final class WebhookServer private (
             else
               eventRepo.setEventStatusMany(dispatch.keys, WebhookEventStatus.Delivered)
           case (AtLeastOnce, _)                    =>
-            updateWebhookState
+            handleAtLeastOnce
           case (AtMostOnce, _)                     =>
             eventRepo.setEventStatusMany(dispatch.events.map(_.key), WebhookEventStatus.Failed)
         }
@@ -151,7 +151,7 @@ final class WebhookServer private (
    * Starts recovery of events with status [[WebhookEventStatus.Delivering]] for webhooks with
    * [[WebhookDeliverySemantics.AtLeastOnce]]. Recovery is done by reconstructing
    * [[WebhookServer.WebhookState]], the server's internal representation of webhooks it handles.
-   * This is especially important.
+   * This ensures retries continue after a server is restarted.
    */
   private def startEventRecovery: UIO[Unit] = ZIO.unit
 
@@ -247,6 +247,9 @@ object WebhookServer {
   def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.getErrors)
 
+  /**
+   * Creates a server, ensuring shutdown on release.
+   */
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
     for {
       server <- WebhookServer.create.toManaged_

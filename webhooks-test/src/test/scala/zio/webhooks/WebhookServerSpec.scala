@@ -456,6 +456,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         }
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests
+      // TODO: write test for batched retries
       //    ) @@ nonFlaky @@ timeout(2.minutes) @@ timed
     ) @@ timeout(10.seconds)
 }

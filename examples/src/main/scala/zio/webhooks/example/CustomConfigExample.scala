@@ -11,12 +11,16 @@ import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
+/**
+ * Differs from the [[BasicExample]] in that a custom configuration is provided. This also serves as
+ * an example of a scenario where dispatches are batched and are retried when delivery fails.
+ */
 object CustomConfigExample extends App {
 
   private lazy val customConfig: ULayer[Has[WebhookServerConfig]] =
     ZLayer.succeed(
       WebhookServerConfig(
-        errorSlidingCapacity = 128,
+        errorSlidingCapacity = 64,
         WebhookServerConfig.Retry(
           capacity = 64,
           exponentialBase = 1.second,
@@ -44,9 +48,8 @@ object CustomConfigExample extends App {
 
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
-      ZIO
-        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-        .as(Response.status(Status.OK))
+      ZIO.foreach_(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str"""")) *>
+        random.nextBoolean.map(if (_) Response.status(Status.OK) else Response.status(Status.NOT_FOUND))
   }
 
   private lazy val port = 8080

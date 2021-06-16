@@ -11,6 +11,10 @@ import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
+/**
+ * Differs from the [[BasicExample]] in that events are batched with the default batching settings
+ * [[WebhookServerConfig.Batching.default]].
+ */
 object BasicExampleWithBatching extends App {
 
   private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
@@ -51,11 +55,12 @@ object BasicExampleWithBatching extends App {
       )
       .exitCode
 
+  // Delivery mode is set to Batched
   private lazy val webhook = Webhook(
     id = WebhookId(0),
     url = s"http://0.0.0.0:$port/endpoint",
     label = "test webhook",
     WebhookStatus.Enabled,
-    WebhookDeliveryMode.BatchedAtLeastOnce
+    WebhookDeliveryMode.BatchedAtMostOnce
   )
 }
