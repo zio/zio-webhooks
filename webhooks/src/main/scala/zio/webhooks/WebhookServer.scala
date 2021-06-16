@@ -26,11 +26,11 @@ final class WebhookServer private (
   private val webhookRepo: WebhookRepo,
   private val eventRepo: WebhookEventRepo,
   private val httpClient: WebhookHttpClient,
+  private val config: WebhookServerConfig,
   private val errorHub: Hub[WebhookError],
-  private val webhookState: RefM[Map[WebhookId, WebhookServer.WebhookState]],
+  private val internalState: RefM[InternalState],
   private val batchingQueue: Option[Queue[(Webhook, WebhookEvent)]],
-  private val changeQueue: Queue[WebhookState.Change],
-  private val config: WebhookServerConfig
+  private val changeQueue: Queue[WebhookState.Change]
 ) {
 
   /**
@@ -39,25 +39,25 @@ final class WebhookServer private (
    * enqueued for events from webhooks with at-least-once delivery semantics.
    */
   private def deliver(dispatch: WebhookDispatch): URIO[Clock, Unit] = {
-    def startRetrying(id: WebhookId, map: Map[WebhookId, WebhookState]) =
+    def startRetrying(id: WebhookId, state: InternalState) =
       for {
         instant       <- clock.instant
         _             <- webhookRepo.setWebhookStatus(id, WebhookStatus.Retrying(instant))
         retryingState <- WebhookState.Retrying.make(config.retry.capacity)
         _             <- retryingState.queue.offer(dispatch)
         _             <- changeQueue.offer(WebhookState.Change.ToRetrying(id, retryingState.queue))
-      } yield map.updated(id, retryingState)
+      } yield state.updateWebhookState(id, retryingState)
 
     def handleAtLeastOnce = {
       val id = dispatch.webhook.id
-      webhookState.update { map =>
-        map.get(id) match {
+      internalState.update { internalState =>
+        internalState.webhookState.get(id) match {
           case Some(WebhookState.Enabled)            =>
-            startRetrying(id, map)
+            startRetrying(id, internalState)
           case None                                  =>
-            startRetrying(id, map)
+            startRetrying(id, internalState)
           case Some(WebhookState.Retrying(_, queue)) =>
-            queue.offer(dispatch) *> UIO(map)
+            queue.offer(dispatch) *> UIO(internalState)
           case Some(WebhookState.Disabled)           =>
             ??? // TODO: handle
           case Some(WebhookState.Unavailable)        =>
@@ -192,7 +192,7 @@ final class WebhookServer private (
                    else
                      clock.instant.map(WebhookStatus.Unavailable) <& eventRepo.setAllAsFailedByWebhookId(id)
       _         <- webhookRepo.setWebhookStatus(id, newStatus)
-      _         <- webhookState.update(map => UIO(map.updated(id, WebhookState.Enabled)))
+      _         <- internalState.update(state => UIO(state.updateWebhookState(id, WebhookState.Enabled)))
     } yield ()
 
   /**
@@ -251,7 +251,7 @@ object WebhookServer {
       webhookRepo   <- ZIO.service[WebhookRepo]
       eventRepo     <- ZIO.service[WebhookEventRepo]
       httpClient    <- ZIO.service[WebhookHttpClient]
-      state         <- RefM.make(Map.empty[WebhookId, WebhookServer.WebhookState])
+      state         <- RefM.make(InternalState(isShutdown = false, Map.empty))
       errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity)
       batchingQueue <- ZIO
                          .foreach(serverConfig.batching) { batching =>
@@ -262,11 +262,11 @@ object WebhookServer {
       webhookRepo,
       eventRepo,
       httpClient,
+      serverConfig,
       errorHub,
       state,
       batchingQueue,
-      changeQueue,
-      serverConfig
+      changeQueue
     )
 
   type Env = Has[WebhookRepo]
@@ -278,6 +278,11 @@ object WebhookServer {
 
   def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.getErrors)
+
+  private final case class InternalState(isShutdown: Boolean, webhookState: Map[WebhookId, WebhookState]) {
+    def updateWebhookState(id: WebhookId, newWebhookState: WebhookState): InternalState =
+      copy(webhookState = webhookState.updated(id, newWebhookState))
+  }
 
   /**
    * Creates a server, ensuring shutdown on release.
