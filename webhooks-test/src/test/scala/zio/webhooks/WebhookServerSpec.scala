@@ -248,10 +248,17 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Events
-            ) { events =>
-              val pollNext     = events.poll <* TestClock.adjust(1.day)
-              val failedEvents = List.fill(n)(pollNext.repeatUntil(_.exists(_.status == WebhookEventStatus.Failed)))
-              ZIO.collectAll(failedEvents).map(_.collect { case Some(event) => event }) *> assertCompletesM
+            ) {
+              events =>
+                val pollNext      = events.poll <* TestClock.adjust(1.day)
+                val schedule      = Schedule.recurUntil[Option[WebhookEvent]](
+                  _.exists(_.status == WebhookEventStatus.Failed)
+                ) && Schedule.spaced(10.millis)
+                val nFailedEvents = List.fill(n)(pollNext.repeat(schedule).map(_._1))
+                ZIO
+                  .collectAll(nFailedEvents)
+                  .map(_.collect { case Some(event) => event })
+                  .provideSomeLayer[TestClock](Clock.live) *> assertCompletesM
             }
           },
           testM("retries past first one backs off exponentially") {
@@ -466,28 +473,39 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
           }
 
-          val expectedCount = n / 10 * 2
+          val expectedCount = 20
 
           for {
-            queues     <- ZIO.collectAll(Chunk.fill(n)(Queue.bounded[Option[WebhookHttpResponse]](2)))
+            queues     <- ZIO.collectAll(Chunk.fill(10)(Queue.bounded[Option[WebhookHttpResponse]](2)))
             _          <- ZIO.collectAll(queues.map(_.offerAll(List(None, Some(WebhookHttpResponse(200))))))
             testResult <- webhooksTestScenario(
-                            stubResponses = request => queues.lift(request.content.takeWhile(_ != '\n').toInt),
+                            stubResponses = request => {
+                              val firstNum = request.content.takeWhile(_ != '\n').toInt
+                              queues.lift(firstNum / 10)
+                            },
                             webhooks = List(webhook),
                             events = events,
                             ScenarioInterest.Requests,
                             adjustDuration = None
-                          ) { requests =>
-                            assertM(requests.takeBetween(expectedCount, expectedCount + 1))(
-                              hasSize(equalTo(expectedCount))
-                            )
+                          ) {
+                            requests =>
+                              val pollNext         = requests.poll <* TestClock.adjust(1.second)
+                              val schedule         =
+                                Schedule.recurUntil[Option[WebhookHttpRequest]](_.isDefined) && Schedule.spaced(
+                                  10.millis
+                                )
+                              val expectedRequests = List.fill(expectedCount)(pollNext.repeat(schedule).map(_._1))
+                              ZIO
+                                .collectAll(expectedRequests)
+                                .map(_.collect { case Some(request) => request })
+                                .provideSomeLayer[TestClock](Clock.live) *> assertCompletesM
                           }
           } yield testResult
-        }
+        } @@ timeout(1.second) @@ flaky
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests
-      //    ) @@ nonFlaky @@ timeout(2.minutes) @@ timed
-    ) @@ timeout(20.seconds)
+      // ) @@ nonFlaky(10) @@ timeout(30.seconds) @@ timed
+    ) @@ timeout(30.seconds)
 }
 
 object WebhookServerSpecUtil {
