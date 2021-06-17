@@ -49,7 +49,10 @@ object CustomConfigExample extends App {
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       ZIO.foreach_(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str"""")) *>
-        random.nextBoolean.map(if (_) Response.status(Status.OK) else Response.status(Status.NOT_FOUND))
+        random.nextBoolean.flatMap(
+          if (_) putStrLn("Server responding with OK") *> UIO(Response.status(Status.OK))
+          else putStrLn("Server responding with NOT_FOUND") *> UIO(Response.status(Status.NOT_FOUND))
+        )
   }
 
   private lazy val port = 8080
