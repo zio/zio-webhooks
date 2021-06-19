@@ -159,23 +159,35 @@ final class WebhookServer private (
    * Starts new [[WebhookEvent]] subscription. Takes a latch which succeeds when the server is ready
    * to receive events.
    */
-  private def startNewEventSubscription(latch: Promise[Nothing, Unit]) =
+  private def startNewEventSubscription(latch: Promise[Nothing, Unit]) = {
+    def handleNewEvent(dequeue: Dequeue[WebhookEvent]) =
+      for {
+        newEvent   <- dequeue.take
+        webhookId   = newEvent.key.webhookId
+        _          <- webhookRepo
+                        .getWebhookById(webhookId)
+                        .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
+                        .flatMap(webhook => dispatchNewEvent(webhook, newEvent).when(webhook.isAvailable))
+                        .catchAll(errorHub.publish(_).unit)
+        isShutdown <- internalState.get.map(_.isShutdown)
+      } yield isShutdown
+
     eventRepo
       .getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
       .use { dequeue =>
-        dequeue.poll *> latch.succeed(()) *> UStream.fromQueue(dequeue).foreach { newEvent =>
-          val webhookId = newEvent.key.webhookId
-          webhookRepo
-            .getWebhookById(webhookId)
-            .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
-            .flatMap(webhook => dispatchNewEvent(webhook, newEvent).when(webhook.isAvailable))
-            .catchAll(errorHub.publish(_).unit)
+        dequeue.poll *> latch.succeed(()) *> {
+          for {
+            isShutdown <- internalState.get.map(_.isShutdown)
+            _          <- ZIO.unless(isShutdown)(handleNewEvent(dequeue).repeatUntil(identity))
+          } yield ()
         }
       }
       .forkAs("new-event-subscription")
+  }
 
+  //
   /**
-   * Starts retries a webhook's queue of dispatches. Retrying is done until the queue is exhausted.
+   * Starts retries on a webhook's dispatch queue. Retrying is done until the queue is exhausted.
    * If retrying times out, the webhook is set to [[WebhookStatus.Unavailable]] and all its events
    * are marked [[WebhookEventStatus.Failed]].
    */
@@ -215,7 +227,10 @@ final class WebhookServer private (
   /**
    * Waits until all work in progress is finished, then shuts down.
    */
-  def shutdown: IO[IOException, Any] = ZIO.unit
+  def shutdown: IO[IOException, Any] =
+    for {
+      _ <- internalState.update(state => UIO(state.shutdown))
+    } yield ()
 
   /**
    * Takes a dispatch from a retry queue and attempts delivery. When successful, dispatch events are
@@ -281,6 +296,8 @@ object WebhookServer {
     ZManaged.service[WebhookServer].flatMap(_.getErrors)
 
   private final case class InternalState(isShutdown: Boolean, webhookState: Map[WebhookId, WebhookState]) {
+    def shutdown: InternalState = copy(isShutdown = true)
+
     def updateWebhookState(id: WebhookId, newWebhookState: WebhookState): InternalState =
       copy(webhookState = webhookState.updated(id, newWebhookState))
   }

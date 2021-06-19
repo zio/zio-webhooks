@@ -504,6 +504,28 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         } @@ timeout(2.seconds) @@ flaky // TODO[low-prio]: fix test flakiness
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
       suite("shutdown and recovery")(
+        suite("shutdown")(
+          testM("stops subscribing to new events") {
+            val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+            val testEvents = createPlaintextEvents(2)(WebhookId(0))
+
+            TestWebhookEventRepo.getEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
+              events =>
+                for {
+                  responses <- Queue.unbounded[Option[WebhookHttpResponse]]
+                  server    <- WebhookServer.create
+                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                  _         <- responses.offerAll(List(Some(WebhookHttpResponse(200)), Some(WebhookHttpResponse(200))))
+                  _         <- server.start
+                  _         <- TestWebhookRepo.createWebhook(webhook)
+                  _         <- ZIO.foreach_(testEvents)(TestWebhookEventRepo.createEvent)
+                  _         <- events.take
+                  _         <- server.shutdown
+                  take      <- events.take.timeout(200.millis).provideLayer(Clock.live)
+                } yield assertTrue(take.isEmpty)
+            }
+          } @@ failing
+        ),
         testM("restarted server continues retries") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
           val event   = WebhookEvent(
@@ -516,21 +538,21 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           TestWebhookHttpClient.requests.use {
             requests =>
               for {
-                queue  <- Queue.unbounded[Option[WebhookHttpResponse]]
-                server <- WebhookServer.create
-                _      <- TestWebhookHttpClient.setResponse(_ => Some(queue))
-                _      <- queue.offerAll(List(None, None, Some(WebhookHttpResponse(200))))
-                _      <- server.start
-                _      <- TestWebhookRepo.createWebhook(webhook)
-                _      <- TestWebhookEventRepo.createEvent(event)
-                _      <- requests.takeN(2)
-                _      <- server.shutdown
-                _      <- server.start
-                _      <- TestClock.adjust(10.millis) // base exponential
-                _      <- requests.takeN(2)
+                responses <- Queue.unbounded[Option[WebhookHttpResponse]]
+                server    <- WebhookServer.create
+                _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                _         <- responses.offerAll(List(None, None, Some(WebhookHttpResponse(200))))
+                _         <- server.start
+                _         <- TestWebhookRepo.createWebhook(webhook)
+                _         <- TestWebhookEventRepo.createEvent(event)
+                _         <- requests.takeN(2)
+                _         <- server.shutdown
+                _         <- server.start
+                _         <- TestClock.adjust(10.millis) // base exponential
+                _         <- requests.takeN(2)
               } yield assertCompletes
           }
-        } @@ timeout(2.seconds) @@ failing
+        } @@ timeout(2.seconds) @@ failing @@ ignore // TODO: get this right
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
       // TODO: write webhook status change tests
       // ) @@ nonFlaky(10) @@ timeout(30.seconds) @@ timed
