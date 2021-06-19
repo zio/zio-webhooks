@@ -563,6 +563,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(List(Some(WebhookHttpResponse(200)), Some(WebhookHttpResponse(200))))
                   _         <- TestWebhookRepo.createWebhook(webhook)
                   _         <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
+                  _         <- clock.sleep(1.second).provideLayer(Clock.live)
                   _         <- server.shutdown
                   _         <- requests.take
                 } yield assertCompletes
