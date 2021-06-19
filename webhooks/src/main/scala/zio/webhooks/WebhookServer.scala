@@ -178,7 +178,7 @@ final class WebhookServer private (
         dequeue.poll *> latch.succeed(()) *> {
           for {
             isShutdown <- internalState.get.map(_.isShutdown)
-            _          <- ZIO.unless(isShutdown)(handleNewEvent(dequeue).repeatUntil(identity))
+            _          <- handleNewEvent(dequeue).repeatUntil(identity).unless(isShutdown)
           } yield ()
         }
       }
@@ -223,7 +223,6 @@ final class WebhookServer private (
   // let batching finish
   // let in-flight retry requests finish (maybe fork them uninterruptibly)
   // persist retry state for each webhook
-  // check for shutdown before handling new events
   /**
    * Waits until all work in progress is finished, then shuts down.
    */

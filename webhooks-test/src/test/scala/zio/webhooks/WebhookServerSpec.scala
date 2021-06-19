@@ -518,13 +518,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(List(Some(WebhookHttpResponse(200)), Some(WebhookHttpResponse(200))))
                   _         <- server.start
                   _         <- TestWebhookRepo.createWebhook(webhook)
-                  _         <- ZIO.foreach_(testEvents)(TestWebhookEventRepo.createEvent)
-                  _         <- events.take
+                  _         <- TestWebhookEventRepo.createEvent(testEvents(0))
+                  event1    <- events.take.as(true)
                   _         <- server.shutdown
-                  take      <- events.take.timeout(200.millis).provideLayer(Clock.live)
-                } yield assertTrue(take.isEmpty)
+                  _         <- TestWebhookEventRepo.createEvent(testEvents(1))
+                  take      <- events.take.timeout(1.second).provideLayer(Clock.live)
+                } yield assertTrue(event1 && take.isEmpty)
             }
-          } @@ failing
+          } @@ flaky // TODO[low-prio]: fix test flakiness
         ),
         testM("restarted server continues retries") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -556,7 +557,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
       // TODO: write webhook status change tests
       // ) @@ nonFlaky(10) @@ timeout(30.seconds) @@ timed
-    ) @@ timeout(30.seconds)
+    )
 }
 
 object WebhookServerSpecUtil {
@@ -574,7 +575,7 @@ object WebhookServerSpecUtil {
       )
     }
 
-  def createPlaintextEvents(n: Int)(webhookId: WebhookId): Iterable[WebhookEvent] =
+  def createPlaintextEvents(n: Int)(webhookId: WebhookId): IndexedSeq[WebhookEvent] =
     (0 until n).map { i =>
       WebhookEvent(
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
