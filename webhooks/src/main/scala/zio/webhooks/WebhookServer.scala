@@ -3,11 +3,12 @@ package zio.webhooks
 import zio._
 import zio.clock.Clock
 import zio.prelude.NonEmptySet
-import zio.stream.UStream
+import zio.stream._
 import zio.webhooks.WebhookDeliveryBatching._
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer._
+import zio.webhooks.internal.CountDownLatch
 
 import java.io.IOException
 import java.time.Instant
@@ -28,9 +29,11 @@ final class WebhookServer private (
   private val httpClient: WebhookHttpClient,
   private val config: WebhookServerConfig,
   private val errorHub: Hub[WebhookError],
-  private val internalState: RefM[InternalState],
+  private val internalState: SubscriptionRef[InternalState],
   private val batchingQueue: Option[Queue[(Webhook, WebhookEvent)]],
-  private val changeQueue: Queue[WebhookState.Change]
+  private val changeQueue: Queue[WebhookState.Change],
+  private val startupLatch: CountDownLatch,
+  private val shutdownLatch: CountDownLatch
 ) {
 
   /**
@@ -39,7 +42,7 @@ final class WebhookServer private (
    * enqueued for events from webhooks with at-least-once delivery semantics.
    */
   private def deliver(dispatch: WebhookDispatch): URIO[Clock, Unit] = {
-    def startRetrying(id: WebhookId, state: InternalState) =
+    def changeToRetryState(id: WebhookId, state: InternalState) =
       for {
         instant       <- clock.instant
         _             <- webhookRepo.setWebhookStatus(id, WebhookStatus.Retrying(instant))
@@ -50,12 +53,12 @@ final class WebhookServer private (
 
     def handleAtLeastOnce = {
       val id = dispatch.webhook.id
-      internalState.update { internalState =>
+      internalState.ref.update { internalState =>
         internalState.webhookState.get(id) match {
           case Some(WebhookState.Enabled)            =>
-            startRetrying(id, internalState)
+            changeToRetryState(id, internalState)
           case None                                  =>
-            startRetrying(id, internalState)
+            changeToRetryState(id, internalState)
           case Some(WebhookState.Retrying(_, queue)) =>
             queue.offer(dispatch) *> UIO(internalState)
           case Some(WebhookState.Disabled)           =>
@@ -102,6 +105,24 @@ final class WebhookServer private (
   def getErrors: UManaged[Dequeue[WebhookError]] =
     errorHub.subscribe
 
+  private def handleNewEvent(dequeue: Dequeue[WebhookEvent]) =
+    for {
+      raceResult <- dequeue.take raceEither internalState.changes.map(_.isShutdown).takeUntil(identity).runDrain
+      _          <- raceResult match {
+                      case Left(newEvent) =>
+                        val webhookId = newEvent.key.webhookId
+                        for {
+                          _ <- webhookRepo
+                                 .getWebhookById(webhookId)
+                                 .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
+                                 .flatMap(webhook => dispatchNewEvent(webhook, newEvent).when(webhook.isAvailable))
+                                 .catchAll(errorHub.publish(_).unit)
+                        } yield ()
+                      case Right(_)       => ZIO.unit
+                    }
+      isShutdown <- internalState.ref.get.map(_.isShutdown)
+    } yield isShutdown
+
   /**
    * Starts the webhook server. The following are run concurrently:
    *
@@ -114,12 +135,11 @@ final class WebhookServer private (
    */
   def start: URIO[Clock, Any] =
     for {
-      _     <- startEventRecovery
-      _     <- startRetryMonitoring
-      latch <- Promise.make[Nothing, Unit]
-      _     <- startNewEventSubscription(latch)
-      _     <- startBatching
-      _     <- latch.await
+      _ <- startEventRecovery
+      _ <- startRetryMonitoring
+      _ <- startNewEventSubscription
+      _ <- startBatching
+      _ <- startupLatch.await
     } yield ()
 
   /**
@@ -159,31 +179,20 @@ final class WebhookServer private (
    * Starts new [[WebhookEvent]] subscription. Takes a latch which succeeds when the server is ready
    * to receive events.
    */
-  private def startNewEventSubscription(latch: Promise[Nothing, Unit]) = {
-    def handleNewEvent(dequeue: Dequeue[WebhookEvent]) =
-      for {
-        newEvent   <- dequeue.take
-        webhookId   = newEvent.key.webhookId
-        _          <- webhookRepo
-                        .getWebhookById(webhookId)
-                        .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
-                        .flatMap(webhook => dispatchNewEvent(webhook, newEvent).when(webhook.isAvailable))
-                        .catchAll(errorHub.publish(_).unit)
-        isShutdown <- internalState.get.map(_.isShutdown)
-      } yield isShutdown
-
+  private def startNewEventSubscription =
     eventRepo
       .getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
       .use { dequeue =>
-        dequeue.poll *> latch.succeed(()) *> {
-          for {
-            isShutdown <- internalState.get.map(_.isShutdown)
-            _          <- handleNewEvent(dequeue).repeatUntil(identity).unless(isShutdown)
-          } yield ()
-        }
+        for {
+          _          <- dequeue.poll
+          _          <- startupLatch.countDown
+          isShutdown <- internalState.ref.get.map(_.isShutdown)
+          _          <- handleNewEvent(dequeue).repeatUntil(identity).unless(isShutdown)
+          _          <- dequeue.shutdown
+          _          <- shutdownLatch.countDown
+        } yield ()
       }
       .forkAs("new-event-subscription")
-  }
 
   //
   /**
@@ -204,7 +213,7 @@ final class WebhookServer private (
                    else
                      clock.instant.map(WebhookStatus.Unavailable) <& eventRepo.setAllAsFailedByWebhookId(id)
       _         <- webhookRepo.setWebhookStatus(id, newStatus)
-      _         <- internalState.update(state => UIO(state.updateWebhookState(id, WebhookState.from(newStatus))))
+      _         <- internalState.ref.update(state => UIO(state.updateWebhookState(id, WebhookState.from(newStatus))))
     } yield ()
 
   /**
@@ -228,7 +237,8 @@ final class WebhookServer private (
    */
   def shutdown: IO[IOException, Any] =
     for {
-      _ <- internalState.update(state => UIO(state.shutdown))
+      _ <- internalState.ref.update(state => UIO(state.shutdown))
+      _ <- shutdownLatch.await
     } yield ()
 
   /**
@@ -266,13 +276,15 @@ object WebhookServer {
       webhookRepo   <- ZIO.service[WebhookRepo]
       eventRepo     <- ZIO.service[WebhookEventRepo]
       httpClient    <- ZIO.service[WebhookHttpClient]
-      state         <- RefM.make(InternalState(isShutdown = false, Map.empty))
+      state         <- SubscriptionRef.make(InternalState(isShutdown = false, Map.empty))
       errorHub      <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity)
       batchingQueue <- ZIO
                          .foreach(serverConfig.batching) { batching =>
                            Queue.bounded[(Webhook, WebhookEvent)](batching.capacity)
                          }
       changeQueue   <- Queue.bounded[WebhookState.Change](1)
+      startupLatch  <- CountDownLatch.make(1)
+      shutdownLatch <- CountDownLatch.make(1)
     } yield new WebhookServer(
       webhookRepo,
       eventRepo,
@@ -281,7 +293,9 @@ object WebhookServer {
       errorHub,
       state,
       batchingQueue,
-      changeQueue
+      changeQueue,
+      startupLatch,
+      shutdownLatch
     )
 
   type Env = Has[WebhookRepo]

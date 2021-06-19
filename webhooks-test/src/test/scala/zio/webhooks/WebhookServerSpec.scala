@@ -525,7 +525,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   take      <- events.take.timeout(1.second).provideLayer(Clock.live)
                 } yield assertTrue(event1 && take.isEmpty)
             }
-          } @@ flaky // TODO[low-prio]: fix test flakiness
+          }
         ),
         testM("restarted server continues retries") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
