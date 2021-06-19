@@ -491,9 +491,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                             requests =>
                               val pollNext         = requests.poll <* TestClock.adjust(1.second)
                               val schedule         =
-                                Schedule.recurUntil[Option[WebhookHttpRequest]](_.isDefined) && Schedule.spaced(
-                                  10.millis
-                                )
+                                Schedule.recurUntil[Option[WebhookHttpRequest]](_.isDefined) &&
+                                  Schedule.spaced(10.millis)
                               val expectedRequests = List.fill(expectedCount)(pollNext.repeat(schedule).map(_._1))
                               ZIO
                                 .collectAll(expectedRequests)
@@ -505,6 +504,30 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
       suite("shutdown and recovery")(
         suite("shutdown")(
+          testM("handles no events when shut down right away") {
+            val webhook   = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+            val testEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), WebhookId(0)),
+              WebhookEventStatus.New,
+              "event payload",
+              plaintextContentHeaders
+            )
+
+            TestWebhookEventRepo.getEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
+              events =>
+                for {
+                  responses <- Queue.unbounded[Option[WebhookHttpResponse]]
+                  server    <- WebhookServer.create
+                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                  _         <- responses.offerAll(List(Some(WebhookHttpResponse(200)), Some(WebhookHttpResponse(200))))
+                  _         <- server.start
+                  _         <- server.shutdown
+                  _         <- TestWebhookRepo.createWebhook(webhook)
+                  _         <- TestWebhookEventRepo.createEvent(testEvent)
+                  take      <- events.take.timeout(1.second).provideLayer(Clock.live)
+                } yield assertTrue(take.isEmpty)
+            }
+          },
           testM("stops subscribing to new events") {
             val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvents = createPlaintextEvents(2)(WebhookId(0))

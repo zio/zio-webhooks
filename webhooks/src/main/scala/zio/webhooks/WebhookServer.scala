@@ -107,7 +107,8 @@ final class WebhookServer private (
 
   private def handleNewEvent(dequeue: Dequeue[WebhookEvent]) =
     for {
-      raceResult <- dequeue.take raceEither internalState.changes.map(_.isShutdown).takeUntil(identity).runDrain
+      raceResult <- dequeue.take raceEither
+                      internalState.changes.map(_.isShutdown).takeUntil(identity).runDrain
       _          <- raceResult match {
                       case Left(newEvent) =>
                         val webhookId = newEvent.key.webhookId
@@ -188,7 +189,6 @@ final class WebhookServer private (
           _          <- startupLatch.countDown
           isShutdown <- internalState.ref.get.map(_.isShutdown)
           _          <- handleNewEvent(dequeue).repeatUntil(identity).unless(isShutdown)
-          _          <- dequeue.shutdown
           _          <- shutdownLatch.countDown
         } yield ()
       }
