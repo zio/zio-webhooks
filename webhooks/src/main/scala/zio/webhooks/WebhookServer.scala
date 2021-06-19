@@ -152,27 +152,37 @@ final class WebhookServer private (
           val getWebhookIdAndContentType = (webhook: Webhook, event: WebhookEvent) =>
             (webhook.id, event.headers.find(_._1.toLowerCase == "content-type"))
 
-          UStream
-            .fromQueue(batchingQueue)
-            .groupByKey(getWebhookIdAndContentType.tupled, maxSize) {
-              case (_, stream) =>
-                stream
-                  .groupedWithin(maxSize, maxWaitTime)
-                  .map(NonEmptyChunk.fromChunk)
-                  .collectSome
-                  .mapM(events => deliver(WebhookDispatch(events.head._1, events.map(_._2))))
-            }
-            .runDrain
+          for {
+            isShutdown <- internalState.ref.get.map(_.isShutdown)
+            shutdown    = internalState.changes.map(_.isShutdown)
+            _          <- ZIO.unless(isShutdown) {
+                            UStream
+                              .fromQueue(batchingQueue)
+                              .map(Left(_))
+                              .mergeTerminateRight(shutdown.takeUntil(identity).map(Right(_)))
+                              .collectLeft
+                              .groupByKey(getWebhookIdAndContentType.tupled, maxSize) {
+                                case (_, stream) =>
+                                  stream
+                                    .groupedWithin(maxSize, maxWaitTime)
+                                    .map(NonEmptyChunk.fromChunk)
+                                    .collectSome
+                                    .mapM(events => deliver(WebhookDispatch(events.head._1, events.map(_._2))))
+                              }
+                              .runDrain *> shutdownLatch.countDown
+                          }
+          } yield ()
         }.forkAs("batching")
       case _                                                                                  =>
         ZIO.unit.fork
     }
 
+  // rebuild webhook state, batching retries for if configured
   /**
    * Starts recovery of events with status [[WebhookEventStatus.Delivering]] for webhooks with
    * [[WebhookDeliverySemantics.AtLeastOnce]]. Recovery is done by reconstructing
    * [[WebhookServer.WebhookState]], the server's internal representation of webhooks it handles.
-   * This ensures retries continue after a server is restarted.
+   * This ensures retries are persistent with respect to server restarts.
    */
   private def startEventRecovery: UIO[Unit] = ZIO.unit
 
@@ -194,7 +204,6 @@ final class WebhookServer private (
       }
       .forkAs("new-event-subscription")
 
-  //
   /**
    * Starts retries on a webhook's dispatch queue. Retrying is done until the queue is exhausted.
    * If retrying times out, the webhook is set to [[WebhookStatus.Unavailable]] and all its events
@@ -283,8 +292,11 @@ object WebhookServer {
                            Queue.bounded[(Webhook, WebhookEvent)](batching.capacity)
                          }
       changeQueue   <- Queue.bounded[WebhookState.Change](1)
+      // start sync point: new event sub
       startupLatch  <- CountDownLatch.make(1)
-      shutdownLatch <- CountDownLatch.make(1)
+      // shutdown sync point: new event sub + optional batching
+      latchCount     = 1 + serverConfig.batching.fold(0)(_ => 1)
+      shutdownLatch <- CountDownLatch.make(latchCount)
     } yield new WebhookServer(
       webhookRepo,
       eventRepo,

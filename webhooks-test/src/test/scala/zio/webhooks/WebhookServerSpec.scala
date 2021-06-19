@@ -503,8 +503,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         } @@ timeout(2.seconds) @@ flaky // TODO[low-prio]: fix test flakiness
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
       suite("shutdown and recovery")(
-        suite("shutdown")(
-          testM("handles no events when shut down right away") {
+        suite("on shutdown")(
+          testM("handles no events when shut down right after starting") {
             val webhook   = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvent = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -548,6 +548,25 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   take      <- events.take.timeout(1.second).provideLayer(Clock.live)
                 } yield assertTrue(event1 && take.isEmpty)
             }
+          },
+          testM("lets batches complete") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+            val events  = createPlaintextEvents(5)(WebhookId(0))
+
+            TestWebhookHttpClient.requests.use {
+              requests =>
+                for {
+                  responses <- Queue.unbounded[Option[WebhookHttpResponse]]
+                  server    <- WebhookServer.create
+                  _         <- server.start
+                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                  _         <- responses.offerAll(List(Some(WebhookHttpResponse(200)), Some(WebhookHttpResponse(200))))
+                  _         <- TestWebhookRepo.createWebhook(webhook)
+                  _         <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
+                  _         <- server.shutdown
+                  _         <- requests.take
+                } yield assertCompletes
+            }
           }
         ),
         testM("restarted server continues retries") {
@@ -577,10 +596,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               } yield assertCompletes
           }
         } @@ timeout(2.seconds) @@ failing @@ ignore // TODO: get this right
-      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
+      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests
       // ) @@ nonFlaky(10) @@ timeout(30.seconds) @@ timed
-    )
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
