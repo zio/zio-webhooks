@@ -114,7 +114,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )(_.take *> assertCompletesM)
           } @@ timeout(50.millis) @@ failing,
-          testM("doesn't batch with disabled batching config ") {
+          testM("doesn't batch when no batching configuration is given") {
             val n       = 100
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
@@ -501,8 +501,37 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                                 .provideSomeLayer[TestClock](Clock.live) *> assertCompletesM
                           }
           } yield testResult
-        } @@ timeout(1.second) @@ flaky
-      ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching)
+        } @@ timeout(2.seconds) @@ flaky // TODO[low-prio]: fix test flakiness
+      ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
+      suite("shutdown and recovery")(
+        testM("restarted server continues retries") {
+          val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+          val event   = WebhookEvent(
+            WebhookEventKey(WebhookEventId(0), WebhookId(0)),
+            WebhookEventStatus.New,
+            "event content",
+            plaintextContentHeaders
+          )
+
+          TestWebhookHttpClient.requests.use {
+            requests =>
+              for {
+                queue  <- Queue.unbounded[Option[WebhookHttpResponse]]
+                server <- WebhookServer.create
+                _      <- TestWebhookHttpClient.setResponse(_ => Some(queue))
+                _      <- queue.offerAll(List(None, None, Some(WebhookHttpResponse(200))))
+                _      <- server.start
+                _      <- TestWebhookRepo.createWebhook(webhook)
+                _      <- TestWebhookEventRepo.createEvent(event)
+                _      <- requests.takeN(2)
+                _      <- server.shutdown
+                _      <- server.start
+                _      <- TestClock.adjust(10.millis) // base exponential
+                _      <- requests.takeN(2)
+              } yield assertCompletes
+          }
+        } @@ timeout(2.seconds) @@ failing
+      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
       // TODO: write webhook status change tests
       // ) @@ nonFlaky(10) @@ timeout(30.seconds) @@ timed
     ) @@ timeout(30.seconds)
@@ -519,7 +548,7 @@ object WebhookServerSpecUtil {
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
         WebhookEventStatus.New,
         s"""{"event":"payload$i"}""",
-        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+        jsonContentHeaders
       )
     }
 
@@ -529,11 +558,30 @@ object WebhookServerSpecUtil {
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
         WebhookEventStatus.New,
         "event payload " + i,
-        Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
+        plaintextContentHeaders
       )
     }
 
   val jsonContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+
+  type MockEnv = Has[WebhookEventRepo]
+    with Has[TestWebhookEventRepo]
+    with Has[WebhookRepo]
+    with Has[TestWebhookRepo]
+    with Has[WebhookStateRepo]
+    with Has[TestWebhookHttpClient]
+    with Has[WebhookHttpClient]
+
+  lazy val mockEnv: ZLayer[Clock with Has[WebhookServerConfig], Nothing, MockEnv] =
+    ZLayer
+      .fromSomeMagic[Clock with Has[WebhookServerConfig], MockEnv](
+        TestWebhookRepo.test,
+        TestWebhookEventRepo.test,
+        TestWebhookStateRepo.test,
+        TestWebhookHttpClient.test
+      )
+
+  val plaintextContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
 
   sealed trait ScenarioInterest[A]
   object ScenarioInterest {

@@ -4,9 +4,8 @@ import zio.NonEmptyChunk
 import zio.Chunk
 
 /**
- * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]]. It can have one or more
- * [[WebhookEvent]]s. Retries are done on dispatches since status updates on webhooks and their
- * respective events depend on the outcome of each.
+ * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]] containing one or more
+ * [[WebhookEvent]]s. Retries are done on dispatches since events can be batched.
  *
  * The server, when creating these dispatches, guarantees that all webhook events in this dispatch
  * will have the same [[WebhookEventContentType]].

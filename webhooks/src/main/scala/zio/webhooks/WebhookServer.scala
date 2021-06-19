@@ -106,7 +106,7 @@ final class WebhookServer private (
    * Starts the webhook server. The following are run concurrently:
    *
    *   - new webhook event subscription
-   *   - event recovery for webhooks which need to deliver at least once
+   *   - event recovery for webhooks with at-least-once delivery semantics
    *   - dispatch retry monitoring
    *   - dispatch batching, if configured and enabled per webhook
    *
@@ -114,10 +114,10 @@ final class WebhookServer private (
    */
   def start: URIO[Clock, Any] =
     for {
-      latch <- Promise.make[Nothing, Unit]
-      _     <- startNewEventSubscription(latch)
       _     <- startEventRecovery
       _     <- startRetryMonitoring
+      latch <- Promise.make[Nothing, Unit]
+      _     <- startNewEventSubscription(latch)
       _     <- startBatching
       _     <- latch.await
     } yield ()
@@ -168,7 +168,7 @@ final class WebhookServer private (
           webhookRepo
             .getWebhookById(webhookId)
             .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
-            .flatMap(webhook => dispatchNewEvent(webhook, newEvent).when(webhook.isOnline))
+            .flatMap(webhook => dispatchNewEvent(webhook, newEvent).when(webhook.isAvailable))
             .catchAll(errorHub.publish(_).unit)
         }
       }
@@ -192,7 +192,7 @@ final class WebhookServer private (
                    else
                      clock.instant.map(WebhookStatus.Unavailable) <& eventRepo.setAllAsFailedByWebhookId(id)
       _         <- webhookRepo.setWebhookStatus(id, newStatus)
-      _         <- internalState.update(state => UIO(state.updateWebhookState(id, WebhookState.Enabled)))
+      _         <- internalState.update(state => UIO(state.updateWebhookState(id, WebhookState.from(newStatus))))
     } yield ()
 
   /**
@@ -219,7 +219,8 @@ final class WebhookServer private (
 
   /**
    * Takes a dispatch from a retry queue and attempts delivery. When successful, dispatch events are
-   * marked [[WebhookEventStatus.Delivered]]. On failure, dispatch is put back into the queue.
+   * marked [[WebhookEventStatus.Delivered]]. If the dispatch fails, is put back into the queue to
+   * be retried again.
    *
    * Returns the current queue size.
    */
@@ -308,6 +309,12 @@ object WebhookServer {
     case object Disabled extends WebhookState
 
     case object Enabled extends WebhookState
+
+    val from: PartialFunction[WebhookStatus, WebhookState] = {
+      case WebhookStatus.Enabled        => WebhookState.Enabled
+      case WebhookStatus.Disabled       => WebhookState.Disabled
+      case WebhookStatus.Unavailable(_) => WebhookState.Unavailable
+    }
 
     final case class Retrying(sinceTime: Instant, queue: Queue[WebhookDispatch]) extends WebhookState
 
