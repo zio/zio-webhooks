@@ -550,11 +550,19 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             }
           },
           testM("lets batches complete") {
-            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
-            val events  = createPlaintextEvents(5)(WebhookId(0))
+            val n          = 5
+            val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
+            val testEvents = (0 until n).map { i =>
+              WebhookEvent(
+                WebhookEventKey(WebhookEventId(i.toLong), WebhookId(0)),
+                WebhookEventStatus.New,
+                s"event payload $i\n",
+                plaintextContentHeaders
+              )
+            }
 
-            TestWebhookHttpClient.requests.use {
-              requests =>
+            (TestWebhookHttpClient.requests zip TestWebhookEventRepo.getEvents).use {
+              case (requests, events) =>
                 for {
                   responses <- Queue.unbounded[Option[WebhookHttpResponse]]
                   server    <- WebhookServer.create
@@ -562,11 +570,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Some(WebhookHttpResponse(200)), Some(WebhookHttpResponse(200))))
                   _         <- TestWebhookRepo.createWebhook(webhook)
-                  _         <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
-                  _         <- clock.sleep(1.second).provideLayer(Clock.live)
+                  _         <- ZIO.foreach_(testEvents)(TestWebhookEventRepo.createEvent)
+                  // wait for n events to be processed as delivering
+                  _         <- events.filterOutput(_.status == WebhookEventStatus.Delivering).takeN(n)
                   _         <- server.shutdown
-                  _         <- requests.take
-                } yield assertCompletes
+                  request   <- requests.take
+                } yield assertTrue(request.content.split("\n").length == n)
             }
           }
         ),
@@ -600,7 +609,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests
       // ) @@ nonFlaky(10) @@ timeout(30.seconds) @@ timed
-    ) @@ timeout(20.seconds)
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
