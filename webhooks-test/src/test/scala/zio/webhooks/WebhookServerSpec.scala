@@ -261,32 +261,27 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   .provideSomeLayer[TestClock](Clock.live) *> assertCompletesM
             }
           },
-          testM("retries past first one backs off exponentially") {
+          testM("retries past first one back off exponentially") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(None).take(7) ++ UStream(Some(WebhookHttpResponse(200))),
+              stubResponses = UStream.fromIterable(List.fill(4)(None)) ++ UStream(Some(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
             ) {
               requests =>
                 for {
-                  request1 <- requests.take.as(true)
-                  request2 <- requests.take.as(true)
+                  request1 <- requests.take.as(true) // 1st failure
+                  request2 <- requests.take.as(true) // 1st retry
                   _        <- TestClock.adjust(10.millis)
-                  request3 <- requests.take.as(true)
-                  _        <- TestClock.adjust(10.millis)
-                  request4 <- requests.poll
-                  _        <- TestClock.adjust(10.millis)
-                  request5 <- requests.take.as(true)
-                  _        <- TestClock.adjust(10.millis)
-                  request6 <- requests.poll
-                  _        <- TestClock.adjust(30.millis)
-                  request7 <- requests.take.as(true)
-                } yield assertTrue(request1 && request2 && request3 && request5 && request7) &&
-                  assertTrue(request4.isEmpty && request6.isEmpty)
+                  request3 <- requests.take.as(true) // 2nd retry after 10ms
+                  _        <- TestClock.adjust(20.millis)
+                  request4 <- requests.take.as(true) // 3rd retry after 20ms
+                  _        <- TestClock.adjust(40.millis)
+                  request5 <- requests.take.as(true) // 4th retry after 40ms
+                } yield assertTrue(request1 && request2 && request3 && request4 && request5)
             }
           },
           testM("doesn't retry requests after requests succeed again") {
@@ -504,7 +499,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
       suite("shutdown and recovery")(
         suite("on shutdown")(
-          testM("handles no events when shut down right after starting") {
+          testM("takes no new events when shut down right after starting") {
             val webhook   = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvent = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -577,8 +572,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   request   <- requests.take
                 } yield assertTrue(request.content.split("\n").length == n)
             }
-          }
+          } @@ timeout(1.second) @@ flaky
         ),
+        // TODO: test state is saved correctly on shutdown
+        // TODO: test state is loaded correctly on restart
         testM("restarted server continues retries") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
           val event   = WebhookEvent(

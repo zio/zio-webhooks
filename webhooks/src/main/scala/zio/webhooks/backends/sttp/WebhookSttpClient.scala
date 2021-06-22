@@ -18,7 +18,7 @@ final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpCl
   def post(webhookRequest: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] =
     ZIO.effectSuspendTotal {
       val sttpRequest = basicRequest
-        .post(uri"${webhookRequest.url}")
+        .post(uri"${webhookRequest.url}") // treat bad URLs as defects
         .body(webhookRequest.content)
         .headers(webhookRequest.headers.toMap)
       sttpClient
