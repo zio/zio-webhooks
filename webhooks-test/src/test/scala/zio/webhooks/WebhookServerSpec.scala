@@ -240,7 +240,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             }
           },
           testM("marks all a webhook's events failed when marked unavailable") {
-            val n       = 10
+            val n       = 2
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(n)(webhook.id)
 
@@ -603,7 +603,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests
       // ) @@ nonFlaky(10) @@ timeout(30.seconds) @@ timed
-    ) @@ timeout(30.seconds)
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
