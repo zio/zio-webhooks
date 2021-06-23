@@ -136,7 +136,7 @@ final class WebhookServer private (
       case None          => retryQueue.offer(retry)
       case Some(backoff) => retryQueue.offer(retry).delay(backoff)
     }) *>
-      // 2.12 fails to infer type below
+      // 2.12 fails to infer updateAndGet type params below
       internalState.ref.updateAndGet[Any, Nothing](state => UIO(state.setRetry(webhookId, retry)))
   }
 

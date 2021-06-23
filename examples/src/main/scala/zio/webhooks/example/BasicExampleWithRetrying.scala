@@ -26,14 +26,19 @@ object BasicExampleWithRetrying extends App {
     )
   }
 
-  // server answers with 200 30% of the time, 404 the other
+  // server answers with 200 10% of the time, 404 the other
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
-      ZIO.foreach_(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str"""")) *>
-        random.nextIntBounded(100).flatMap( n =>
-          if (n < 30) putStrLn("Server responding with OK") *> UIO(Response.status(Status.OK))
-          else putStrLn("Server responding with NOT_FOUND") *> UIO(Response.status(Status.NOT_FOUND))
-        )
+      for {
+        _        <- clock.instant.map(_.toString).flatMap(ts => putStr(s"[$ts]: "))
+        _        <- ZIO.foreach_(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+        n        <- random.nextIntBounded(100)
+        _        <- clock.instant.map(_.toString).flatMap(ts => putStr(s"[$ts]: "))
+        response <- if (n < 10)
+                      putStrLn("Server responding with OK") *> UIO(Response.status(Status.OK))
+                    else
+                      putStrLn("Server responding with NOT_FOUND") *> UIO(Response.status(Status.NOT_FOUND))
+      } yield response
   }
 
   private lazy val port = 8080
