@@ -108,15 +108,17 @@ final class WebhookServer private (
                            UIO(state.removeRetry(webhookId, dispatch))
                          }
                      case _                              =>
-                       val next = retry.next
-                       internalState.ref.updateAndGet { state =>
-                         (retry.backoff match {
-                           case Some(backoff) =>
-                             retryQueue.offer(next).delay(backoff).fork
-                           case None          =>
-                             retryQueue.offer(next)
-                         }) *> UIO(state.setRetry(webhookId, next))
-                       }
+                       for {
+                         next  <- clock.instant.map(retry.next)
+                         state <- internalState.ref.updateAndGet { state =>
+                                    (retry.backoff match {
+                                      case Some(backoff) =>
+                                        retryQueue.offer(next).delay(backoff).interruptible.fork
+                                      case None          =>
+                                        retryQueue.offer(next)
+                                    }) *> UIO(state.setRetry(webhookId, next))
+                                  }
+                       } yield state
                    }
 
     } yield nextState.webhookState.get(webhookId).collect {
@@ -124,11 +126,17 @@ final class WebhookServer private (
     }
   }
 
-  private def enqueueRetry(webhookId: WebhookId, retryQueue: Queue[Retry], dispatch: WebhookDispatch) = {
+  private def enqueueRetry(
+    webhookId: WebhookId,
+    retryQueue: Queue[Retry],
+    dispatch: WebhookDispatch,
+    timestamp: Instant
+  ) = {
     val retry =
       Retry(
         dispatch,
         backoff = None,
+        timestamp,
         config.retry.exponentialBase,
         config.retry.exponentialFactor
       )
@@ -258,18 +266,21 @@ final class WebhookServer private (
   private def startRetrying(webhookId: WebhookId, dispatchQueue: Queue[WebhookDispatch]) =
     for {
       retryQueue    <- Queue.bounded[Retry](config.retry.capacity)
-      dispatchFiber <- UStream
-                         .fromQueue(dispatchQueue) // TODO: merge with shutdown changes to stop
-                         .mapM(dispatch => enqueueRetry(webhookId, retryQueue, dispatch).uninterruptible)
-                         .runDrain
-                         .fork
+      dispatchFiber <-
+        UStream
+          .fromQueue(dispatchQueue)
+          .mapM(dispatch =>
+            clock.instant.flatMap(timestamp => enqueueRetry(webhookId, retryQueue, dispatch, timestamp).uninterruptible)
+          )
+          .runDrain
+          .fork
       retryFiber    <- UStream
                          .fromQueue(retryQueue)
-                         .mapM(retry => doRetry(webhookId, retry, retryQueue).uninterruptible)
-                         .takeUntil(_.exists(_.isEmpty))
+                         .mapM(retry => doRetry(webhookId, retry, retryQueue).uninterruptible zip dispatchQueue.size)
+                         .takeUntil { case (retries, dispatchSize) => retries.exists(_.isEmpty) && dispatchSize <= 0 }
                          .runDrain
                          .fork
-      _             <- retryFiber.join *> dispatchFiber.interrupt
+      _             <- retryFiber.join *> dispatchQueue.shutdown *> dispatchFiber.interrupt
     } yield ()
 
   /**
@@ -397,14 +408,16 @@ object WebhookServer {
   private[webhooks] final case class Retry(
     dispatch: WebhookDispatch,
     backoff: Option[Duration],
+    timestamp: Instant,
     base: Duration,
     power: Double,
     attempt: Int = 0
   ) {
-    def next: Retry =
+    def next(timestamp: Instant): Retry =
       copy(
+        attempt = attempt + 1,
         backoff = backoff.map(_ => Some(base * math.pow(2, attempt.toDouble))).getOrElse(Some(base)),
-        attempt = attempt + 1
+        timestamp = timestamp
       )
   }
 
