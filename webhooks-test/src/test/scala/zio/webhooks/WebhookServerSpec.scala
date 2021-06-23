@@ -220,22 +220,23 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             }
           },
           testM("webhook is set unavailable after 7-day retry timeout") {
-            val webhook     = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
-            val events      = createPlaintextEvents(1)(webhook.id)
-            val timeElapsed = 7.days
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+            val events  = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
               stubResponses = UStream.repeat(None),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Webhooks
-            ) { webhooks =>
-              for {
-                status2 <- webhooks.take *> webhooks.take.map(_.status)
-                _       <- TestClock.adjust(timeElapsed)
-                status3 <- webhooks.take.map(_.status)
-              } yield assertTrue(status2 == Retrying(Instant.EPOCH)) &&
-                assertTrue(status3 == Unavailable(Instant.EPOCH.plus(timeElapsed)))
+            ) {
+              webhooks =>
+                for {
+                  status2    <- webhooks.take *> webhooks.take.map(_.status)
+                  status3Poll = TestClock.adjust(1.day) *> webhooks.poll.map(_.map(_.status))
+                  retrySched  = Schedule.recurUntil[Option[WebhookStatus]](_.isDefined) && Schedule.spaced(50.millis)
+                  status3    <- status3Poll.repeat(retrySched).map(_._1).provideSomeLayer[TestClock](Clock.live)
+                } yield assertTrue(status2 == Retrying(Instant.EPOCH)) &&
+                  assert(status3)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
           },
           testM("marks all a webhook's events failed when marked unavailable") {
@@ -248,17 +249,13 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Events
-            ) {
-              events =>
-                val pollNext      = events.poll <* TestClock.adjust(1.day)
-                val schedule      = Schedule.recurUntil[Option[WebhookEvent]](
-                  _.exists(_.status == WebhookEventStatus.Failed)
-                ) && Schedule.spaced(10.millis)
-                val nFailedEvents = List.fill(n)(pollNext.repeat(schedule).map(_._1))
-                ZIO
-                  .collectAll(nFailedEvents)
-                  .map(_.collect { case Some(event) => event })
-                  .provideSomeLayer[TestClock](Clock.live) *> assertCompletesM
+            ) { events =>
+              UStream
+                .fromQueue(events)
+                .filter(_.status == WebhookEventStatus.Failed)
+                .take(n.toLong)
+                .mergeTerminateLeft(UStream.repeatEffect(TestClock.adjust(1.day)))
+                .runDrain *> assertCompletesM
             }
           },
           testM("retries past first one back off exponentially") {
@@ -566,7 +563,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(List(Some(WebhookHttpResponse(200)), Some(WebhookHttpResponse(200))))
                   _         <- TestWebhookRepo.createWebhook(webhook)
                   _         <- ZIO.foreach_(testEvents)(TestWebhookEventRepo.createEvent)
-                  // wait for n events to be processed as delivering
+                  // wait for n events to be marked delivering
                   _         <- events.filterOutput(_.status == WebhookEventStatus.Delivering).takeN(n)
                   _         <- server.shutdown
                   request   <- requests.take
@@ -606,7 +603,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests
       // ) @@ nonFlaky(10) @@ timeout(30.seconds) @@ timed
-    ) @@ timeout(10.seconds)
+    ) @@ timeout(30.seconds)
 }
 
 object WebhookServerSpecUtil {
