@@ -97,6 +97,28 @@ final class WebhookServer private (
            }
     } yield ()
 
+  private def doBatching(batchingQueue: Queue[(Webhook, WebhookEvent)], batching: Batching) = {
+    val getWebhookIdAndContentType = (webhook: Webhook, event: WebhookEvent) =>
+      (webhook.id, event.headers.find(_._1.toLowerCase == "content-type"))
+
+    val isShutdown = internalState.changes.map(_.isShutdown).takeUntil(identity)
+
+    UStream
+      .fromQueue(batchingQueue)
+      .map(Left(_))
+      .mergeTerminateRight(isShutdown.map(Right(_)))
+      .collectLeft
+      .groupByKey(getWebhookIdAndContentType.tupled) {
+        case (_, stream) =>
+          stream
+            .groupedWithin(batching.maxSize, batching.maxWaitTime)
+            .map(NonEmptyChunk.fromChunk)
+            .collectSome
+            .mapM(events => deliver(WebhookDispatch(events.head._1, events.map(_._2))))
+      }
+      .runDrain *> shutdownLatch.countDown
+  }
+
   private def doRetry(webhookId: WebhookId, retry: Retry, retryQueue: Queue[Retry]) = {
     val dispatch = retry.dispatch
     for {
@@ -169,7 +191,8 @@ final class WebhookServer private (
                                  .flatMap(webhook => dispatchNewEvent(webhook, newEvent).when(webhook.isAvailable))
                                  .catchAll(errorHub.publish(_).unit)
                         } yield ()
-                      case Right(_)       => ZIO.unit
+                      case Right(_)       =>
+                        ZIO.unit
                     }
       isShutdown <- internalState.ref.get.map(_.isShutdown)
     } yield isShutdown
@@ -204,33 +227,11 @@ final class WebhookServer private (
    */
   private def startBatching =
     (config.batching, batchingQueue) match {
-      case (Some(Batching(_, maxSize, maxWaitTime)), Some(batchingQueue)) =>
-        {
-          val getWebhookIdAndContentType = (webhook: Webhook, event: WebhookEvent) =>
-            (webhook.id, event.headers.find(_._1.toLowerCase == "content-type"))
-
-          for {
-            isShutdown <- internalState.ref.get.map(_.isShutdown)
-            shutdown    = internalState.changes.map(_.isShutdown)
-            _          <- ZIO.unless(isShutdown) {
-                            UStream
-                              .fromQueue(batchingQueue)
-                              .map(Left(_))
-                              .mergeTerminateRight(shutdown.takeUntil(identity).map(Right(_)))
-                              .collectLeft
-                              .groupByKey(getWebhookIdAndContentType.tupled, maxSize) {
-                                case (_, stream) =>
-                                  stream
-                                    .groupedWithin(maxSize, maxWaitTime)
-                                    .map(NonEmptyChunk.fromChunk)
-                                    .collectSome
-                                    .mapM(events => deliver(WebhookDispatch(events.head._1, events.map(_._2))))
-                              }
-                              .runDrain *> shutdownLatch.countDown
-                          }
-          } yield ()
-        }.forkAs("batching")
-      case _                                                              =>
+      case (Some(batching), Some(batchingQueue)) =>
+        internalState.ref.get
+          .map(_.isShutdown)
+          .flatMap(ZIO.unless(_)(doBatching(batchingQueue, batching)).forkAs("batching"))
+      case _                                     =>
         ZIO.unit
     }
 

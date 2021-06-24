@@ -454,9 +454,11 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           )(requests => assertM(requests.take.map(_.content))(equalTo(expectedOutput)))
         },
         testM("failed batched deliveries are retried") {
-          val n       = 100
-          val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtLeastOnce)
-          val events  = (0L until n.toLong).map { i =>
+          val n         = 100
+          val batchSize = 10
+          val attempts  = 2
+          val webhook   = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtLeastOnce)
+          val events    = (0L until n.toLong).map { i =>
             WebhookEvent(
               WebhookEventKey(WebhookEventId(i), WebhookId(0)),
               WebhookEventStatus.New,
@@ -465,15 +467,15 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
           }
 
-          val expectedCount = n / 10 * 2
+          val expectedCount = n / batchSize * attempts
 
           for {
-            queues     <- ZIO.collectAll(Chunk.fill(10)(Queue.bounded[Option[WebhookHttpResponse]](2)))
+            queues     <- ZIO.collectAll(Chunk.fill(batchSize)(Queue.bounded[Option[WebhookHttpResponse]](2)))
             _          <- ZIO.collectAll(queues.map(_.offerAll(List(None, Some(WebhookHttpResponse(200))))))
             testResult <- webhooksTestScenario(
                             stubResponses = request => {
                               val firstNum = request.content.takeWhile(_ != '\n').toInt
-                              queues.lift(firstNum / 10)
+                              queues.lift(firstNum / batchSize)
                             },
                             webhooks = List(webhook),
                             events = events,
@@ -562,14 +564,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- events.filterOutput(_.status == WebhookEventStatus.Delivering).takeN(n)
                   _         <- server.shutdown
                   request   <- requests.take
-                  length     = request.content.split("\n").length
-                } yield assertTrue(length >= 1 && length <= n)
+                } yield assertTrue(request.content.split("\n").length == n)
             }
           }
         ),
-        testM("retry state is saved on shutdown") {
-          assertCompletesM
+        testM("internal state is saved on shutdown") {
+          assertCompletesM // TODO: write this test
         },
+        // TODO: test loaded at-most-once delivering get delivered
         // TODO: test state is loaded correctly on restart
         testM("restarted server continues retries") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
