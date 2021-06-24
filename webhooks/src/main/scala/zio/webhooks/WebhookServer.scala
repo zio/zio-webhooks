@@ -280,7 +280,7 @@ final class WebhookServer private (
                          .takeUntil { case (retries, dispatchSize) => retries.exists(_.isEmpty) && dispatchSize <= 0 }
                          .runDrain
                          .fork
-      _             <- retryFiber.join *> dispatchQueue.shutdown *> dispatchFiber.interrupt
+      _             <- retryFiber.join *> dispatchFiber.interrupt
     } yield ()
 
   /**
