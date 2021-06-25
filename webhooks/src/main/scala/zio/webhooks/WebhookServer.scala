@@ -17,11 +17,12 @@ import java.io.IOException
 import java.time.{ Instant, Duration => JDuration }
 
 /**
- * A [[WebhookServer]] subscribes to [[WebhookEvent]]s and reliably delivers them, i.e. failed
- * dispatches are retried once, followed by retries with exponential backoff. Retries are performed
- * until some duration after which webhooks will be marked [[WebhookStatus.Unavailable]] since some
- * [[java.time.Instant]]. Dispatches are batched iff a `batchConfig` is defined ''and'' a webhook's
- * delivery batching is [[WebhookDeliveryBatching.Batched]].
+ * A [[WebhookServer]] is a stateful server that subscribes to [[WebhookEvent]]s and reliably
+ * delivers them, i.e. failed dispatches are retried once, followed by retries with exponential
+ * backoff. Retries are performed until some duration after which webhooks will be marked
+ * [[WebhookStatus.Unavailable]] since some [[java.time.Instant]]. Dispatches are batched iff a
+ * `batchConfig` is defined ''and'' a webhook's delivery batching is
+ * [[WebhookDeliveryBatching.Batched]].
  *
  * A live server layer is provided in the companion object for convenience and proper resource
  * management.
@@ -357,7 +358,7 @@ final class WebhookServer private (
 object WebhookServer {
 
   /**
-   * Creates a server, pulling dependencies from the environment while initializing internal state.
+   * Creates a server, pulling dependencies from the environment then initializing internal state.
    */
   def create: URIO[Env, WebhookServer] =
     for {
@@ -373,7 +374,7 @@ object WebhookServer {
                            Queue.bounded[(Webhook, WebhookEvent)](batching.capacity)
                          }
       changeQueue   <- Queue.bounded[WebhookState.Change](1)
-      // start sync point: new event sub
+      // startup sync point: new event sub
       startupLatch  <- CountDownLatch.make(1)
       // shutdown sync points: new event sub + retrying + optional batching
       latchCount     = 2 + serverConfig.batching.fold(0)(_ => 1)
@@ -402,6 +403,11 @@ object WebhookServer {
   def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.getErrors)
 
+  /**
+   * The server's [[InternalState]] is its shutdown state and the state of its webhooks. The server
+   * uses its internal representation of each webhook's state to perform retrying logic. The
+   * shutdown state is used as a signal to stop new event subscription, batching, and retrying.
+   */
   private[webhooks] final case class InternalState(isShutdown: Boolean, webhookState: Map[WebhookId, WebhookState]) {
     import InternalState.UpdatedWithOps
 
