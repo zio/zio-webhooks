@@ -15,7 +15,7 @@ trait TestWebhookHttpClient {
 object TestWebhookHttpClient {
   // Accessors
 
-  def requests: URManaged[Has[TestWebhookHttpClient], Dequeue[WebhookHttpRequest]] =
+  def getRequests: URManaged[Has[TestWebhookHttpClient], Dequeue[WebhookHttpRequest]] =
     ZManaged.service[TestWebhookHttpClient].flatMap(_.requests)
 
   def setResponse(

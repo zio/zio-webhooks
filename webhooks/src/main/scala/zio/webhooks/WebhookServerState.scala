@@ -24,6 +24,14 @@ private[webhooks] object WebhookServerState {
   )
 
   object Dispatch {
+    def fromInternalState(dispatch: WebhookDispatch): Dispatch =
+      Dispatch(
+        dispatch.webhookId,
+        dispatch.url,
+        dispatch.deliverySemantics,
+        dispatch.keys.toList
+      )
+
     implicit val decoder: JsonDecoder[Dispatch] = DeriveJsonDecoder.gen
     implicit val encoder: JsonEncoder[Dispatch] = DeriveJsonEncoder.gen
   }
@@ -40,6 +48,15 @@ private[webhooks] object WebhookServerState {
   )
 
   object Retry {
+    def fromInternalState(retry: WebhookServer.Retry): Retry =
+      Retry(
+        Dispatch.fromInternalState(retry.dispatch),
+        backoff = retry.backoff,
+        base = retry.base,
+        power = retry.power,
+        attempt = retry.attempt
+      )
+
     implicit val decoder: JsonDecoder[Retry] = DeriveJsonDecoder.gen
     implicit val encoder: JsonEncoder[Retry] = DeriveJsonEncoder.gen
   }

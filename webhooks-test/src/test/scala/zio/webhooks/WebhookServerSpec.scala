@@ -3,6 +3,7 @@ package zio.webhooks
 import zio._
 import zio.clock.Clock
 import zio.duration._
+import zio.json._
 import zio.magic._
 import zio.stream._
 import zio.test.Assertion._
@@ -550,7 +551,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               )
             }
 
-            (TestWebhookHttpClient.requests zip TestWebhookEventRepo.getEvents).use {
+            (TestWebhookHttpClient.getRequests zip TestWebhookEventRepo.getEvents).use {
               case (requests, events) =>
                 for {
                   responses <- Queue.unbounded[Option[WebhookHttpResponse]]
@@ -577,7 +578,36 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             state  <- WebhookStateRepo.getState
           } yield assertTrue(state.isEmpty)
         },
-        // TODO: test loaded at-most-once delivering events get delivered
+        testM("retry state is saved on shutdown") {
+          val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+          val event   = WebhookEvent(
+            WebhookEventKey(WebhookEventId(0), WebhookId(0)),
+            WebhookEventStatus.New,
+            "event payload",
+            plaintextContentHeaders
+          )
+
+          TestWebhookHttpClient.getRequests.use {
+            requests =>
+              for {
+                responses <- Queue.unbounded[Option[WebhookHttpResponse]]
+                server    <- WebhookServer.create
+                _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                _         <- responses.offerAll(List(None, None))
+                _         <- server.start
+                _         <- TestWebhookRepo.createWebhook(webhook)
+                _         <- TestWebhookEventRepo.createEvent(event)
+                _         <- requests.takeN(2)
+                _         <- server.shutdown
+                state     <- WebhookStateRepo.getState
+                               .repeatUntil(_.isDefined)
+                               .map {
+                                 _.map(_.fromJson[WebhookServerState]).toRight("No save-state").flatMap(Predef.identity)
+                               }
+              } yield assertTrue(state.exists(retrying => retrying.map(0).dispatches.size == 1))
+          }
+        },
+        // TODO: test loaded at-most-once delivering events are marked failed
         // TODO: test state is loaded correctly on restart
         testM("restarted server continues retries") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -588,7 +618,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             plaintextContentHeaders
           )
 
-          TestWebhookHttpClient.requests.use {
+          TestWebhookHttpClient.getRequests.use {
             requests =>
               for {
                 responses <- Queue.unbounded[Option[WebhookHttpResponse]]
@@ -671,7 +701,7 @@ object WebhookServerSpecUtil {
         case ScenarioInterest.Events   =>
           TestWebhookEventRepo.getEvents
         case ScenarioInterest.Requests =>
-          TestWebhookHttpClient.requests
+          TestWebhookHttpClient.getRequests
         case ScenarioInterest.Webhooks =>
           TestWebhookRepo.getWebhooks
       }
