@@ -13,7 +13,7 @@ import zio.webhooks.WebhookServerConfig.Batching
 import zio.webhooks.internal.CountDownLatch
 
 import java.io.IOException
-import java.time.Instant
+import java.time.{ Instant, Duration => JDuration }
 
 /**
  * A [[WebhookServer]] subscribes to [[WebhookEvent]]s and reliably delivers them, i.e. failed
@@ -385,7 +385,7 @@ object WebhookServer {
   }
 
   private object InternalState {
-    // backporting updatedWith in 2.12
+    // backporting 2.13 updatedWith to 2.12
     implicit class UpdatedWithOps[K, V](map: Map[K, V]) {
       def updatedWithBackport[V1 >: V](key: K)(remappingFunction: Option[V] => Option[V1]): Map[K, V1] = {
         val previousValue = map.get(key)
@@ -410,6 +410,10 @@ object WebhookServer {
     } yield server
   }.toLayer
 
+  /**
+   * A [[Retry]] represents the retry status of each dispatch. Calling next advances the retry
+   * to the next exponential retry backoff duration.
+   */
   private[webhooks] final case class Retry(
     dispatch: WebhookDispatch,
     backoff: Option[Duration],
@@ -418,12 +422,22 @@ object WebhookServer {
     power: Double,
     attempt: Int = 0
   ) {
+
+    /**
+     * Progresses to the next retry by calculating the next exponential backoff.
+     */
     def next(timestamp: Instant): Retry =
       copy(
         attempt = attempt + 1,
         backoff = backoff.map(_ => Some(base * math.pow(2, attempt.toDouble))).getOrElse(Some(base)),
         timestamp = timestamp
       )
+
+    /**
+     * Suspends this retry by replacing the backoff with the time left as of `now`.
+     */
+    def suspend(now: Instant): Retry =
+      copy(backoff = backoff.map(_.minus(JDuration.between(now, timestamp))))
   }
 
   def shutdown: ZIO[Has[WebhookServer], IOException, Any] =

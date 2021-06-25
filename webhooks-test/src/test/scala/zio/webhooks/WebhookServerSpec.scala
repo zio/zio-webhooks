@@ -493,7 +493,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
       suite("shutdown and recovery")(
         suite("on shutdown")(
-          testM("takes no new events when shut down right after starting") {
+          testM("takes no new events on shut down right after startup") {
             val webhook   = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvent = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -569,10 +569,15 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             }
           }
         ),
-        testM("internal state is saved on shutdown") {
-          assertCompletesM // TODO: write this test
+        testM("no internal state is saved on shutdown right after startup") {
+          for {
+            server <- WebhookServer.create
+            _      <- server.start
+            _      <- server.shutdown
+            state  <- WebhookStateRepo.getState
+          } yield assertTrue(state.isEmpty)
         },
-        // TODO: test loaded at-most-once delivering get delivered
+        // TODO: test loaded at-most-once delivering events get delivered
         // TODO: test state is loaded correctly on restart
         testM("restarted server continues retries") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
