@@ -10,7 +10,7 @@ import java.time.Duration
  * A [[WebhookServerConfig]] contains configuration settings for a [[WebhookServer]]'s error hub
  * capacity, retrying, and batching. For optimal performance, use capacities that are powers of 2.
  */
-case class WebhookServerConfig(
+final case class WebhookServerConfig(
   errorSlidingCapacity: Int,
   retry: WebhookServerConfig.Retry,
   batching: Option[Batching] = None

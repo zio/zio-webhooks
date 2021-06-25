@@ -54,7 +54,7 @@ final class WebhookServer private (
       } yield state.updateWebhookState(id, retryingState)
 
     def handleAtLeastOnce = {
-      val id = dispatch.webhook.id
+      val id = dispatch.webhookId
       internalState.ref.update { internalState =>
         internalState.webhookState.get(id) match {
           case Some(WebhookState.Enabled)               =>
@@ -74,7 +74,7 @@ final class WebhookServer private (
     for {
       response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
       _        <- {
-        (dispatch.semantics, response) match {
+        (dispatch.deliverySemantics, response) match {
           case (_, Some(WebhookHttpResponse(200))) =>
             markDone(dispatch)
           case (AtLeastOnce, _)                    =>
@@ -93,7 +93,7 @@ final class WebhookServer private (
              case (Batched, Some(queue)) =>
                queue.offer((webhook, event.copy(status = WebhookEventStatus.Delivering)))
              case _                      =>
-               deliver(WebhookDispatch(webhook, NonEmptyChunk(event)))
+               deliver(WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, NonEmptyChunk(event)))
            }
     } yield ()
 
@@ -114,7 +114,11 @@ final class WebhookServer private (
             .groupedWithin(batching.maxSize, batching.maxWaitTime)
             .map(NonEmptyChunk.fromChunk)
             .collectSome
-            .mapM(events => deliver(WebhookDispatch(events.head._1, events.map(_._2))))
+            .mapM { elems =>
+              val webhook  = elems.head._1
+              val dispatch = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, elems.map(_._2))
+              deliver(dispatch)
+            }
       }
       .runDrain *> shutdownLatch.countDown
   }
@@ -238,7 +242,7 @@ final class WebhookServer private (
   /**
    * Starts recovery of events with status [[WebhookEventStatus.Delivering]] for webhooks with
    * [[WebhookDeliverySemantics.AtLeastOnce]]. Recovery is done by reconstructing
-   * [[WebhookServer.WebhookState]], the server's internal representation of webhooks it handles.
+   * [[WebhookServer.InternalState]], the server's internal representation of webhooks it handles.
    * This ensures retries are persistent with respect to server restarts.
    */
   private def startEventRecovery: UIO[Unit] = ZIO.unit // rebuild internal state, use WebhookStateRepo to load state
@@ -434,7 +438,7 @@ object WebhookServer {
         case retrying @ WebhookState.Retrying(_, _, retries) =>
           retrying.copy(retries = retries + (retry.dispatch -> retry))
         case _                                               =>
-          self
+          self // should we fail here?
       }
 
     final def removeRetry(dispatch: WebhookDispatch): WebhookState =
@@ -442,7 +446,7 @@ object WebhookServer {
         case retrying @ WebhookState.Retrying(_, _, retries) =>
           retrying.copy(retries = retries - dispatch)
         case _                                               =>
-          self
+          self // should we fail here?
       }
   }
 

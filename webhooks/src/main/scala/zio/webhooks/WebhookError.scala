@@ -11,15 +11,15 @@ object WebhookError {
   /**
    * A [[MissingWebhookError]] occurs when a webhook we expect to exist is missing.
    */
-  case class MissingWebhookError(id: WebhookId) extends WebhookError
+  final case class MissingWebhookError(id: WebhookId) extends WebhookError
 
   /**
    * A [[MissingEventError]] occurs when a webhook event we expect to exist is missing.
    */
-  case class MissingEventError(key: WebhookEventKey) extends WebhookError
+  final case class MissingEventError(key: WebhookEventKey) extends WebhookError
 
   /**
    * A [[MissingEventsError]] occurs when multiple events we expect to exist are missing.
    */
-  case class MissingEventsError(keys: NonEmptyChunk[WebhookEventKey]) extends WebhookError
+  final case class MissingEventsError(keys: NonEmptyChunk[WebhookEventKey]) extends WebhookError
 }

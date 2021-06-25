@@ -142,7 +142,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           },
           testM("missing webhook errors are published") {
             val idRange               = 401L to 404L
-            val missingWebhookIds     = idRange.map(WebhookId)
+            val missingWebhookIds     = idRange.map(WebhookId(_))
             val eventsMissingWebhooks = missingWebhookIds.flatMap(id => createPlaintextEvents(1)(id))
 
             val expectedErrorCount = missingWebhookIds.size
@@ -564,7 +564,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- events.filterOutput(_.status == WebhookEventStatus.Delivering).takeN(n)
                   _         <- server.shutdown
                   request   <- requests.take
-                } yield assertTrue(request.content.split("\n").length == n)
+                  length     = request.content.split("\n").length
+                } yield assertTrue(1 <= length && length <= n)
             }
           }
         ),
