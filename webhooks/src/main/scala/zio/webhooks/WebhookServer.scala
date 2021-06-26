@@ -42,13 +42,7 @@ final class WebhookServer private (
 ) {
 
   private def createRetry(dispatch: WebhookDispatch, timestamp: Instant) =
-    Retry(
-      dispatch,
-      backoff = None,
-      timestamp,
-      config.retry.exponentialBase,
-      config.retry.exponentialFactor
-    )
+    Retry(dispatch, timestamp, config.retry.exponentialBase, config.retry.exponentialFactor)
 
   /**
    * Attempts delivery of a [[WebhookDispatch]] to the webhook receiver. On successful delivery,
@@ -143,12 +137,9 @@ final class WebhookServer private (
                        for {
                          next  <- clock.instant.map(retry.next)
                          state <- internalState.ref.updateAndGet { state =>
-                                    (retry.backoff match {
-                                      case Some(backoff) =>
-                                        retryQueue.offer(next).delay(backoff).interruptible.fork
-                                      case None          =>
-                                        retryQueue.offer(next).interruptible
-                                    }) *> UIO(state.setRetry(webhookId, next))
+                                    ZIO.foreach_(next.backoff) { backoff =>
+                                      retryQueue.offer(next).delay(backoff).fork
+                                    } *> UIO(state.setRetry(webhookId, next))
                                   }
                        } yield state
                    }
@@ -165,10 +156,7 @@ final class WebhookServer private (
     timestamp: Instant
   ) = {
     val retry = createRetry(dispatch, timestamp)
-    (retry.backoff match {
-      case None          => retryQueue.offer(retry)
-      case Some(backoff) => retryQueue.offer(retry).delay(backoff)
-    }) *>
+    retryQueue.offer(retry) *>
       // 2.12 fails to infer updateAndGet type params below
       internalState.ref.updateAndGet[Any, Nothing](state => UIO(state.setRetry(webhookId, retry)))
   }
@@ -450,15 +438,14 @@ object WebhookServer {
   }.toLayer
 
   /**
-   * A [[Retry]] represents the retry status of each dispatch. Calling next advances the retry
-   * to the next exponential retry backoff duration.
+   * A [[Retry]] represents the retry state of each dispatch. Retries back off exponentially.
    */
   private[webhooks] final case class Retry(
     dispatch: WebhookDispatch,
-    backoff: Option[Duration],
     timestamp: Instant,
     base: Duration,
     power: Double,
+    backoff: Option[Duration] = None,
     attempt: Int = 0
   ) {
 
@@ -467,13 +454,13 @@ object WebhookServer {
      */
     def next(timestamp: Instant): Retry =
       copy(
-        attempt = attempt + 1,
+        timestamp = timestamp,
         backoff = backoff.map(_ => Some(base * math.pow(2, attempt.toDouble))).getOrElse(Some(base)),
-        timestamp = timestamp
+        attempt = attempt + 1
       )
 
     /**
-     * Suspends this retry by replacing the backoff with the time left as of `now`.
+     * Suspends this retry by replacing the backoff with the time left until its backoff completes.
      */
     def suspend(now: Instant): Retry =
       copy(backoff = backoff.map(_.minus(JDuration.between(now, timestamp))))

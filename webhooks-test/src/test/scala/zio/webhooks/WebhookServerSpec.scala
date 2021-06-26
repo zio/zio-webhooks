@@ -264,22 +264,24 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events  = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream.fromIterable(List.fill(4)(None)) ++ UStream(Some(WebhookHttpResponse(200))),
+              stubResponses = UStream.fromIterable(List.fill(5)(None)) ++ UStream(Some(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
             ) {
               requests =>
                 for {
-                  request1 <- requests.take.as(true) // 1st failure
-                  request2 <- requests.take.as(true) // 1st retry
-                  _        <- TestClock.adjust(10.millis)
-                  request3 <- requests.take.as(true) // 2nd retry after 10ms
-                  _        <- TestClock.adjust(20.millis)
-                  request4 <- requests.take.as(true) // 3rd retry after 20ms
-                  _        <- TestClock.adjust(40.millis)
-                  request5 <- requests.take.as(true) // 4th retry after 40ms
-                } yield assertTrue(request1 && request2 && request3 && request4 && request5)
+                  _ <- requests.take // 1st failure
+                  _ <- requests.take // 1st retry immediately after
+                  _ <- TestClock.adjust(10.millis)
+                  _ <- requests.take // 2nd retry after 10ms
+                  _ <- TestClock.adjust(20.millis)
+                  _ <- requests.take // 3rd retry after 20ms
+                  _ <- TestClock.adjust(40.millis)
+                  _ <- requests.take // 4th retry after 40ms
+                  _ <- TestClock.adjust(80.millis)
+                  _ <- requests.take // 5th retry after 80ms
+                } yield assertCompletes
             }
           },
           testM("doesn't retry requests after requests succeed again") {
@@ -615,33 +617,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
         ),
         suite("on restart")(
-          testM("retry state is erased") {
-            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
-            val event   = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), WebhookId(0)),
-              WebhookEventStatus.New,
-              "event payload",
-              plaintextContentHeaders
-            )
-
-            TestWebhookHttpClient.getRequests.use {
-              requests =>
-                for {
-                  responses <- Queue.unbounded[Option[WebhookHttpResponse]]
-                  server    <- WebhookServer.create
-                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(List(None, None))
-                  _         <- server.start
-                  _         <- TestWebhookRepo.createWebhook(webhook)
-                  _         <- TestWebhookEventRepo.createEvent(event)
-                  _         <- requests.takeN(2) // wait for 2 requests to come through
-                  _         <- server.shutdown
-                  _         <- server.start
-                  state     <- WebhookStateRepo.getState
-                } yield assertTrue(state.isEmpty)
-            }
-          } @@ failing,                                // TODO: make test pass
-          testM("continues retries") {
+          testM("continues retrying") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val event   = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -656,7 +632,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[Option[WebhookHttpResponse]]
                   server    <- WebhookServer.create
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(List(None, None, Some(WebhookHttpResponse(200))))
+                  _         <- responses.offerAll(List(None, None, None, Some(WebhookHttpResponse(200))))
                   _         <- server.start
                   _         <- TestWebhookRepo.createWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(event)
@@ -664,15 +640,15 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- server.shutdown
                   _         <- server.start
                   _         <- TestClock.adjust(10.millis) // base exponential
-                  _         <- requests.takeN(2)
+                  _         <- requests.take
                 } yield assertCompletes
             }
-          } @@ timeout(2.seconds) @@ failing @@ ignore // TODO: finish writing this and make pass
+          } @@ timeout(2.seconds) @@ failing
         )
         // TODO: test loaded at-most-once delivering events are marked failed
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests?
-    ) @@ timeout(20.seconds)
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
