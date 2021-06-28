@@ -2,7 +2,7 @@ package zio.webhooks
 
 import zio.json._
 import zio.prelude.NonEmptySet
-import zio.webhooks.WebhookServerState.RetryingState
+import zio.webhooks.PersistentServerState.RetryingState
 
 import java.time.{ Duration, Instant }
 
@@ -10,9 +10,9 @@ import java.time.{ Duration, Instant }
  * A persistent version of [[WebhookServer.InternalState]] saved on server shutdown and loaded on
  * server restart.
  */
-private[webhooks] final case class WebhookServerState(map: Map[Long, RetryingState])
+private[webhooks] final case class PersistentServerState(map: Map[Long, RetryingState])
 
-private[webhooks] object WebhookServerState {
+private[webhooks] object PersistentServerState {
 
   /**
    * Persistent version of [[WebhookDispatch]].
@@ -75,6 +75,6 @@ private[webhooks] object WebhookServerState {
     implicit val encoder: JsonEncoder[RetryingState] = DeriveJsonEncoder.gen
   }
 
-  implicit val decoder: JsonDecoder[WebhookServerState] = DeriveJsonDecoder.gen
-  implicit val encoder: JsonEncoder[WebhookServerState] = DeriveJsonEncoder.gen
+  implicit val decoder: JsonDecoder[PersistentServerState] = DeriveJsonDecoder.gen
+  implicit val encoder: JsonEncoder[PersistentServerState] = DeriveJsonEncoder.gen
 }

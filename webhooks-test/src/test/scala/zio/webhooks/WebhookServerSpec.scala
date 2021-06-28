@@ -610,7 +610,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   state     <- WebhookStateRepo.getState
                                  .repeatUntil(_.isDefined)
                                  .map {
-                                   _.map(_.fromJson[WebhookServerState]).toRight("No save-state").flatMap(Predef.identity)
+                                   _.map(_.fromJson[PersistentServerState])
+                                     .toRight("No save-state")
+                                     .flatMap(Predef.identity)
                                  }
                 } yield assertTrue(state.exists(retrying => retrying.map(0).retries.size == 1))
             }
@@ -639,13 +641,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
                   _         <- server.start
-                  _         <- TestClock.adjust(10.millis) // base retry backoff
+                  _         <- TestClock.adjust(10.millis).forever.fork // base retry backoff
                   _         <- requests.take
                 } yield assertCompletes
             }
           }
           // TODO: test continues retrying for multiple webhooks
-          // TODO: test retries events not part of saved state
           // TODO: test loaded at-most-once delivering events are marked failed
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
