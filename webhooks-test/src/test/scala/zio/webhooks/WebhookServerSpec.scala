@@ -612,12 +612,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                                  .map {
                                    _.map(_.fromJson[WebhookServerState]).toRight("No save-state").flatMap(Predef.identity)
                                  }
-                } yield assertTrue(state.exists(retrying => retrying.map(0).dispatches.size == 1))
+                } yield assertTrue(state.exists(retrying => retrying.map(0).retries.size == 1))
             }
           }
         ),
         suite("on restart")(
-          testM("continues retrying") {
+          testM("continues persisted retries") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val event   = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -632,23 +632,25 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[Option[WebhookHttpResponse]]
                   server    <- WebhookServer.create
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(List(None, None, None, Some(WebhookHttpResponse(200))))
+                  _         <- responses.offerAll(List(None, None, Some(WebhookHttpResponse(200))))
                   _         <- server.start
                   _         <- TestWebhookRepo.createWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
                   _         <- server.start
-                  _         <- TestClock.adjust(10.millis) // base exponential
+                  _         <- TestClock.adjust(10.millis) // base retry backoff
                   _         <- requests.take
                 } yield assertCompletes
             }
-          } @@ timeout(2.seconds) @@ failing
+          }
+          // TODO: test continues retrying for multiple webhooks
+          // TODO: test retries events not part of saved state
+          // TODO: test loaded at-most-once delivering events are marked failed
         )
-        // TODO: test loaded at-most-once delivering events are marked failed
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests?
-    ) @@ timeout(10.seconds)
+    ) @@ timeout(15.seconds)
 }
 
 object WebhookServerSpecUtil {

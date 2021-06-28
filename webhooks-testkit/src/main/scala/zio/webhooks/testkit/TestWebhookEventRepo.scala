@@ -49,8 +49,13 @@ final private case class TestWebhookEventRepoImpl(
   def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
-  ): UManaged[Dequeue[WebhookEvent]] =
-    getEventsByStatuses(statuses).map(_.filterOutput(_.key.webhookId == id))
+  ): UIO[Chunk[WebhookEvent]] =
+    ref.get.map { events =>
+      Chunk.fromIterable(
+        events.values
+          .filter(event => event.key.webhookId == id && statuses.contains(event.status))
+      )
+    }
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit] =
     for {

@@ -9,6 +9,12 @@ sealed trait WebhookError extends Product with Serializable
 object WebhookError {
 
   /**
+   * An [[InvalidStateError]] occurs when decoding `rawState` during event recovery fails with a
+   * `message`.
+   */
+  final case class InvalidStateError(rawState: String, message: String) extends WebhookError
+
+  /**
    * A [[MissingWebhookError]] occurs when a webhook we expect to exist is missing.
    */
   final case class MissingWebhookError(id: WebhookId) extends WebhookError

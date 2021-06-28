@@ -1,6 +1,7 @@
 package zio.webhooks
 
 import zio.json._
+import zio.prelude.NonEmptySet
 import zio.webhooks.WebhookServerState.RetryingState
 
 import java.time.{ Duration, Instant }
@@ -20,7 +21,7 @@ private[webhooks] object WebhookServerState {
     webhookId: WebhookId,
     url: String,
     deliverySemantics: WebhookDeliverySemantics,
-    eventKeys: List[WebhookEventKey]
+    eventKeys: NonEmptySet[WebhookEventKey]
   )
 
   object Dispatch {
@@ -29,7 +30,7 @@ private[webhooks] object WebhookServerState {
         dispatch.webhookId,
         dispatch.url,
         dispatch.deliverySemantics,
-        dispatch.keys.toList
+        NonEmptySet.fromNonEmptyChunk(dispatch.keys)
       )
 
     implicit val decoder: JsonDecoder[Dispatch] = DeriveJsonDecoder.gen
@@ -66,7 +67,7 @@ private[webhooks] object WebhookServerState {
    */
   final case class RetryingState(
     sinceTime: Instant,
-    dispatches: List[Retry]
+    retries: List[Retry]
   )
 
   object RetryingState {
