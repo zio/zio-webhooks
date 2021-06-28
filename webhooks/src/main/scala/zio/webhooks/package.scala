@@ -6,12 +6,6 @@ import zio.prelude.NonEmptySet
 package object webhooks {
 
   private[webhooks] implicit class MapOps[K, V](self: Map[K, V]) {
-    def joinInner[V1](that: Map[K, V1]): Map[K, (V, V1)] =
-      for {
-        (k1, v)  <- self
-        (k2, v1) <- that if k1 == k2
-      } yield k1 -> ((v, v1))
-
     def updatedWithBackport[V1 >: V](key: K)(remappingFunction: Option[V] => Option[V1]): Map[K, V1] = {
       val previousValue = self.get(key)
       val nextValue     = remappingFunction(previousValue)

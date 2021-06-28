@@ -645,8 +645,31 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- requests.take
                 } yield assertCompletes
             }
+          },
+          testM("retries events not part of saved state") {
+            val webhook      = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+            val unsavedEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), WebhookId(0)),
+              WebhookEventStatus.Delivering,
+              "unsaved event",
+              plaintextContentHeaders
+            )
+
+            TestWebhookHttpClient.getRequests.use { requests =>
+              for {
+                responses <- Queue.unbounded[Option[WebhookHttpResponse]]
+                server    <- WebhookServer.create
+                _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                _         <- responses.offerAll(List(None))
+                _         <- TestWebhookRepo.createWebhook(webhook)
+                _         <- TestWebhookEventRepo.createEvent(unsavedEvent)
+                _         <- server.start
+                _         <- requests.take
+              } yield assertCompletes
+            }
           }
           // TODO: test continues retrying for multiple webhooks
+          // TODO: test continued retrying resumes timeout duration
           // TODO: test loaded at-most-once delivering events are marked failed
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)

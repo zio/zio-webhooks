@@ -37,6 +37,8 @@ private[webhooks] object PersistentServerState {
     implicit val encoder: JsonEncoder[Dispatch] = DeriveJsonEncoder.gen
   }
 
+  val empty: PersistentServerState = PersistentServerState(Map.empty)
+
   /**
    * Persistent version of [[WebhookServer.Retry]].
    */

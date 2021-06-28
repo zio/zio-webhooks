@@ -44,7 +44,15 @@ final private case class TestWebhookEventRepoImpl(
     hub.subscribe
 
   def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UManaged[Dequeue[WebhookEvent]] =
-    hub.subscribe.map(_.filterOutput(event => statuses.contains(event.status)))
+    if (statuses.contains(WebhookEventStatus.Delivering))
+      // this smells like it should be another method
+      (for {
+        queue  <- Queue.unbounded[WebhookEvent]
+        events <- ref.get.map(_.values)
+        _      <- queue.offerAll(events)
+      } yield queue).toManaged_
+    else
+      hub.subscribe.map(_.filterOutput(event => statuses.contains(event.status)))
 
   def getEventsByWebhookAndStatus(
     id: WebhookId,
