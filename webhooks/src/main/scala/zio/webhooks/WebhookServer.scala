@@ -194,22 +194,15 @@ final class WebhookServer private (
       .collectLeft
 
   // TODO: clean this up
+  /**
+   * Reconstructs the server's internal retrying states from the loaded server state. Events are
+   * loaded
+   */
   private def reconstructInternalState(loadedState: PersistentServerState) =
     for {
-      // TODO: use this to figure out which events to add to dispatch queue
-      webhooks    <- Ref.make(Map.empty[WebhookId, Webhook])
       eventMap    <- eventRepo
                        .getEventsByStatuses(NonEmptySet(WebhookEventStatus.Delivering))
-                       .use { eventQueue =>
-                         eventQueue.takeAll.flatMap { events =>
-                           val eventMap = Chunk.fromIterable(events).groupBy(_.key.webhookId)
-                           ZIO.foreach_(eventMap.keys) { webhookId =>
-                             webhookRepo
-                               .requireWebhook(webhookId)
-                               .flatMap(webhook => webhooks.update(_ + (webhookId -> webhook)))
-                           } *> UIO(eventMap)
-                         }
-                       }
+                       .use(_.takeAll.map(Chunk.fromIterable(_).groupBy(_.key.webhookId)))
       queues      <- ZIO.collectAll {
                        Chunk.fill(eventMap.size)(Queue.bounded[WebhookDispatch](config.retry.capacity))
                      }
@@ -267,25 +260,27 @@ final class WebhookServer private (
                              retryMapElem
                            }
                            .toMap
-                         webhooks.get
-                           .map(_.get(webhookId))
-                           .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
-                           .flatMap { webhook =>
-                             val dispatches = events
-                               .filterNot(event => dispatchKeys.contains(event.key))
-                               .map(event =>
-                                 WebhookDispatch(
-                                   webhookId,
-                                   webhook.url,
-                                   webhook.deliveryMode.semantics,
-                                   NonEmptyChunk(event)
+
+                         val enqueueUnsavedEvents =
+                           webhookRepo
+                             .requireWebhook(webhookId)
+                             .flatMap { webhook =>
+                               val dispatches = events
+                                 .filterNot(event => dispatchKeys.contains(event.key))
+                                 .map(event =>
+                                   WebhookDispatch(
+                                     webhookId,
+                                     webhook.url,
+                                     webhook.deliveryMode.semantics,
+                                     NonEmptyChunk(event)
+                                   )
                                  )
-                               )
-                               .filter(_.deliverySemantics == WebhookDeliverySemantics.AtLeastOnce)
-                             dispatchQueue.offerAll(dispatches)
-                           }
-                           .catchAll(errorHub.publish(_))
-                           .fork *>
+                                 .filter(_.deliverySemantics == WebhookDeliverySemantics.AtLeastOnce)
+                               dispatchQueue.offerAll(dispatches)
+                             }
+                             .catchAll(errorHub.publish(_))
+                             .fork
+                         enqueueUnsavedEvents *>
                            UIO((webhookId, Retrying(loadedRetryingState.sinceTime, dispatchQueue, retryMap)))
                      }
       _           <- internalState.ref.set(InternalState(isShutdown = false, retryStates))
