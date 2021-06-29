@@ -44,13 +44,26 @@ final private case class TestWebhookEventRepoImpl(
     hub.subscribe
 
   def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UManaged[Dequeue[WebhookEvent]] =
-    hub.subscribe.map(_.filterOutput(event => statuses.contains(event.status)))
+    if (statuses.contains(WebhookEventStatus.Delivering))
+      // this smells like it should be another method
+      (for {
+        queue  <- Queue.unbounded[WebhookEvent]
+        events <- ref.get.map(_.values)
+        _      <- queue.offerAll(events)
+      } yield queue).toManaged_
+    else
+      hub.subscribe.map(_.filterOutput(event => statuses.contains(event.status)))
 
   def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
-  ): UManaged[Dequeue[WebhookEvent]] =
-    getEventsByStatuses(statuses).map(_.filterOutput(_.key.webhookId == id))
+  ): UIO[Chunk[WebhookEvent]] =
+    ref.get.map { events =>
+      Chunk.fromIterable(
+        events.values
+          .filter(event => event.key.webhookId == id && statuses.contains(event.status))
+      )
+    }
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit] =
     for {

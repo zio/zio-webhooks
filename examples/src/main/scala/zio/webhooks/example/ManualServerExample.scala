@@ -44,8 +44,11 @@ object ManualServerExample extends App {
       _      <- server.start
       _      <- Server.start(port, httpApp).fork
       _      <- TestWebhookRepo.createWebhook(webhook)
-      _      <- events.schedule(Schedule.fixed(1.second)).take(100).foreach(TestWebhookEventRepo.createEvent)
-      _      <- server.shutdown
+      _      <- events
+                  .schedule(Schedule.fixed(1.second))
+                  .take(100)
+                  .foreach(TestWebhookEventRepo.createEvent)
+                  .ensuring((server.shutdown *> putStrLn("Shutdown successful")).orDie)
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

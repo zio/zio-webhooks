@@ -10,10 +10,13 @@ final case class WebhookDeliveryMode private (batching: WebhookDeliveryBatching,
 object WebhookDeliveryMode {
   val BatchedAtLeastOnce: WebhookDeliveryMode =
     WebhookDeliveryMode(WebhookDeliveryBatching.Batched, WebhookDeliverySemantics.AtLeastOnce)
-  val BatchedAtMostOnce: WebhookDeliveryMode  =
+
+  val BatchedAtMostOnce: WebhookDeliveryMode =
     WebhookDeliveryMode(WebhookDeliveryBatching.Batched, WebhookDeliverySemantics.AtMostOnce)
-  val SingleAtLeastOnce: WebhookDeliveryMode  =
+
+  val SingleAtLeastOnce: WebhookDeliveryMode =
     WebhookDeliveryMode(WebhookDeliveryBatching.Single, WebhookDeliverySemantics.AtLeastOnce)
-  val SingleAtMostOnce: WebhookDeliveryMode   =
+
+  val SingleAtMostOnce: WebhookDeliveryMode =
     WebhookDeliveryMode(WebhookDeliveryBatching.Single, WebhookDeliverySemantics.AtMostOnce)
 }

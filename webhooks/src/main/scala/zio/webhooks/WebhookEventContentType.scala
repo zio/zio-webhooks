@@ -9,8 +9,8 @@ package zio.webhooks
  *   - plain text
  *   - JSON
  */
-sealed trait WebhookEventContentType
-object WebhookEventContentType {
+private[webhooks] sealed trait WebhookEventContentType
+private[webhooks] object WebhookEventContentType {
   case object PlainText extends WebhookEventContentType
   case object Json      extends WebhookEventContentType
 }

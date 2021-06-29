@@ -10,19 +10,18 @@ import zio.webhooks.WebhookError._
 trait WebhookEventRepo {
 
   /**
-   * Subscribes to events given a non-empty set of statuses. Implementations are responsible for
-   * ordering events.
+   * Used by the server to subscribe to events whose status is in the given set of `statuses`.
    */
   def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UManaged[Dequeue[WebhookEvent]]
 
   /**
-   * Retrieves events by [[WebhookId]] and a non-empty set of [[WebhookEventStatus]]es.
-   * Implementations are responsible for ordering events.
+   * Used by the server during event recovery to get a webhook's events whose status is in the given
+   * set of `statuses`.
    */
   def getEventsByWebhookAndStatus(
     id: WebhookId,
     statuses: NonEmptySet[WebhookEventStatus]
-  ): UManaged[Dequeue[WebhookEvent]]
+  ): UIO[Chunk[WebhookEvent]]
 
   /**
    * Marks all events by the specified webhook id as failed.
