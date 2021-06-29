@@ -11,11 +11,10 @@ import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
-// TODO: revisit after implementing server shutdown
 /**
  * An example of how to shut down the server on the first error encountered.
  */
-object ServerShutdownOnFirstErrorExample extends App {
+object ShutdownOnFirstError extends App {
 
   private lazy val events = UStream
     .iterate(0L)(_ + 1)
@@ -27,10 +26,10 @@ object ServerShutdownOnFirstErrorExample extends App {
         Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
       )
     }
-    .take(5) ++ UStream(eventWithoutWebhook)
+    .take(2) ++ UStream(eventWithoutWebhook)
 
   private lazy val eventWithoutWebhook = WebhookEvent(
-    WebhookEventKey(WebhookEventId(-1), webhook.id),
+    WebhookEventKey(WebhookEventId(-1), WebhookId(-1)),
     WebhookEventStatus.New,
     s"""{"payload":-1}""",
     Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
@@ -45,24 +44,30 @@ object ServerShutdownOnFirstErrorExample extends App {
 
   private lazy val port = 8080
 
-  private def program =
+  private def program = {
     for {
-      _ <- Server.start(port, httpApp).fork
-      f <- WebhookServer.getErrors.use(_.take.flip).fork
-      _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.schedule(Schedule.fixed(1.second)).foreach(TestWebhookEventRepo.createEvent)
-      _ <- f.join.onExit(_ => WebhookServer.shutdown.orDie)
+      errorFiber <- WebhookServer.getErrors.use(_.take.flip).fork
+      httpFiber  <- Server.start(port, httpApp).fork
+      _          <- TestWebhookRepo.createWebhook(webhook)
+      _          <- events.schedule(Schedule.fixed(1.second)).foreach(TestWebhookEventRepo.createEvent).fork
+      _          <- errorFiber.join.onExit(_ => WebhookServer.shutdown.orDie *> httpFiber.interrupt)
     } yield ()
+  }.catchAll {
+    case WebhookError.InvalidStateError(_, message) => putStrLnErr(s"Invalid state: $message")
+    case WebhookError.MissingWebhookError(id)       => putStrLnErr(s"Missing webhook: $id")
+    case WebhookError.MissingEventError(key)        => putStrLnErr(s"Missing event: $key")
+    case WebhookError.MissingEventsError(keys)      => putStrLnErr(s"Missing events: $keys")
+  }
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
       .injectCustom(
+        TestWebhookEventRepo.test,
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
-        TestWebhookEventRepo.test,
-        WebhookSttpClient.live,
+        WebhookServer.live,
         WebhookServerConfig.default,
-        WebhookServer.live
+        WebhookSttpClient.live
       )
       .exitCode
 
