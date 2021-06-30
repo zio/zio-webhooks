@@ -11,5 +11,8 @@ final case class WebhookEvent(
   content: String,
   headers: Chunk[(String, String)]
 ) {
-  def isDelivered: Boolean = status == WebhookEventStatus.Delivered
+  lazy val isDelivered: Boolean = status == WebhookEventStatus.Delivered
+
+  lazy val webhookIdAndContentType: (WebhookId, Option[(String, String)]) =
+    (key.webhookId, headers.find(_._1.toLowerCase == "content-type"))
 }

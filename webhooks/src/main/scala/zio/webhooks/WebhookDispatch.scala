@@ -4,7 +4,7 @@ import zio.{ Chunk, NonEmptyChunk }
 
 /**
  * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]] containing one or more
- * [[WebhookEvent]]s. Retries are done on dispatches since events can be batched.
+ * [[WebhookEvent]]s.
  *
  * The server, when creating these dispatches, guarantees that all webhook events in this dispatch
  * will have the same [[WebhookEventContentType]].

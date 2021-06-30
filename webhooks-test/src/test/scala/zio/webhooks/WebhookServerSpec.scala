@@ -480,28 +480,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                           )
           } yield testResult
         }
-      ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
+      ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching) @@ ignore,
       suite("manual server start and shutdown")(
-        testM("doesn't batch before max wait time") {
-          val n       = 5 // less than max batch size 10
-          val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
-          val events  = createPlaintextEvents(n)(webhook.id)
-
-          TestWebhookHttpClient.getRequests.use {
-            requests =>
-              for {
-                responses <- Queue.unbounded[Option[WebhookHttpResponse]]
-                server    <- WebhookServer.create
-                _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                _         <- responses.offerAll(List(Some(WebhookHttpResponse(200))))
-                _         <- server.start
-                _         <- TestWebhookRepo.createWebhook(webhook)
-                _         <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
-                _         <- TestClock.adjust(2.seconds)
-                _         <- requests.take.timeout(50.millis) // wait for 2 requests to come through
-              } yield assertCompletes
-          }
-        } @@ timeout(50.millis) @@ failing,
         suite("on shutdown")(
           testM("takes no new events on shut down right after startup") {
             val webhook   = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -614,7 +594,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                                      .toRight("No save-state")
                                      .flatMap(Predef.identity)
                                  }
-                } yield assertTrue(state.exists(retrying => retrying.map(0).retries.size == 1))
+                } yield assertTrue(state.exists(retrying => retrying.map.headOption.exists(_._2.retries.size == 1)))
             }
           }
         ),
@@ -670,11 +650,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
           // TODO: test continues retrying for multiple webhooks
           // TODO: test continued retrying resumes timeout duration
+          // TODO: test server gets all events on restart
           // TODO: test loaded at-most-once delivering events are marked failed
         )
-      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
+      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching) @@ ignore
       // TODO: write webhook status change tests?
-    ) @@ timeout(15.seconds)
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
