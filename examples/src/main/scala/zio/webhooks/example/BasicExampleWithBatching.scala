@@ -13,7 +13,7 @@ import zio.webhooks.testkit._
 
 /**
  * Differs from the [[BasicExample]] in that events are batched with the default batching settings
- * [[WebhookServerConfig.Batching.default]].
+ * of 128 capacity.
  */
 object BasicExampleWithBatching extends App {
 
@@ -28,9 +28,15 @@ object BasicExampleWithBatching extends App {
 
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
-      ZIO
-        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-        .as(Response.status(Status.OK))
+      for {
+        randomDelay <- random.nextIntBetween(10, 20).map(_.millis)
+        response    <- ZIO
+                         .foreach(request.getBodyAsString) { str =>
+                           putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str"""")
+                         }
+                         .as(Response.status(Status.OK))
+                         .delay(randomDelay)
+      } yield response
   }
 
   private lazy val port = 8080
@@ -40,7 +46,7 @@ object BasicExampleWithBatching extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.schedule(Schedule.fixed(500.millis)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- events.schedule(Schedule.spaced(333.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

@@ -2,7 +2,6 @@ package zio.webhooks
 
 import zio._
 import zio.duration._
-import zio.webhooks.WebhookServerConfig.Batching
 
 import java.time.Duration
 
@@ -13,7 +12,7 @@ import java.time.Duration
 final case class WebhookServerConfig(
   errorSlidingCapacity: Int,
   retry: WebhookServerConfig.Retry,
-  batching: Option[Batching] = None
+  batchingCapacity: Option[Int] = None
 )
 
 object WebhookServerConfig {
@@ -29,23 +28,8 @@ object WebhookServerConfig {
     )
   )
 
-  val defaultWithBatching: ULayer[Has[WebhookServerConfig]] = default.zipPar(Batching.default).map {
-    case (serverConfig, batching) =>
-      Has(serverConfig.get.copy(batching = Some(batching.get)))
-  }
-
-  /**
-   * Batching configuration settings
-   *
-   * @param capacity Max number of elements to hold in batching
-   * @param maxSize Max number of events that should be in a batch
-   * @param maxWaitTime Max amount of time to wait before a batch is made
-   */
-  final case class Batching(capacity: Int, maxSize: Int, maxWaitTime: Duration)
-
-  object Batching {
-    val default: ULayer[Has[Batching]] = ZLayer.succeed(Batching(128, 10, 5.seconds))
-  }
+  val defaultWithBatching: ULayer[Has[WebhookServerConfig]] =
+    default.map(serverConfig => Has(serverConfig.get.copy(batchingCapacity = Some(128))))
 
   /**
    * Retry configuration settings
