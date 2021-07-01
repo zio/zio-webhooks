@@ -355,26 +355,27 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         testM("batches for multiple webhooks") {
           val eventCount   = 100
           val webhookCount = 10
-          val maxBatchSize = eventCount / webhookCount // 10
           val webhooks     = createWebhooks(webhookCount)(
             WebhookStatus.Enabled,
             WebhookDeliveryMode.BatchedAtMostOnce
           )
-          val events       = webhooks.map(_.id).flatMap(webhook => createPlaintextEvents(maxBatchSize)(webhook))
+          val events       = webhooks.map(_.id).flatMap(webhook => createPlaintextEvents(eventCount / webhookCount)(webhook))
 
-          val expectedRequestsMade = maxBatchSize
+          val expectedRequestsMade = eventCount / webhookCount // 10
 
           webhooksTestScenario(
-            stubResponses = UStream.repeat(Some(WebhookHttpResponse(200))),
+            stubResponses = UStream.empty,
             webhooks = webhooks,
-            events = events,
+            events = Iterable.empty,
             ScenarioInterest.Requests
-          ) { (requests, _) =>
-            assertM(requests.takeBetween(expectedRequestsMade, expectedRequestsMade + 1))(
-              hasSize(equalTo(expectedRequestsMade))
-            )
+          ) { (requests, responseQueue) =>
+            for {
+              _        <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
+              _        <- responseQueue.offerAll(List.fill(10)(Some(WebhookHttpResponse(200))))
+              requests <- requests.takeBetween(expectedRequestsMade, expectedRequestsMade + 1)
+            } yield assertTrue(requests.size == expectedRequestsMade)
           }
-        } @@ ignore,
+        },
         testM("events dispatched by batch are marked delivered") {
           val eventCount = 100
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
