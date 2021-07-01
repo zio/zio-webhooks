@@ -12,8 +12,8 @@ import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
 /**
- * Differs from the [[BasicExample]] in that events are batched with the default batching settings
- * of 128 capacity.
+ * Differs from the [[BasicExample]] in that events are batched with the default batching setting
+ * of 128 elements per batch.
  */
 object BasicExampleWithBatching extends App {
 

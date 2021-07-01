@@ -45,7 +45,7 @@ object BasicExample extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.schedule(Schedule.fixed(1.second)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- events.schedule(Schedule.spaced(100.micros)).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   /**
