@@ -29,7 +29,7 @@ object BasicExampleWithBatching extends App {
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       for {
-        randomDelay <- random.nextIntBounded(10).map(_.millis)
+        randomDelay <- random.nextIntBetween(10, 20).map(_.millis)
         response    <- ZIO
                          .foreach(request.getBodyAsString) { str =>
                            putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str"""")
