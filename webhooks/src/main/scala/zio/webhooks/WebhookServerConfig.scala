@@ -12,7 +12,7 @@ import java.time.Duration
 final case class WebhookServerConfig(
   errorSlidingCapacity: Int,
   retry: WebhookServerConfig.Retry,
-  enableBatching: Boolean = false
+  batchingCapacity: Option[Int] = None
 )
 
 object WebhookServerConfig {
@@ -29,7 +29,7 @@ object WebhookServerConfig {
   )
 
   val defaultWithBatching: ULayer[Has[WebhookServerConfig]] =
-    default.map(serverConfig => Has(serverConfig.get.copy(enableBatching = true)))
+    default.map(serverConfig => Has(serverConfig.get.copy(batchingCapacity = Some(128))))
 
   /**
    * Retry configuration settings

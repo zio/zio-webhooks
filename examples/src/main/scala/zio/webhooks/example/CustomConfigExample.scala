@@ -27,13 +27,7 @@ object CustomConfigExample extends App {
           exponentialFactor = 1.5,
           timeout = 1.day
         ),
-        Some(
-          WebhookServerConfig.Batching(
-            capacity = 256,
-            maxSize = 5,
-            maxWaitTime = 1.second
-          )
-        )
+        Some(256)
       )
     )
 

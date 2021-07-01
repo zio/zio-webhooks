@@ -42,7 +42,7 @@ lazy val root =
   project
     .in(file("."))
     .settings(publish / skip := true)
-    .aggregate(zioWebhooks, zioWebhooksTest, webhooksTestkit)
+    .aggregate(zioWebhooks, zioWebhooksTest, webhooksTestkit, examples)
 
 lazy val zioWebhooks = module("zio-webhooks", "webhooks")
   .enablePlugins(BuildInfoPlugin)
