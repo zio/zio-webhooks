@@ -6,10 +6,8 @@ import zio.duration._
 import zio.json._
 import zio.prelude.NonEmptySet
 import zio.stream._
-import zio.webhooks.PersistentServerState.RetryingState
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
-import zio.webhooks.WebhookServer.WebhookState.Retrying
 import zio.webhooks.WebhookServer._
 import zio.webhooks.internal.CountDownLatch
 
@@ -28,27 +26,27 @@ import java.time.{ Instant, Duration => JDuration }
  * management.
  */
 final class WebhookServer private (
-  private val webhookRepo: WebhookRepo,
+  private val config: WebhookServerConfig,
   private val eventRepo: WebhookEventRepo,
   private val httpClient: WebhookHttpClient,
-  private val config: WebhookServerConfig,
   private val stateRepo: WebhookStateRepo,
+  private val webhookRepo: WebhookRepo,
+  private val changeQueue: Queue[WebhookState.IncomingChange],
   private val errorHub: Hub[WebhookError],
   private val internalState: RefM[InternalState],
-  private val changeQueue: Queue[WebhookState.Change],
   private val startupLatch: CountDownLatch,
-  private val shutdownSignal: Promise[Nothing, Unit],
-  private val shutdownLatch: CountDownLatch
+  private val shutdownLatch: CountDownLatch,
+  private val shutdownSignal: Promise[Nothing, Unit]
 ) {
 
   private def batchGroup(
     batchingCapacity: Int,
     batchQueues: RefM[Map[BatchKey, Queue[WebhookEvent]]],
     batchKey: BatchKey,
-    batchEvents: ZStream[Any, Nothing, WebhookEvent]
+    batchEvents: UStream[WebhookEvent]
   ) =
     for {
-      webhook <- webhookRepo.requireWebhook(batchKey._1)
+      webhook <- webhookRepo.requireWebhook(batchKey.webhookId)
       _       <- webhook.deliveryMode.batching match {
                    case WebhookDeliveryBatching.Single  =>
                      batchEvents.foreach(deliverNewEvent)
@@ -71,8 +69,45 @@ final class WebhookServer private (
                  }
     } yield ()
 
-  private def createRetry(dispatch: WebhookDispatch, timestamp: Instant) =
-    Retry(dispatch, timestamp, config.retry.exponentialBase, config.retry.exponentialFactor)
+  private def batchGroupRetry(
+    batchingCapacity: Int,
+    batchQueues: RefM[Map[BatchKey, Queue[WebhookEvent]]],
+    batchKey: BatchKey,
+    batchEvents: ZStream[Any, Nothing, WebhookEvent],
+    inFlight: Ref[Map[WebhookEventKey, WebhookEvent]],
+    retryingState: WebhookState.Retrying,
+    retryingDone: Promise[Nothing, Unit]
+  ) =
+    for {
+      webhook    <- webhookRepo.requireWebhook(batchKey.webhookId)
+      batchQueue <- batchQueues.modify { map =>
+                      map.get(batchKey) match {
+                        case Some(queue) =>
+                          UIO((queue, map))
+                        case None        =>
+                          for (queue <- Queue.bounded[WebhookEvent](batchingCapacity))
+                            yield (queue, map + (batchKey -> queue))
+                      }
+                    }
+      latch      <- Promise.make[Nothing, Unit]
+      _          <- doRetryBatching(webhook, batchQueue, latch, inFlight, retryingState, retryingDone).fork
+      _          <- latch.await
+      _          <- batchEvents.run(ZSink.fromQueue(batchQueue))
+    } yield ()
+
+  private def createRetryingState(timestamp: Instant) =
+    Queue
+      .bounded[WebhookEvent](config.retry.capacity)
+      .map(retryQueue =>
+        WebhookState.Retrying(
+          sinceTime = timestamp,
+          retryQueue,
+          lastRetryTime = timestamp,
+          config.retry.exponentialBase,
+          config.retry.exponentialFactor,
+          timeLeft = config.retry.timeout
+        )
+      )
 
   /**
    * Attempts delivery of a [[WebhookDispatch]] to a webhook endpoint. On successful delivery,
@@ -80,29 +115,29 @@ final class WebhookServer private (
    * at-least-once delivery semantics are enqueued for retrying.
    */
   private def deliver(dispatch: WebhookDispatch): URIO[Clock, Unit] = {
-    def changeToRetryState(id: WebhookId, state: InternalState) =
+    def changeToRetryingState(id: WebhookId, state: InternalState) =
       for {
         instant       <- clock.instant
         _             <- webhookRepo.setWebhookStatus(id, WebhookStatus.Retrying(instant))
-        retryingState <- WebhookState.Retrying.make(config.retry.capacity)
-        _             <- retryingState.dispatchQueue.offer(dispatch)
-        _             <- changeQueue.offer(WebhookState.Change.ToRetrying(id, retryingState.dispatchQueue))
+        retryingState <- createRetryingState(instant)
+        _             <- retryingState.enqueueAll(dispatch.events)
+        _             <- changeQueue.offer(WebhookState.IncomingChange.ToRetrying(id, retryingState))
       } yield state.updateWebhookState(id, retryingState)
 
     def handleAtLeastOnce = {
       val id = dispatch.webhookId
       internalState.update { internalState =>
         internalState.webhookState.get(id) match {
-          case Some(WebhookState.Enabled)               =>
-            changeToRetryState(id, internalState)
-          case None                                     =>
-            changeToRetryState(id, internalState)
-          case Some(WebhookState.Retrying(_, queue, _)) =>
-            queue.offer(dispatch) *> UIO(internalState)
-          case Some(WebhookState.Disabled)              =>
+          case Some(WebhookState.Enabled)            =>
+            changeToRetryingState(id, internalState)
+          case None                                  =>
+            changeToRetryingState(id, internalState)
+          case Some(retrying: WebhookState.Retrying) =>
+            retrying.enqueueAll(dispatch.events) *> UIO(internalState)
+          case Some(WebhookState.Disabled)           =>
             // TODO: handle
             UIO(internalState)
-          case Some(WebhookState.Unavailable)           =>
+          case Some(WebhookState.Unavailable)        =>
             // TODO: handle
             UIO(internalState)
         }
@@ -131,42 +166,28 @@ final class WebhookServer private (
     } yield ()
   }.catchAll(errorHub.publish(_).unit)
 
-  private def doBatching(webhook: Webhook, events: Dequeue[WebhookEvent], latch: Promise[Nothing, Unit]) = {
-
-    val batchingLoop = {
-      for {
-        batch   <- events.take.zipWith(events.takeAll)(NonEmptyChunk.fromIterable(_, _))
-        dispatch = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
-        _       <- deliver(dispatch).when(webhook.isAvailable)
-      } yield ()
-    }
-    events.poll *> latch.succeed(()) *> batchingLoop.forever
+  private def doBatching(webhook: Webhook, batchQueue: Dequeue[WebhookEvent], latch: Promise[Nothing, Unit]) = {
+    val deliverBatch = for {
+      batch   <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptyChunk.fromIterable(_, _))
+      dispatch = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
+      _       <- deliver(dispatch).when(webhook.isAvailable)
+    } yield ()
+    batchQueue.poll *> latch.succeed(()) *> deliverBatch.forever
   }
 
-  private def doRetry(webhookId: WebhookId, retry: Retry, retryQueue: Queue[Retry]) = {
-    val dispatch = retry.dispatch
-    for {
-      response  <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
-      nextState <- response match {
-                     case Some(WebhookHttpResponse(200)) =>
-                       markDispatch(dispatch, WebhookEventStatus.Delivered) *>
-                         internalState.updateAndGet { state =>
-                           UIO(state.removeRetry(webhookId, dispatch))
-                         }
-                     case _                              =>
-                       for {
-                         next  <- clock.instant.map(retry.next)
-                         state <- internalState.updateAndGet { state =>
-                                    ZIO.foreach_(next.backoff) { backoff =>
-                                      retryQueue.offer(next).delay(backoff).fork
-                                    } *> UIO(state.setRetry(webhookId, next))
-                                  }
-                       } yield state
-                   }
-
-    } yield nextState.webhookState.get(webhookId).collect {
-      case WebhookState.Retrying(_, _, retries) => retries
-    }
+  private def doRetryBatching(
+    webhook: Webhook,
+    batchQueue: Queue[WebhookEvent],
+    latch: Promise[Nothing, Unit],
+    inFlight: Ref[Map[WebhookEventKey, WebhookEvent]],
+    retryingState: WebhookState.Retrying,
+    retryingDone: Promise[Nothing, Unit]
+  ) = {
+    val deliverBatch = for {
+      batchEvents <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptyChunk.fromIterable(_, _))
+      _           <- retryEvents(inFlight, webhook.id, retryingState, retryingDone, batchEvents)
+    } yield ()
+    batchQueue.poll *> latch.succeed(()) *> deliverBatch.repeatUntilM(_ => retryingDone.isDone)
   }
 
   /**
@@ -182,111 +203,143 @@ final class WebhookServer private (
     else
       eventRepo.setEventStatusMany(dispatch.keys, newStatus)
 
-  private def mergeShutdown[A](stream: UStream[A]) =
+  /**
+   * Merges a stream with the shutdown signal, terminating it when the signal arrives.
+   */
+  private def mergeShutdown[A](stream: UStream[A]): UStream[A] =
     stream
       .map(Left(_))
       .mergeTerminateRight(UStream.fromEffect(shutdownSignal.await.map(Right(_))))
       .collectLeft
 
-  // TODO: clean this up
   /**
-   * Reconstructs the server's internal retrying states from the loaded server state. Events are
-   * loaded
+   * Reconstructs the server's internal retrying states from the loaded server state.
    */
-  private def reconstructInternalState(loadedState: PersistentServerState) =
+  private def reconstructInternalState(loadedState: PersistentServerState): ZIO[Clock, Nothing, Unit] =
     for {
-      eventMap    <- eventRepo
-                       .getEventsByStatuses(NonEmptySet(WebhookEventStatus.Delivering))
-                       .use(_.takeAll.map(Chunk.fromIterable(_).groupBy(_.key.webhookId)))
-      queues      <- ZIO.collectAll {
-                       Chunk.fill(eventMap.size)(Queue.bounded[WebhookDispatch](config.retry.capacity))
-                     }
-      timestamp   <- clock.instant
-      emptyStates  = Chunk.fill(eventMap.size)(RetryingState(timestamp, List.empty))
-      idStateMap   = loadedState.map.map { case (l, state) => (WebhookId(l), state) }
-      joinMap      = eventMap.map { case (id, events) => (id, events) }
-                       .zip(emptyStates)
-                       .zip(queues)
-                       .map {
-                         case (((webhookId, events), emptyState), dispatchQueue) =>
-                           (webhookId, (events, dispatchQueue, idStateMap.getOrElse(webhookId, emptyState)))
-                       }
-                       .toMap
-      retryStates <- ZIO.foreach(joinMap) {
-                       case (webhookId, (events, dispatchQueue, loadedRetryingState)) =>
-                         val dispatchKeys   = loadedRetryingState.retries
-                           .map(_.dispatch.eventKeys)
-                           .zipWithIndex
-                           .map { case (set, i) => set.map((_, i)) }
-                           .fold(Set.empty)(_.union(_))
-                           .toMap
-                         val retries        = Chunk.fromIterable(loadedRetryingState.retries)
-                         val dispatchEvents = events
-                           .filter(event => dispatchKeys.contains(event.key))
-                           .foldLeft(Chunk.fill[Chunk[WebhookEvent]](loadedState.map.size)(Chunk.empty)) {
-                             (dispatches, event) =>
-                               dispatches.updated(
-                                 dispatchKeys(event.key),
-                                 dispatches(dispatchKeys(event.key)) :+ event
-                               )
-                           }
-                           .map(NonEmptyChunk.fromChunk)
-                           .collect { case Some(events) => events }
-                         val retryMap       = retries
-                           .zipWith(dispatchEvents) { (retry, dispatches) =>
-                             val dispatch     =
-                               WebhookDispatch(
-                                 webhookId,
-                                 retry.dispatch.url,
-                                 retry.dispatch.deliverySemantics,
-                                 dispatches
-                               )
-                             val retryMapElem = (
-                               dispatch,
-                               Retry(
-                                 dispatch,
-                                 timestamp,
-                                 retry.base,
-                                 retry.power,
-                                 retry.backoff,
-                                 retry.attempt
-                               )
+      retryingMap <- ZIO.foreach(loadedState.map) {
+                       case (id, retryingState) =>
+                         for (retryQueue <- Queue.bounded[WebhookEvent](config.retry.capacity))
+                           yield (
+                             WebhookId(id),
+                             WebhookState.Retrying(
+                               retryingState.sinceTime,
+                               retryQueue,
+                               retryingState.lastRetryTime,
+                               retryingState.base,
+                               retryingState.power,
+                               retryingState.timeLeft,
+                               retryingState.backoff,
+                               retryingState.attempt
                              )
-                             retryMapElem
-                           }
-                           .toMap
+                           )
 
-                         val enqueueUnsavedEvents =
-                           webhookRepo
-                             .requireWebhook(webhookId)
-                             .flatMap { webhook =>
-                               val dispatches = events
-                                 .filterNot(event => dispatchKeys.contains(event.key))
-                                 .map(event =>
-                                   WebhookDispatch(
-                                     webhookId,
-                                     webhook.url,
-                                     webhook.deliveryMode.semantics,
-                                     NonEmptyChunk(event)
-                                   )
-                                 )
-                                 .filter(_.deliverySemantics == WebhookDeliverySemantics.AtLeastOnce)
-                               dispatchQueue.offerAll(dispatches)
-                             }
-                             .catchAll(errorHub.publish(_))
-                             .fork
-                         enqueueUnsavedEvents *>
-                           UIO((webhookId, Retrying(loadedRetryingState.sinceTime, dispatchQueue, retryMap)))
                      }
-      _           <- internalState.set(InternalState(retryStates))
-      // put webhooks in retry state
-      _           <- ZIO
-                       .foreach_(retryStates) {
-                         case (webhookId, retrying) =>
-                           changeQueue.offer(WebhookState.Change.ToRetrying(webhookId, retrying.dispatchQueue))
-                       }
-                       .fork
+      _           <- internalState.set(InternalState(retryingMap))
+      _           <- ZIO.foreach_(retryingMap) {
+                       case (webhookId, retryingState) =>
+                         changeQueue.offer(WebhookState.IncomingChange.ToRetrying(webhookId, retryingState))
+                     }
     } yield ()
+
+  def retryBatched(
+    retryingState: WebhookState.Retrying,
+    inFlight: Ref[Map[WebhookEventKey, WebhookEvent]],
+    webhookId: WebhookId,
+    batchingCapacity: Int
+  ): URIO[Clock, Unit] =
+    for {
+      batchQueues  <- RefM.make(Map.empty[BatchKey, Queue[WebhookEvent]])
+      retryingDone <- Promise.make[Nothing, Unit]
+      _            <- mergeShutdown(UStream.fromQueue(retryingState.retryQueue))
+                        .groupByKey(ev => BatchKey(webhookId, ev.contentType)) {
+                          case (batchKey, batchEvents) =>
+                            ZStream.fromEffect {
+                              batchGroupRetry(
+                                batchingCapacity,
+                                batchQueues,
+                                batchKey,
+                                batchEvents,
+                                inFlight,
+                                retryingState,
+                                retryingDone
+                              )
+                                .catchAll(errorHub.publish(_).unit)
+                            }
+                        }
+                        .runDrain
+    } yield ()
+
+  private def retryEvents(
+    inFlight: Ref[Map[WebhookEventKey, WebhookEvent]],
+    webhookId: WebhookId,
+    retryingState: WebhookState.Retrying,
+    retryingDone: Promise[Nothing, Unit],
+    events: NonEmptyChunk[WebhookEvent]
+  ) =
+    for {
+      _        <- inFlight.update(_ ++ events.map(ev => ev.key -> ev))
+      webhook  <- webhookRepo.requireWebhook(webhookId)
+      dispatch  = WebhookDispatch(
+                    webhook.id,
+                    webhook.url,
+                    webhook.deliveryMode.semantics,
+                    events
+                  )
+      response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
+      _        <- inFlight.update(_.removeAll(events.map(_.key)))
+      _        <- response match {
+                    case Some(WebhookHttpResponse(200)) =>
+                      for {
+                        _             <- markDispatch(dispatch, WebhookEventStatus.Delivered)
+                        timestamp     <- clock.instant
+                        queueEmpty    <- internalState.modify { state =>
+                                           val newState = retryingState.resetBackoff(timestamp)
+                                           newState.retryQueue.size.map(_ == 0) zip
+                                             UIO(state.updateWebhookState(webhook.id, newState))
+                                         }
+                        inFlightEmpty <- inFlight.get.map(_.isEmpty)
+                        _             <- ZIO.when(queueEmpty && inFlightEmpty)(
+                                           retryingState.retryQueue.shutdown *> retryingDone.succeed(())
+                                         )
+                      } yield ()
+                    case _                              =>
+                      for {
+                        timestamp <- clock.instant
+                        nextState  = retryingState.increaseBackoff(timestamp)
+                        _         <- internalState.update(state => UIO(state.updateWebhookState(webhookId, nextState)))
+                        _         <- nextState.backoff match {
+                                       case Some(backoff) =>
+                                         retryingState.retryQueue.offerAll(events).delay(backoff)
+                                       case None          =>
+                                         retryingState.retryQueue.offerAll(events)
+                                     }
+                      } yield ()
+                  }
+    } yield ()
+
+  private def retrySingly(
+    retryingState: WebhookState.Retrying,
+    inFlight: Ref[Map[WebhookEventKey, WebhookEvent]],
+    webhookId: WebhookId
+  ) = {
+    val retryQueue  = retryingState.retryQueue
+    val retryStream = UStream.fromQueue(retryQueue)
+    for {
+      retryingDone <- Promise.make[Nothing, Unit]
+      _            <- mergeShutdown(retryStream)
+                        .mapM(event =>
+                          retryEvents(
+                            inFlight,
+                            webhookId,
+                            retryingState,
+                            retryingDone,
+                            NonEmptyChunk.single(event)
+                          ).catchAll(errorHub.publish).fork
+                        )
+                        .runDrain
+    } yield ()
+  }
 
   /**
    * Starts the webhook server. The following are run concurrently:
@@ -309,36 +362,80 @@ final class WebhookServer private (
   private def startBatching(dequeue: Dequeue[WebhookEvent], batchingCapacity: Int) =
     for {
       batchQueues <- RefM.make(Map.empty[BatchKey, Queue[WebhookEvent]])
-      _           <- mergeShutdown(UStream.fromQueue(dequeue))
-                       .groupByKey(_.webhookIdAndContentType) {
-                         case (batchKey, events) =>
-                           ZStream.fromEffect {
-                             batchGroup(batchingCapacity, batchQueues, batchKey, events)
-                               .catchAll(errorHub.publish(_).unit)
-                           }
-                       }
-                       .runDrain
+      _           <- mergeShutdown(UStream.fromQueue(dequeue)).groupByKey { ev =>
+                       val (webhookId, contentType) = ev.webhookIdAndContentType
+                       BatchKey(webhookId, contentType)
+                     } {
+                       case (batchKey, events) =>
+                         ZStream.fromEffect {
+                           batchGroup(batchingCapacity, batchQueues, batchKey, events)
+                             .catchAll(errorHub.publish(_).unit)
+                         }
+                     }.runDrain
     } yield ()
 
   /**
    * Starts recovery of events with status [[WebhookEventStatus.Delivering]] for webhooks with
-   * [[WebhookDeliverySemantics.AtLeastOnce]]. Recovery is done by reconstructing
+   * delivery semantics [[WebhookDeliverySemantics.AtLeastOnce]]. Recovery is done by reconstructing
    * [[WebhookServer.InternalState]], the server's internal representation of webhooks it handles.
+   * Events are loaded incrementally and are queued for retrying.
+   *
    * This ensures retries are persistent with respect to server restarts.
    */
-  private def startEventRecovery: URIO[Clock, Unit] = {
-    for {
-      _ <- stateRepo.getState.flatMap {
-             case Some(rawState) =>
-               ZIO
-                 .fromEither(rawState.fromJson[PersistentServerState])
-                 .mapError(message => InvalidStateError(rawState, message))
-                 .flatMap(reconstructInternalState)
-             case None           =>
-               reconstructInternalState(PersistentServerState.empty)
-           }
-    } yield ()
-  }.catchAll(errorHub.publish(_).unit)
+  private def startEventRecovery: URIO[Clock, Any] = {
+    def recover(event: WebhookEvent) =
+      for {
+        retryQueue <- internalState.modify { state =>
+                        state.webhookState.get(event.key.webhookId) match {
+                          case Some(retrying: WebhookState.Retrying) =>
+                            UIO((Some(retrying.retryQueue), state))
+                          case None                                  =>
+                            ZIO.mapN(Queue.bounded[WebhookEvent](config.retry.capacity), clock.instant) {
+                              (retryQueue, now) =>
+                                (
+                                  Some(retryQueue),
+                                  state.updateWebhookState(
+                                    event.key.webhookId,
+                                    WebhookState.Retrying(
+                                      sinceTime = now,
+                                      retryQueue,
+                                      lastRetryTime = now,
+                                      base = config.retry.exponentialBase,
+                                      power = config.retry.exponentialFactor,
+                                      timeLeft = config.retry.timeout
+                                    )
+                                  )
+                                )
+                            }
+                          case _                                     =>
+                            UIO((None, state))
+                        }
+                      }
+        _          <- ZIO.foreach_(retryQueue)(_.offer(event))
+      } yield ()
+
+    {
+      for {
+        _ <- stateRepo.getState.flatMap {
+               case Some(rawState) =>
+                 ZIO
+                   .fromEither(rawState.fromJson[PersistentServerState])
+                   .mapError(message => InvalidStateError(rawState, message))
+                   .flatMap(reconstructInternalState)
+               case None           =>
+                 reconstructInternalState(PersistentServerState.empty)
+             }
+        _ <- eventRepo.getEventsByStatuses(NonEmptySet.single(WebhookEventStatus.Delivering)).use {
+               UStream.fromQueue(_).foreach { event =>
+                 for {
+                   webhook <- webhookRepo.requireWebhook(event.key.webhookId)
+                   _       <- recover(event).when(webhook.isAvailable)
+                 } yield ()
+               }
+             }
+      } yield ()
+    }.catchAll(errorHub.publish(_).unit).fork
+  }
 
   /**
    * Starts new [[WebhookEvent]] subscription. Counts down on the `startupLatch` signalling it's
@@ -362,139 +459,114 @@ final class WebhookServer private (
           _           <- shutdownLatch.countDown
         } yield ()
       }
-      .forkAs("new-event-subscription")
+      .fork
 
   /**
-   * Starts retries on a webhook's dispatch queue. Retries until the retry map is exhausted.
+   * Starts retries on a webhook's retry queue. Retries until the retry map is exhausted.
    */
-  private def startRetrying(webhookId: WebhookId, dispatchQueue: Queue[WebhookDispatch]) =
+  private def startRetrying(
+    webhookId: WebhookId,
+    retryingState: WebhookState.Retrying
+  ): ZIO[Clock, WebhookError, Unit] =
     for {
-      retryQueue    <- Queue.bounded[Retry](config.retry.capacity)
-      state         <- internalState.get
-      _             <- ZIO.collectAll_(state.webhookState.get(webhookId).collect {
-                         case Retrying(_, _, retries) =>
-                           ZIO.foreach_(retries.values) { retry =>
-                             retry.backoff match {
-                               case None          =>
-                                 retryQueue.offer(retry)
-                               case Some(backoff) =>
-                                 retryQueue.offer(retry).delay(backoff).fork
-                             }
-                           }
-                       })
-      dispatchFiber <- mergeShutdown(UStream.fromQueue(dispatchQueue))
-                         .mapM(dispatch =>
-                           clock.instant.flatMap { timestamp =>
-                             val retry = createRetry(dispatch, timestamp)
-                             retryQueue.offer(retry) *>
-                               // 2.12 fails to infer updateAndGet type params below
-                               internalState
-                                 .updateAndGet[Any, Nothing](state => UIO(state.setRetry(webhookId, retry)))
-                           }
-                         )
-                         .runDrain
-                         .fork
-      retryFiber    <- mergeShutdown(UStream.fromQueue(retryQueue))
-                         .mapM(retry => doRetry(webhookId, retry, retryQueue) zip dispatchQueue.size)
-                         .takeUntil { case (retries, dispatchSize) => retries.exists(_.isEmpty) && dispatchSize <= 0 }
-                         .runDrain
-                         .fork
-      _             <- retryFiber.join *> dispatchFiber.interrupt
+      inFlight <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
+      webhook  <- webhookRepo.requireWebhook(webhookId)
+      _        <- (webhook.batching, config.batchingCapacity) match {
+                    case (WebhookDeliveryBatching.Batched, Some(capacity)) =>
+                      retryBatched(retryingState, inFlight, webhookId, capacity)
+                    case _                                                 =>
+                      retrySingly(retryingState, inFlight, webhookId)
+                  }
     } yield ()
 
   /**
-   * Performs retrying logic for webhooks. If retries time out, the webhook is set to
+   * Performs retrying logic for webhooks. If retrying time out, the webhook is set to
    * [[WebhookStatus.Unavailable]] and all its events are marked [[WebhookEventStatus.Failed]].
    */
-  private def startRetryMonitoring = {
+  private def startRetryMonitoring: URIO[Clock, Any] = {
     mergeShutdown(UStream.fromQueue(changeQueue)).foreach {
-      case WebhookState.Change.ToRetrying(id, dispatchQueue) =>
+      case WebhookState.IncomingChange.ToRetrying(id, retrying) =>
         (for {
-          retriesDone <- startRetrying(id, dispatchQueue).timeoutTo(false)(_ => true)(config.retry.timeout)
+          retriesDone <- startRetrying(id, retrying).timeoutTo(false)(_ => true)(retrying.timeLeft)
           newStatus   <- if (retriesDone)
-                           ZIO.succeed(WebhookStatus.Enabled)
+                           UIO(WebhookStatus.Enabled)
                          else
-                           eventRepo.setAllAsFailedByWebhookId(id) &> clock.instant.map(WebhookStatus.Unavailable)
+                           eventRepo.setAllAsFailedByWebhookId(id) *> clock.instant.map(WebhookStatus.Unavailable)
           _           <- webhookRepo.setWebhookStatus(id, newStatus)
           _           <- internalState.update { state =>
                            UIO(state.updateWebhookState(id, WebhookState.from(newStatus)))
                          }
         } yield ()).catchAll(errorHub.publish).fork
     } *> shutdownLatch.countDown
-  }.forkAs("retry-monitoring")
+  }.fork
 
   /**
    * Waits until all work in progress is finished, then shuts down.
    */
   def shutdown: ZIO[Clock, IOException, Any] =
     for {
-      _     <- shutdownSignal.succeed(())
-      _     <- shutdownLatch.await
-      state <- internalState.get.flatMap(toWebhookServerState)
-      _     <- ZIO.foreach_(state)(state => stateRepo.setState(state.toJson))
+      _               <- shutdownSignal.succeed(())
+      _               <- shutdownLatch.await
+      timestamp       <- clock.instant
+      persistentState <- internalState.modify { internalState =>
+                           val suspendedState = internalState.suspendRetries(timestamp)
+                           UIO((toPersistentServerState(suspendedState), suspendedState))
+                         }
+      _               <- stateRepo.setState(persistentState.toJson)
     } yield ()
 
   /**
-   * Maps the server's internal state into a [[PersistentServerState]] for persistence.
+   * Maps the server's internal state into a [[PersistentServerState]].
    */
-  def toWebhookServerState(internalState: InternalState): URIO[Clock, Option[PersistentServerState]] =
-    for {
-      timestamp   <- clock.instant
-      serverState <- if (internalState.webhookState.nonEmpty)
-                       ZIO
-                         .collectAll(internalState.webhookState.collect {
-                           case (id, WebhookState.Retrying(sinceTime, dispatchQueue, retries)) =>
-                             for {
-                               moreRetries <- dispatchQueue.takeAll
-                                                .map(_.map(dispatch => createRetry(dispatch, timestamp)))
-                               allRetries   = (retries.values ++ moreRetries).map(_.suspend(timestamp))
-                             } yield (
-                               id.value,
-                               PersistentServerState.RetryingState(
-                                 sinceTime,
-                                 allRetries.map(PersistentServerState.Retry.fromInternalState).toList
-                               )
-                             )
-                         })
-                         .map(webhookStates => Some(PersistentServerState(webhookStates.toMap)))
-                     else
-                       UIO.none
-    } yield serverState
+  private def toPersistentServerState(internalState: InternalState): PersistentServerState =
+    PersistentServerState(internalState.webhookState.collect {
+      case (webhookId, retrying: WebhookState.Retrying) =>
+        val retryingState = PersistentServerState.RetryingState(
+          sinceTime = retrying.sinceTime,
+          lastRetryTime = retrying.lastRetryTime,
+          base = retrying.base,
+          power = retrying.power,
+          timeLeft = retrying.timeLeft,
+          backoff = retrying.backoff,
+          attempt = retrying.attempt
+        )
+        (webhookId.value, retryingState)
+    })
 }
 
 object WebhookServer {
-  type BatchKey = (WebhookId, Option[(String, String)])
+  final case class BatchKey(webhookId: WebhookId, contentType: Option[String])
 
   /**
    * Creates a server, pulling dependencies from the environment then initializing internal state.
    */
   def create: URIO[Env, WebhookServer] =
     for {
-      serverConfig   <- ZIO.service[WebhookServerConfig]
-      webhookRepo    <- ZIO.service[WebhookRepo]
+      config         <- ZIO.service[WebhookServerConfig]
       eventRepo      <- ZIO.service[WebhookEventRepo]
       httpClient     <- ZIO.service[WebhookHttpClient]
+      webhookRepo    <- ZIO.service[WebhookRepo]
       webhookState   <- ZIO.service[WebhookStateRepo]
+      changeQueue    <- Queue.bounded[WebhookState.IncomingChange](config.retry.capacity)
+      errorHub       <- Hub.sliding[WebhookError](config.errorSlidingCapacity)
       state          <- RefM.make(InternalState(Map.empty))
-      errorHub       <- Hub.sliding[WebhookError](serverConfig.errorSlidingCapacity)
-      changeQueue    <- Queue.bounded[WebhookState.Change](serverConfig.retry.capacity)
       // startup sync point: new event sub
       startupLatch   <- CountDownLatch.make(1)
-      shutdownSignal <- Promise.make[Nothing, Unit]
       // shutdown sync points: new event sub + retrying
       shutdownLatch  <- CountDownLatch.make(2)
+      shutdownSignal <- Promise.make[Nothing, Unit]
     } yield new WebhookServer(
-      webhookRepo,
+      config,
       eventRepo,
       httpClient,
-      serverConfig,
       webhookState,
+      webhookRepo,
+      changeQueue,
       errorHub,
       state,
-      changeQueue,
       startupLatch,
-      shutdownSignal,
-      shutdownLatch
+      shutdownLatch,
+      shutdownSignal
     )
 
   type Env = Has[WebhookRepo]
@@ -513,15 +585,15 @@ object WebhookServer {
    * shutdown state is used as a signal to stop new event subscription, batching, and retrying.
    */
   private[webhooks] final case class InternalState(webhookState: Map[WebhookId, WebhookState]) {
-
-    def removeRetry(id: WebhookId, dispatch: WebhookDispatch): InternalState =
-      copy(webhookState = webhookState.updatedWithBackport(id)(_.map(_.removeRetry(dispatch))))
-
-    def setRetry(id: WebhookId, retry: Retry): InternalState =
-      copy(webhookState = webhookState.updatedWithBackport(id)(_.map(_.setRetry(retry))))
-
     def updateWebhookState(id: WebhookId, newWebhookState: WebhookState): InternalState =
       copy(webhookState = webhookState.updated(id, newWebhookState))
+
+    def suspendRetries(timestamp: Instant): InternalState =
+      copy(webhookState = webhookState.map {
+        case (id, retrying: WebhookState.Retrying) =>
+          (id, retrying.suspend(timestamp))
+        case (id, state)                           => (id, state)
+      })
   }
 
   /**
@@ -535,63 +607,17 @@ object WebhookServer {
     } yield server
   }.toLayer
 
-  /**
-   * A [[Retry]] represents the retry state of each dispatch. Retries back off exponentially.
-   */
-  private[webhooks] final case class Retry(
-    dispatch: WebhookDispatch,
-    timestamp: Instant,
-    base: Duration,
-    power: Double,
-    backoff: Option[Duration] = None,
-    attempt: Int = 0
-  ) {
-
-    /**
-     * Progresses to the next retry by calculating the next exponential backoff.
-     */
-    def next(timestamp: Instant): Retry =
-      copy(
-        timestamp = timestamp,
-        backoff = backoff.map(_ => Some(base * math.pow(2, attempt.toDouble))).getOrElse(Some(base)),
-        attempt = attempt + 1
-      )
-
-    /**
-     * Suspends this retry by replacing the backoff with the time left until its backoff completes.
-     */
-    def suspend(now: Instant): Retry =
-      copy(backoff = backoff.map(_.minus(JDuration.between(now, timestamp))))
-  }
-
   def shutdown: ZIO[Has[WebhookServer] with Clock, IOException, Any] =
     ZIO.environment[Has[WebhookServer] with Clock].flatMap(_.get[WebhookServer].shutdown)
 
   /**
    * [[WebhookState]] is the server's internal representation of a webhook's state.
    */
-  private[webhooks] sealed trait WebhookState extends Product with Serializable { self =>
-    final def setRetry(retry: Retry): WebhookState =
-      self match {
-        case retrying @ WebhookState.Retrying(_, _, retries) =>
-          retrying.copy(retries = retries + (retry.dispatch -> retry))
-        case _                                               =>
-          self // should we fail here?
-      }
-
-    final def removeRetry(dispatch: WebhookDispatch): WebhookState =
-      self match {
-        case retrying @ WebhookState.Retrying(_, _, retries) =>
-          retrying.copy(retries = retries - dispatch)
-        case _                                               =>
-          self // should we fail here?
-      }
-  }
-
+  private[webhooks] sealed trait WebhookState extends Product with Serializable
   private[webhooks] object WebhookState {
-    sealed trait Change
-    object Change {
-      final case class ToRetrying(id: WebhookId, queue: Queue[WebhookDispatch]) extends Change
+    sealed trait IncomingChange extends Product with Serializable
+    object IncomingChange {
+      final case class ToRetrying(id: WebhookId, retrying: Retrying) extends IncomingChange
     }
 
     case object Disabled extends WebhookState
@@ -606,13 +632,41 @@ object WebhookServer {
 
     final case class Retrying(
       sinceTime: Instant,
-      dispatchQueue: Queue[WebhookDispatch],
-      retries: Map[WebhookDispatch, Retry] = Map.empty
-    ) extends WebhookState
+      retryQueue: Queue[WebhookEvent],
+      lastRetryTime: Instant,
+      base: Duration,
+      power: Double,
+      timeLeft: Duration,
+      backoff: Option[Duration] = None,
+      attempt: Int = 0
+    ) extends WebhookState {
+      def enqueueAll(events: Iterable[WebhookEvent]): UIO[Boolean] =
+        retryQueue.offerAll(events)
 
-    object Retrying {
-      def make(capacity: Int): URIO[Clock, Retrying] =
-        ZIO.mapN(clock.instant, Queue.bounded[WebhookDispatch](capacity))(Retrying(_, _))
+      /**
+       * Progresses retrying to the next exponential backoff.
+       */
+      def increaseBackoff(timestamp: Instant): Retrying =
+        copy(
+          lastRetryTime = timestamp,
+          backoff = backoff.map(_ => Some(base * math.pow(2, attempt.toDouble))).getOrElse(Some(base)),
+          attempt = attempt + 1
+        )
+
+      /**
+       * Resets backoff
+       */
+      def resetBackoff(timestamp: Instant): Retrying =
+        copy(lastRetryTime = timestamp, backoff = None, attempt = 0)
+
+      /**
+       * Suspends this retry by replacing the backoff with the time left until its backoff completes.
+       */
+      def suspend(now: Instant): Retrying =
+        copy(
+          backoff = backoff.map(_.minus(JDuration.between(now, lastRetryTime))),
+          timeLeft = timeLeft.minus(Duration.fromInterval(sinceTime, now))
+        )
     }
 
     case object Unavailable extends WebhookState

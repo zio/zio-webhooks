@@ -1,12 +1,19 @@
 package zio
 
-import zio.json._
-import zio.prelude.NonEmptySet
-
 package object webhooks {
 
   private[webhooks] implicit class MapOps[K, V](self: Map[K, V]) {
-    def updatedWithBackport[V1 >: V](key: K)(remappingFunction: Option[V] => Option[V1]): Map[K, V1] = {
+
+    /**
+     * A backport of Scala 2.13's [[scala.collection.immutable.MapOps.removedAll]]
+     */
+    def removeAll(keys: Iterable[K]): Map[K, V] =
+      keys.iterator.foldLeft(self)(_ - _)
+
+    /**
+     * A backport of Scala 2.13's [[scala.collection.immutable.MapOps.updatedWith]]
+     */
+    def updateWith[V1 >: V](key: K)(remappingFunction: Option[V] => Option[V1]): Map[K, V1] = {
       val previousValue = self.get(key)
       val nextValue     = remappingFunction(previousValue)
       (previousValue, nextValue) match {
@@ -16,10 +23,4 @@ package object webhooks {
       }
     }
   }
-
-  private[webhooks] implicit def nonEmptySetDecoder[A: JsonDecoder]: JsonDecoder[NonEmptySet[A]] =
-    JsonDecoder.set[A].mapOrFail(NonEmptySet.fromSetOption(_).toRight("Set is empty"))
-
-  private[webhooks] implicit def nonEmptySetEncoder[A: JsonEncoder]: JsonEncoder[NonEmptySet[A]] =
-    JsonEncoder.set[A].contramap(_.toSet)
 }

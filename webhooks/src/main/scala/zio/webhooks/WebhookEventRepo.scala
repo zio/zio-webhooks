@@ -15,15 +15,6 @@ trait WebhookEventRepo {
   def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UManaged[Dequeue[WebhookEvent]]
 
   /**
-   * Used by the server during event recovery to get a webhook's events whose status is in the given
-   * set of `statuses`.
-   */
-  def getEventsByWebhookAndStatus(
-    id: WebhookId,
-    statuses: NonEmptySet[WebhookEventStatus]
-  ): UIO[Chunk[WebhookEvent]]
-
-  /**
    * Marks all events by the specified webhook id as failed.
    */
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit]
