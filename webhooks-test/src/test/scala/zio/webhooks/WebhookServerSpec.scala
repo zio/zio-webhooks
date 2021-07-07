@@ -229,17 +229,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Webhooks
-            ) {
-              (webhooks, _) =>
-                for {
-                  status2    <- webhooks.take *> webhooks.take.map(_.status)
-                  status3Poll = TestClock.adjust(1.day) *> webhooks.poll.map(_.map(_.status))
-                  retrySched  = Schedule.recurUntil[Option[WebhookStatus]](_.isDefined) && Schedule.spaced(50.millis)
-                  status3    <- status3Poll.repeat(retrySched).map(_._1).provideSomeLayer[TestClock](Clock.live)
-                } yield assertTrue(status2 == Retrying(Instant.EPOCH)) &&
-                  assert(status3)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
+            ) { (webhooks, _) =>
+              for {
+                status2 <- webhooks.take *> webhooks.take.map(_.status)
+                status3 <- webhooks.take.map(_.status) raceEither TestClock.adjust(7.days).forever
+              } yield assertTrue(status2 == Retrying(Instant.EPOCH)) &&
+                assert(status3)(isLeft(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
-          },
+          } @@ timeout(5.seconds),
           testM("marks all a webhook's events failed when marked unavailable") {
             val n       = 2
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -325,7 +322,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                             }
             } yield testResult
           }
-        ) @@ ignore
+        )
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
         testM("batches events queued up since last request") {
@@ -362,7 +359,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             createPlaintextEvents(eventCount / webhookCount)(webhookId)
           }
 
-          val expectedRequestsMade = eventCount / webhookCount // 10
+          val minRequestsMade = eventCount / webhookCount // 10
+          val maxRequestsMade = minRequestsMade * 2
 
           webhooksTestScenario(
             stubResponses = UStream.empty,
@@ -372,8 +370,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           ) { (requests, responseQueue) =>
             for {
               _        <- responseQueue.offerAll(List.fill(10)(Some(WebhookHttpResponse(200))))
-              requests <- requests.takeBetween(expectedRequestsMade, expectedRequestsMade + 1)
-            } yield assertTrue(requests.size == expectedRequestsMade)
+              requests <- requests.takeBetween(minRequestsMade, minRequestsMade + 1)
+            } yield assertTrue((minRequestsMade <= requests.size) && (requests.size <= maxRequestsMade))
           }
         },
         testM("events dispatched by batch are marked delivered") {

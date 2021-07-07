@@ -9,7 +9,7 @@ import java.time.{ Duration, Instant }
  * A persistent version of [[WebhookServer.InternalState]] saved on server shutdown and loaded on
  * server restart.
  */
-private[webhooks] final case class PersistentServerState(map: Map[Long, RetryingState])
+private[webhooks] final case class PersistentServerState(retryingStates: Map[Long, RetryingState])
 
 private[webhooks] object PersistentServerState {
   val empty: PersistentServerState = PersistentServerState(Map.empty)
@@ -23,7 +23,7 @@ private[webhooks] object PersistentServerState {
     base: Duration,
     power: Double,
     timeLeft: Duration,
-    backoff: Option[Duration],
+    backoff: Duration,
     attempt: Int
   )
 
