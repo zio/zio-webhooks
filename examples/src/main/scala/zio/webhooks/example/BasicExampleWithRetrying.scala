@@ -24,27 +24,32 @@ object BasicExampleWithRetrying extends App {
       for {
         n        <- random.nextIntBounded(100)
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response <- ZIO.foreach(payload) { payload =>
-                      if (n < 30)
-                        putStrLn(tsString + payload + " Response: OK") *>
-                          UIO(Response.status(Status.OK))
-                      else
-                        putStrLn(tsString + payload + " Response: NOT_FOUND") *>
-                          UIO(Response.status(Status.NOT_FOUND))
-                    }.orDie
+        response <- ZIO
+                      .foreach(payload) { payload =>
+                        if (n < 30)
+                          putStrLn(tsString + payload + " Response: OK") *>
+                            UIO(Response.status(Status.OK))
+                        else
+                          putStrLn(tsString + payload + " Response: NOT_FOUND") *>
+                            UIO(Response.status(Status.NOT_FOUND))
+                      }
+                      .orDie
       } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
   }
 
   private lazy val n = 10L
 
-  private lazy val nEvents = UStream.iterate(0L)(_ + 1).map { i =>
-    WebhookEvent(
-      WebhookEventKey(WebhookEventId(i), webhook.id),
-      WebhookEventStatus.New,
-      s"""{"payload":$i}""",
-      Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-    )
-  }.take(n)
+  private lazy val nEvents = UStream
+    .iterate(0L)(_ + 1)
+    .map { i =>
+      WebhookEvent(
+        WebhookEventKey(WebhookEventId(i), webhook.id),
+        WebhookEventStatus.New,
+        s"""{"payload":$i}""",
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+      )
+    }
+    .take(n)
 
   private lazy val port = 8080
 
