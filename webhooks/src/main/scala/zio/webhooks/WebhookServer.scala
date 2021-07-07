@@ -95,19 +95,21 @@ final class WebhookServer private (
     } yield ()
 
   private def createRetryingState(timestamp: Instant) =
-    Queue
-      .bounded[WebhookEvent](config.retry.capacity)
-      .map(retryQueue =>
-        WebhookState.Retrying(
-          sinceTime = timestamp,
-          retryQueue,
-          lastRetryTime = timestamp,
-          config.retry.exponentialBase,
-          config.retry.exponentialFactor,
-          timeLeft = config.retry.timeout,
-          nextBackoff = config.retry.exponentialBase
-        )
+    ZIO.mapN(
+      Queue.bounded[WebhookEvent](config.retry.capacity),
+      Queue.bounded[Promise[Nothing, Unit]](config.retry.capacity)
+    )((retryQueue, backoffResetsQueue) =>
+      WebhookState.Retrying(
+        sinceTime = timestamp,
+        retryQueue,
+        backoffResetsQueue,
+        lastRetryTime = timestamp,
+        config.retry.exponentialBase,
+        config.retry.exponentialFactor,
+        timeLeft = config.retry.timeout,
+        nextBackoff = config.retry.exponentialBase
       )
+    )
 
   /**
    * Attempts delivery of a [[WebhookDispatch]] to a webhook endpoint. On successful delivery,
@@ -218,20 +220,23 @@ final class WebhookServer private (
     for {
       retryingMap <- ZIO.foreach(loadedState.retryingStates) {
                        case (id, retryingState) =>
-                         for (retryQueue <- Queue.bounded[WebhookEvent](config.retry.capacity))
-                           yield (
-                             WebhookId(id),
-                             WebhookState.Retrying(
-                               retryingState.sinceTime,
-                               retryQueue,
-                               retryingState.lastRetryTime,
-                               retryingState.base,
-                               retryingState.power,
-                               retryingState.timeLeft,
-                               retryingState.backoff,
-                               retryingState.attempt
-                             )
+                         for {
+                           retryQueue    <- Queue.bounded[WebhookEvent](config.retry.capacity)
+                           backoffResets <- Queue.bounded[Promise[Nothing, Unit]](config.retry.capacity)
+                         } yield (
+                           WebhookId(id),
+                           WebhookState.Retrying(
+                             retryingState.sinceTime,
+                             retryQueue,
+                             backoffResets,
+                             retryingState.lastRetryTime,
+                             retryingState.base,
+                             retryingState.power,
+                             retryingState.timeLeft,
+                             retryingState.backoff,
+                             retryingState.attempt
                            )
+                         )
 
                      }
       _           <- internalState.set(InternalState(retryingMap))
@@ -291,11 +296,16 @@ final class WebhookServer private (
                         _             <- markDispatch(dispatch, WebhookEventStatus.Delivered)
                         now           <- clock.instant
                         newState      <- internalState.modify { internalState =>
-                                           for (newState <- retryingState.updateAndGet(_.resetBackoff(now)))
-                                             yield (
-                                               newState,
-                                               internalState.updateWebhookState(webhookId, newState)
-                                             )
+                                           for {
+                                             newState <- retryingState.updateAndGet(_.resetBackoff(now))
+                                             _        <- retryingState.get.flatMap {
+                                                           _.backoffResets.takeAll
+                                                             .flatMap(ZIO.foreach_(_)(_.succeed(())))
+                                                         }
+                                           } yield (
+                                             newState,
+                                             internalState.updateWebhookState(webhookId, newState)
+                                           )
                                          }
                         queueEmpty    <- newState.retryQueue.size.map(_ <= 0)
                         inFlightEmpty <- retryingState.get.map(_.inFlight.isEmpty)
@@ -382,23 +392,27 @@ final class WebhookServer private (
                           case Some(retrying: WebhookState.Retrying) =>
                             UIO((Some(retrying.retryQueue), state))
                           case None                                  =>
-                            ZIO.mapN(Queue.bounded[WebhookEvent](config.retry.capacity), clock.instant) {
-                              (retryQueue, now) =>
-                                (
-                                  Some(retryQueue),
-                                  state.updateWebhookState(
-                                    event.key.webhookId,
-                                    WebhookState.Retrying(
-                                      sinceTime = now,
-                                      retryQueue,
-                                      lastRetryTime = now,
-                                      base = config.retry.exponentialBase,
-                                      power = config.retry.exponentialFactor,
-                                      timeLeft = config.retry.timeout,
-                                      nextBackoff = config.retry.exponentialBase
-                                    )
+                            ZIO.mapN(
+                              Queue.bounded[WebhookEvent](config.retry.capacity),
+                              Queue.bounded[Promise[Nothing, Unit]](config.retry.capacity),
+                              clock.instant
+                            ) { (retryQueue, backoffResetsQueue, now) =>
+                              (
+                                Some(retryQueue),
+                                state.updateWebhookState(
+                                  event.key.webhookId,
+                                  WebhookState.Retrying(
+                                    sinceTime = now,
+                                    retryQueue,
+                                    backoffResetsQueue,
+                                    lastRetryTime = now,
+                                    base = config.retry.exponentialBase,
+                                    power = config.retry.exponentialFactor,
+                                    timeLeft = config.retry.timeout,
+                                    nextBackoff = config.retry.exponentialBase
                                   )
                                 )
+                              )
                             }
                           case _                                     =>
                             UIO((None, state))
@@ -628,6 +642,7 @@ object WebhookServer {
     final case class Retrying(
       sinceTime: Instant,
       retryQueue: Queue[WebhookEvent],
+      backoffResets: Queue[Promise[Nothing, Unit]],
       lastRetryTime: Instant,
       base: Duration,
       power: Double,
@@ -645,8 +660,13 @@ object WebhookServer {
       def removeInFlight(events: Iterable[WebhookEvent]): Retrying =
         copy(inFlight = inFlight.removeAll(events.map(_.key)))
 
-      def requeue(events: NonEmptyChunk[WebhookEvent]): URIO[Clock, Boolean] =
-        retryQueue.offerAll(events).delay(nextBackoff)
+      def requeue(events: NonEmptyChunk[WebhookEvent]): URIO[Clock, Unit] =
+        for {
+          backoffReset <- Promise.make[Nothing, Unit]
+          _            <- backoffResets.offer(backoffReset)
+          _            <- clock.sleep(nextBackoff) race backoffReset.await
+          _            <- retryQueue.offerAll(events)
+        } yield ()
 
       /**
        * Progresses retrying to the next exponential backoff.

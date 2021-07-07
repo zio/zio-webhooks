@@ -17,7 +17,7 @@ import zio.webhooks.testkit._
  */
 object BasicExampleWithRetrying extends App {
 
-  // server answers with 200 40% of the time, 404 the other
+  // server answers with 200 27% of the time, 404 the other
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       val payload = request.getBodyAsString
@@ -26,7 +26,7 @@ object BasicExampleWithRetrying extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 30)
+                        if (n < 27)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else
@@ -37,8 +37,7 @@ object BasicExampleWithRetrying extends App {
       } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
   }
 
-  private lazy val n = 10L
-
+  private lazy val n       = 50L
   private lazy val nEvents = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
@@ -58,7 +57,7 @@ object BasicExampleWithRetrying extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- nEvents.foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.schedule(Schedule.spaced(100.micros)).foreach(TestWebhookEventRepo.createEvent)
       _ <- zio.clock.sleep(10.days).forever
     } yield ()
 
