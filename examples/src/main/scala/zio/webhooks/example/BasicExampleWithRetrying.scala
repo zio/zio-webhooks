@@ -17,29 +17,34 @@ import zio.webhooks.testkit._
  */
 object BasicExampleWithRetrying extends App {
 
-  private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
+  // server answers with 200 40% of the time, 404 the other
+  private lazy val httpApp = HttpApp.collectM {
+    case request @ Method.POST -> Root / "endpoint" =>
+      val payload = request.getBodyAsString
+      for {
+        n        <- random.nextIntBounded(100)
+        tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
+        response <- ZIO.foreach(payload) { payload =>
+                      if (n < 30)
+                        putStrLn(tsString + payload + " Response: OK") *>
+                          UIO(Response.status(Status.OK))
+                      else
+                        putStrLn(tsString + payload + " Response: NOT_FOUND") *>
+                          UIO(Response.status(Status.NOT_FOUND))
+                    }.orDie
+      } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
+  }
+
+  private lazy val n = 10L
+
+  private lazy val nEvents = UStream.iterate(0L)(_ + 1).map { i =>
     WebhookEvent(
       WebhookEventKey(WebhookEventId(i), webhook.id),
       WebhookEventStatus.New,
       s"""{"payload":$i}""",
       Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
     )
-  }
-
-  // server answers with 200 10% of the time, 404 the other
-  private lazy val httpApp = HttpApp.collectM {
-    case request @ Method.POST -> Root / "endpoint" =>
-      for {
-        _        <- clock.instant.map(_.toString).flatMap(ts => putStr(s"[$ts]: "))
-        _        <- ZIO.foreach_(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-        n        <- random.nextIntBounded(100)
-        _        <- clock.instant.map(_.toString).flatMap(ts => putStr(s"[$ts]: "))
-        response <- if (n < 10)
-                      putStrLn("Server responding with OK") *> UIO(Response.status(Status.OK))
-                    else
-                      putStrLn("Server responding with NOT_FOUND") *> UIO(Response.status(Status.NOT_FOUND))
-      } yield response
-  }
+  }.take(n)
 
   private lazy val port = 8080
 
@@ -48,7 +53,8 @@ object BasicExampleWithRetrying extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.schedule(Schedule.fixed(1.second)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.foreach(TestWebhookEventRepo.createEvent)
+      _ <- zio.clock.sleep(10.days).forever
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
