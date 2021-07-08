@@ -69,31 +69,6 @@ final class WebhookServer private (
                  }
     } yield ()
 
-  private def batchGroupRetry(
-    batchingCapacity: Int,
-    batchQueues: RefM[Map[BatchKey, Queue[WebhookEvent]]],
-    batchKey: BatchKey,
-    batchEvents: ZStream[Any, Nothing, WebhookEvent],
-    retryingState: Ref[WebhookState.Retrying],
-    retryingDone: Promise[Nothing, Unit]
-  ) =
-    for {
-      webhook    <- webhookRepo.requireWebhook(batchKey.webhookId)
-      batchQueue <- batchQueues.modify { map =>
-                      map.get(batchKey) match {
-                        case Some(queue) =>
-                          UIO((queue, map))
-                        case None        =>
-                          for (queue <- Queue.bounded[WebhookEvent](batchingCapacity))
-                            yield (queue, map + (batchKey -> queue))
-                      }
-                    }
-      latch      <- Promise.make[Nothing, Unit]
-      _          <- doRetryBatching(webhook, batchQueue, latch, retryingState, retryingDone).fork
-      _          <- latch.await
-      _          <- batchEvents.run(ZSink.fromQueue(batchQueue))
-    } yield ()
-
   private def createRetryingState(timestamp: Instant) =
     ZIO.mapN(
       Queue.bounded[WebhookEvent](config.retry.capacity),
@@ -184,10 +159,11 @@ final class WebhookServer private (
     retryingState: Ref[WebhookState.Retrying],
     retryingDone: Promise[Nothing, Unit]
   ) = {
-    val deliverBatch = for {
-      batchEvents <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptyChunk.fromIterable(_, _))
-      _           <- retryEvents(webhook.id, retryingState, retryingDone, batchEvents)
-    } yield ()
+    val deliverBatch =
+      for {
+        batchEvents <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptyChunk.fromIterable(_, _))
+        _           <- retryEvents(webhook.id, retryingState, retryingDone, batchEvents, Some(batchQueue))
+      } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.repeatUntilM(_ => retryingDone.isDone)
   }
 
@@ -213,6 +189,7 @@ final class WebhookServer private (
       .mergeTerminateRight(UStream.fromEffect(shutdownSignal.await.map(Right(_))))
       .collectLeft
 
+  // TODO: use a dedicated event repo method to recover events
   /**
    * Reconstructs the server's internal retrying states from the loaded server state.
    */
@@ -259,14 +236,28 @@ final class WebhookServer private (
                        .groupByKey(ev => BatchKey(webhookId, ev.contentType)) {
                          case (batchKey, batchEvents) =>
                            ZStream.fromEffect {
-                             batchGroupRetry(
-                               batchingCapacity,
-                               batchQueues,
-                               batchKey,
-                               batchEvents,
-                               retryingState,
-                               retryingDone
-                             ).catchAll(errorHub.publish(_).unit)
+                             (for {
+                               webhook    <- webhookRepo.requireWebhook(batchKey.webhookId)
+                               batchQueue <- batchQueues.modify { map =>
+                                               map.get(batchKey) match {
+                                                 case Some(queue) =>
+                                                   UIO((queue, map))
+                                                 case None        =>
+                                                   for (queue <- Queue.bounded[WebhookEvent](batchingCapacity))
+                                                     yield (queue, map + (batchKey -> queue))
+                                               }
+                                             }
+                               latch      <- Promise.make[Nothing, Unit]
+                               _          <- doRetryBatching(
+                                               webhook,
+                                               batchQueue,
+                                               latch,
+                                               retryingState,
+                                               retryingDone
+                                             ).fork
+                               _          <- latch.await
+                               _          <- batchEvents.run(ZSink.fromQueue(batchQueue))
+                             } yield ()).catchAll(errorHub.publish(_).unit)
                            }
                        }
                        .runDrain
@@ -277,8 +268,9 @@ final class WebhookServer private (
     webhookId: WebhookId,
     retryingState: Ref[WebhookState.Retrying],
     retryingDone: Promise[Nothing, Unit],
-    events: NonEmptyChunk[WebhookEvent]
-  ) =
+    events: NonEmptyChunk[WebhookEvent],
+    batchQueue: Option[Queue[WebhookEvent]] = None
+  ): ZIO[Clock, WebhookError, Unit] =
     for {
       webhook  <- webhookRepo.requireWebhook(webhookId)
       _        <- retryingState.update(_.addInFlight(events))
@@ -292,26 +284,26 @@ final class WebhookServer private (
       _        <- response match {
                     case Some(WebhookHttpResponse(200)) =>
                       for {
-                        _             <- retryingState.update(_.removeInFlight(events))
-                        _             <- markDispatch(dispatch, WebhookEventStatus.Delivered)
-                        now           <- clock.instant
-                        newState      <- internalState.modify { internalState =>
-                                           for {
-                                             newState <- retryingState.updateAndGet(_.resetBackoff(now))
-                                             _        <- retryingState.get.flatMap {
-                                                           _.backoffResets.takeAll
-                                                             .flatMap(ZIO.foreach_(_)(_.succeed(())))
-                                                         }
-                                           } yield (
-                                             newState,
-                                             internalState.updateWebhookState(webhookId, newState)
-                                           )
-                                         }
-                        queueEmpty    <- newState.retryQueue.size.map(_ <= 0)
-                        inFlightEmpty <- retryingState.get.map(_.inFlight.isEmpty)
-                        _             <- ZIO.when(queueEmpty && inFlightEmpty)(
-                                           newState.retryQueue.shutdown *> retryingDone.succeed(())
-                                         )
+                        _                <- retryingState.update(_.removeInFlight(events))
+                        _                <- markDispatch(dispatch, WebhookEventStatus.Delivered)
+                        now              <- clock.instant
+                        newState         <- internalState.modify { internalState =>
+                                              for {
+                                                newState <- retryingState.updateAndGet(_.resetBackoff(now))
+                                                _        <- retryingState.get.flatMap {
+                                                              _.backoffResets.takeAll
+                                                                .flatMap(ZIO.foreach_(_)(_.succeed(())))
+                                                            }
+                                              } yield (
+                                                newState,
+                                                internalState.updateWebhookState(webhookId, newState)
+                                              )
+                                            }
+                        queueEmpty       <- newState.retryQueue.size.map(_ <= 0)
+                        batchExistsEmpty <- ZIO.foreach(batchQueue)(_.size.map(_ <= 0))
+                        inFlightEmpty    <- retryingState.get.map(_.inFlight.isEmpty)
+                        allEmpty          = queueEmpty && inFlightEmpty && batchExistsEmpty.getOrElse(true)
+                        _                <- retryingDone.succeed(()).when(allEmpty)
                       } yield ()
                     case _                              =>
                       for {

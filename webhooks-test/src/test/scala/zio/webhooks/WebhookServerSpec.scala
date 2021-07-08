@@ -556,10 +556,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assertCompletes
             }
           } @@ ignore
+
           // TODO: test continues retrying for multiple webhooks
           // TODO: test continued retrying resumes timeout duration
           // TODO: test server gets all events on restart
-          // TODO: test loaded at-most-once delivering events are marked Heisendone
+          // TODO: test retries eventually get delivered
+          // TODO: test batched retries eventually get delivered
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
       // TODO: write webhook status change tests?
