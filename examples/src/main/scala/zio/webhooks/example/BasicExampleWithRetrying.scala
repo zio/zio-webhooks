@@ -17,7 +17,7 @@ import zio.webhooks.testkit._
  */
 object BasicExampleWithRetrying extends App {
 
-  // server answers with 200 40% of the time, 404 the other
+  // server answers with 200 25% of the time, 404 the other
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       val payload = request.getBodyAsString
@@ -26,7 +26,7 @@ object BasicExampleWithRetrying extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 40)
+                        if (n < 25)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else

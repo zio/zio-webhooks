@@ -286,12 +286,14 @@ final class WebhookServer private (
                         signalDone        = retryingState.update(_.setInactive)
                         _                <- signalDone.when(allEmpty)
                       } yield ()
-                    case _                              =>
+                    case _                              => // retry failed
                       for {
                         timestamp <- clock.instant
                         nextState <- retryingState.updateAndGet(_.increaseBackoff(timestamp))
                         _         <- internalState.update(state => UIO(state.updateWebhookState(webhookId, nextState)))
-                        _         <- nextState.requeue(events) *> retryingState.update(_.removeInFlight(events))
+                        requeue    = nextState.requeue(events) *> retryingState.update(_.removeInFlight(events))
+                        // prevent batches from getting into deadlocks by forking the requeue
+                        _         <- if (batchQueue.isDefined) requeue.fork else requeue
                       } yield ()
                   }
     } yield ()

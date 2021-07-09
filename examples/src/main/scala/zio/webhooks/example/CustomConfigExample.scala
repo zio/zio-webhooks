@@ -22,12 +22,12 @@ object CustomConfigExample extends App {
       WebhookServerConfig(
         errorSlidingCapacity = 64,
         WebhookServerConfig.Retry(
-          capacity = 256,
+          capacity = 1024,
           exponentialBase = 100.millis,
           exponentialFactor = 1.5,
           timeout = 1.day
         ),
-        Some(256)
+        batchingCapacity = Some(1024)
       )
     )
 
@@ -40,7 +40,7 @@ object CustomConfigExample extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 60)
+                        if (n < 33)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else
@@ -51,7 +51,7 @@ object CustomConfigExample extends App {
       } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
   }
 
-  private lazy val n       = 500L
+  private lazy val n       = 2000L
   private lazy val nEvents = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
@@ -71,7 +71,7 @@ object CustomConfigExample extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.schedule(Schedule.spaced(333.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
       _ <- zio.clock.sleep(Duration.Infinity)
     } yield ()
 
