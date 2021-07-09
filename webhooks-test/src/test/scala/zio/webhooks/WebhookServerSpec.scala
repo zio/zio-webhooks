@@ -12,7 +12,6 @@ import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
-import zio.webhooks.WebhookStatus._
 import zio.webhooks.testkit._
 
 import java.time.Instant
@@ -185,22 +184,6 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
           },
-          testM("retrying sets webhook status to Retrying, then Enabled on success") {
-            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
-
-            val events = createPlaintextEvents(1)(webhook.id)
-
-            webhooksTestScenario(
-              stubResponses = UStream(None, Some(WebhookHttpResponse(200))),
-              webhooks = List(webhook),
-              events = events,
-              ScenarioInterest.Webhooks
-            ) { (webhooks, _) =>
-              assertM(webhooks.takeN(3).map(_.drop(1).map(_.status)))(
-                hasSameElements(List(WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
-              )
-            }
-          },
           testM("retries until success before 7-day retry timeout") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
 
@@ -231,12 +214,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Webhooks
             ) { (webhooks, _) =>
               for {
-                status2 <- webhooks.take *> webhooks.take.map(_.status)
-                status3 <- webhooks.take.map(_.status) raceEither TestClock.adjust(7.days).forever
-              } yield assertTrue(status2 == Retrying(Instant.EPOCH)) &&
-                assert(status3)(isLeft(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
+                status  <- webhooks.take.map(_.status)
+                status2 <- webhooks.take.map(_.status) raceEither TestClock.adjust(7.days).forever
+              } yield assertTrue(status == WebhookStatus.Enabled) &&
+                assert(status2)(isLeft(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
-          } @@ timeout(5.seconds),
+          },
           testM("marks all a webhook's events failed when marked unavailable") {
             val n       = 2
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -556,15 +539,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assertCompletes
             }
           } @@ ignore
-
           // TODO: test continues retrying for multiple webhooks
           // TODO: test continued retrying resumes timeout duration
           // TODO: test server gets all events on restart
-          // TODO: test retries eventually get delivered
-          // TODO: test batched retries eventually get delivered
+          // TODO: test retries eventually get delivered (property test)
+          // TODO: test batched retries eventually get delivered (property test)
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
-      // TODO: write webhook status change tests?
+      // TODO: write webhook status change tests
     ) @@ timeout(10.seconds)
 }
 

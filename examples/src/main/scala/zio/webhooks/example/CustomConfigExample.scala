@@ -51,7 +51,7 @@ object CustomConfigExample extends App {
       } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
   }
 
-  private lazy val n       = 50L
+  private lazy val n       = 500L
   private lazy val nEvents = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
