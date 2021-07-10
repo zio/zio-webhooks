@@ -21,6 +21,7 @@ object CustomConfigExample extends App {
     ZLayer.succeed(
       WebhookServerConfig(
         errorSlidingCapacity = 64,
+        maxSingleDispatchConcurrency = 512,
         WebhookServerConfig.Retry(
           capacity = 1024,
           exponentialBase = 100.millis,

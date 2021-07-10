@@ -4,7 +4,6 @@ import zhttp.http._
 import zhttp.service.Server
 import zio._
 import zio.console._
-import zio.duration._
 import zio.magic._
 import zio.stream.UStream
 import zio.webhooks._
@@ -13,7 +12,7 @@ import zio.webhooks.testkit._
 
 /**
  * Runs a webhook server and a zio-http server to deliver webhook events to. The webhook server is
- * started as part of layer construction, and shut down when the example finishes.
+ * started as part of layer construction, and shut down when the example app is closed.
  *
  * Errors are printed to the console's error channel. A webhook and a stream of events are created
  * and the events are delivered to an endpoint one-by-one.
@@ -45,7 +44,7 @@ object BasicExample extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.schedule(Schedule.spaced(100.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- events.foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   /**

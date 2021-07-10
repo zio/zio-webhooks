@@ -20,8 +20,6 @@ private[webhooks] object PersistentServerState {
   final case class RetryingState(
     sinceTime: Instant,
     lastRetryTime: Instant,
-    base: Duration,
-    power: Double,
     timeLeft: Duration,
     backoff: Duration,
     attempt: Int

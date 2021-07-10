@@ -239,7 +239,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 .runDrain *> assertCompletesM
             }
           },
-          testM("retries succeed with eventual response success") {
+          testM("retries past first one back off exponentially") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(1)(webhook.id)
 
@@ -263,7 +263,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _ <- requests.take // 5th retry after 80ms
                 } yield assertCompletes
             }
-          } @@ timeout(2.seconds),
+          },
           testM("doesn't retry requests after requests succeed again") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
 
