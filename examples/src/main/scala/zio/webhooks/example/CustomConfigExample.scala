@@ -12,8 +12,9 @@ import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
 /**
- * Differs from the [[BasicExample]] in that a custom configuration is provided. This also serves as
- * an example of a scenario where dispatches are batched and are retried when delivery fails.
+ * Differs from the [[BasicExampleWithRetrying]] in that a custom configuration is provided.
+ * This also serves as an example of a scenario where deliveries are batched and are retried when
+ * delivery fails. A max retry backoff of 2 seconds should be seen when running this example.
  */
 object CustomConfigExample extends App {
 
@@ -26,13 +27,14 @@ object CustomConfigExample extends App {
           capacity = 1024,
           exponentialBase = 100.millis,
           exponentialFactor = 1.5,
+          maxBackoff = 2.seconds,
           timeout = 1.day
         ),
         batchingCapacity = Some(1024)
       )
     )
 
-  // server answers with 200 60% of the time, 404 the other
+  // server answers with 200 20% of the time, 404 the other
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       val payload = request.getBodyAsString
@@ -41,7 +43,7 @@ object CustomConfigExample extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 33)
+                        if (n < 10)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else
@@ -72,7 +74,7 @@ object CustomConfigExample extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.schedule(Schedule.spaced(1.milli).jittered).foreach(TestWebhookEventRepo.createEvent)
       _ <- zio.clock.sleep(Duration.Infinity)
     } yield ()
 

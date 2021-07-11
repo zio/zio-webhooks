@@ -30,6 +30,7 @@ object WebhookServerConfig {
         capacity = 128,
         exponentialBase = 10.millis,
         exponentialFactor = 2.0,
+        maxBackoff = 1.hour,
         timeout = 7.days
       )
     )
@@ -39,7 +40,7 @@ object WebhookServerConfig {
     default.map(serverConfig => Has(serverConfig.get.copy(batchingCapacity = Some(128))))
 
   /**
-   * Retry configuration settings
+   * Retry configuration settings for each webhook.
    *
    * @param capacity Max number of dispatches to hold for each webhook
    * @param exponentialBase Base duration for spacing out retries
@@ -50,6 +51,7 @@ object WebhookServerConfig {
     capacity: Int,
     exponentialBase: Duration,
     exponentialFactor: Double,
+    maxBackoff: Duration,
     timeout: Duration
   )
 }

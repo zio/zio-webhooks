@@ -196,16 +196,17 @@ final class WebhookServer private (
                                             Queue.bounded[Promise[Nothing, Unit]](config.retry.capacity)
                                           ) { (retryQueue, backoffResets) =>
                                             WebhookState.Retrying(
-                                              persistedState.sinceTime,
                                               retryQueue,
                                               backoffResets,
                                               config.retry.exponentialBase,
                                               config.retry.exponentialFactor,
+                                              maxBackoff = config.retry.maxBackoff,
                                               persistedState.timeLeft,
+                                              persistedState.sinceTime,
                                               persistedState.lastRetryTime,
+                                              persistedState.attempt,
                                               persistedState.backoff,
-                                              None,
-                                              persistedState.attempt
+                                              None
                                             )
                                           }
                            webhookId    = WebhookId(id)
@@ -385,12 +386,13 @@ final class WebhookServer private (
                                 state.updateWebhookState(
                                   event.key.webhookId,
                                   WebhookState.Retrying(
-                                    activeSinceTime = now,
                                     retryQueue,
                                     backoffResetsQueue,
                                     base = config.retry.exponentialBase,
                                     power = config.retry.exponentialFactor,
+                                    maxBackoff = config.retry.maxBackoff,
                                     timeout = config.retry.timeout,
+                                    activeSinceTime = now,
                                     lastRetryTime = now,
                                     nextBackoff = config.retry.exponentialBase
                                   )
@@ -503,7 +505,7 @@ final class WebhookServer private (
           lastRetryTime = retrying.lastRetryTime,
           timeLeft = retrying.timeout,
           backoff = retrying.nextBackoff,
-          attempt = retrying.attempt
+          attempt = retrying.failureCount
         )
         (webhookId.value, retryingState)
     })
@@ -596,16 +598,17 @@ object WebhookServer {
 
     @silent("never used")
     final case class Retrying private (
-      activeSinceTime: Instant,
       retryQueue: Queue[WebhookEvent],
       backoffResets: Queue[Promise[Nothing, Unit]],
       base: Duration,
       power: Double,
+      maxBackoff: Duration,
       timeout: Duration,
+      activeSinceTime: Instant,
       lastRetryTime: Instant,
+      failureCount: Int = 0,
       nextBackoff: Duration,
-      timeKillswitch: Option[Promise[Nothing, Unit]] = None,
-      attempt: Int = 0,
+      timerKillSwitch: Option[Promise[Nothing, Unit]] = None,
       inFlight: Map[WebhookEventKey, WebhookEvent] = Map.empty,
       isActive: Boolean = false
     ) extends WebhookState {
@@ -618,8 +621,12 @@ object WebhookServer {
       /**
        * Progresses retrying to the next exponential backoff.
        */
-      def increaseBackoff(timestamp: Instant): Retrying =
-        copy(lastRetryTime = timestamp, nextBackoff = base * math.pow(2, attempt.toDouble), attempt = attempt + 1)
+      def increaseBackoff(timestamp: Instant): Retrying = {
+        val nextExponential = base * math.pow(2, failureCount.toDouble)
+        val nextBackoff     = if (nextExponential >= maxBackoff) maxBackoff else nextExponential
+        val nextAttempt     = if (nextExponential >= maxBackoff) failureCount else failureCount + 1
+        copy(lastRetryTime = timestamp, failureCount = nextAttempt, nextBackoff = nextBackoff)
+      }
 
       def removeInFlight(events: Iterable[WebhookEvent]): Retrying =
         copy(inFlight = inFlight.removeAll(events.map(_.key)))
@@ -636,7 +643,7 @@ object WebhookServer {
        * Reverts retry backoff to the initial state.
        */
       def resetBackoff(timestamp: Instant): Retrying =
-        copy(lastRetryTime = timestamp, nextBackoff = base, attempt = 0)
+        copy(lastRetryTime = timestamp, failureCount = 0, nextBackoff = base)
 
       /**
        * Activates a timer that calls an effect should the retrying state remain active past a
@@ -647,13 +654,13 @@ object WebhookServer {
           UIO(this)
         else
           for {
-            timerKillswitch <- Promise.make[Nothing, Unit]
-            runTimer         = timerKillswitch.await.timeoutTo(false)(_ => true)(timeout).flatMap(onTimeout.unless(_))
+            timerKillSwitch <- Promise.make[Nothing, Unit]
+            runTimer         = timerKillSwitch.await.timeoutTo(false)(_ => true)(timeout).flatMap(onTimeout.unless(_))
             _               <- runTimer.fork
-          } yield copy(timeKillswitch = Some(timerKillswitch), isActive = true)
+          } yield copy(timerKillSwitch = Some(timerKillSwitch), isActive = true)
 
       def setInactive: UIO[Retrying] =
-        ZIO.foreach_(timeKillswitch)(_.succeed(())).as(copy(timeKillswitch = None, isActive = false))
+        ZIO.foreach_(timerKillSwitch)(_.succeed(())).as(copy(timerKillSwitch = None, isActive = false))
 
       /**
        * Suspends this retry by replacing the backoff with the time left until its backoff completes.
@@ -673,12 +680,13 @@ object WebhookServer {
           clock.instant
         )((retryQueue, backoffResetsQueue, timestamp) =>
           WebhookState.Retrying(
-            activeSinceTime = timestamp,
             retryQueue,
             backoffResetsQueue,
             retryConfig.exponentialBase,
             retryConfig.exponentialFactor,
+            maxBackoff = retryConfig.maxBackoff,
             timeout = retryConfig.timeout,
+            activeSinceTime = timestamp,
             lastRetryTime = timestamp,
             nextBackoff = retryConfig.exponentialBase
           )
