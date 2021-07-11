@@ -13,7 +13,8 @@ import zio.webhooks.testkit._
 
 /**
  * Differs from the [[BasicExample]] in that events are batched with the default batching setting
- * of 128 elements per batch.
+ * of 128 elements per batch. The server dispatches all events queued up for each webhook since the
+ * last delivery and sends them in a batch.
  */
 object BasicExampleWithBatching extends App {
 
@@ -46,7 +47,7 @@ object BasicExampleWithBatching extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.schedule(Schedule.spaced(333.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- events.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

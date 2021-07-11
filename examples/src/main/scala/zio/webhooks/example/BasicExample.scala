@@ -15,7 +15,8 @@ import zio.webhooks.testkit._
  * started as part of layer construction, and shut down when the example app is closed.
  *
  * Errors are printed to the console's error channel. A webhook and a stream of events are created
- * and the events are delivered to an endpoint one-by-one.
+ * and the events are delivered to an endpoint one-by-one. The zio-http endpoint prints out the
+ * contents of each payload as it receives them.
  */
 object BasicExample extends App {
 

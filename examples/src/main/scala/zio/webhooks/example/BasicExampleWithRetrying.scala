@@ -12,8 +12,10 @@ import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
 /**
- * Differs from the [[BasicExample]] in that the zio-http server responds with a non-200 status half
- * the time. This behavior prompts the webhook server to retry delivery.
+ * Differs from the [[BasicExample]] in that the zio-http server responds with a non-200 status some
+ * of the time. This behavior prompts the webhook server to retry delivery. The server will keep on
+ * retrying events for webhooks with at-least-once delivery semantics one-by-one until the server
+ * successfully marks all `n` events delivered.
  */
 object BasicExampleWithRetrying extends App {
 
