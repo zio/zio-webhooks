@@ -20,16 +20,6 @@ import zio.webhooks.testkit._
  */
 object BasicExample extends App {
 
-  // JSON webhook event stream
-  private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
-    WebhookEvent(
-      WebhookEventKey(WebhookEventId(i), webhook.id),
-      WebhookEventStatus.New,
-      s"""{"payload":$i}""",
-      Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-    )
-  }
-
   // reliable endpoint
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
@@ -38,6 +28,21 @@ object BasicExample extends App {
         .as(Response.status(Status.OK))
   }
 
+  private lazy val n = 5000
+
+  // JSON webhook event stream
+  private lazy val nEvents = UStream
+    .iterate(0L)(_ + 1)
+    .map { i =>
+      WebhookEvent(
+        WebhookEventKey(WebhookEventId(i), webhook.id),
+        WebhookEventStatus.New,
+        s"""{"payload":$i}""",
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+      )
+    }
+    .take(n.toLong)
+
   private lazy val port = 8080
 
   private def program =
@@ -45,7 +50,7 @@ object BasicExample extends App {
       _ <- Server.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   /**

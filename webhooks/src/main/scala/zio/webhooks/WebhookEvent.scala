@@ -11,6 +11,12 @@ final case class WebhookEvent(
   content: String,
   headers: Chunk[(String, String)]
 ) {
+  def isNew: Boolean =
+    status match {
+      case WebhookEventStatus.New => true
+      case _                      => false
+    }
+
   lazy val contentType: Option[String] =
     headers.find(_._1.toLowerCase == "content-type").map(_._2)
 

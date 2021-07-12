@@ -5,7 +5,6 @@ import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.json._
-import zio.prelude.NonEmptySet
 import zio.stream._
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
@@ -182,7 +181,6 @@ final class WebhookServer private (
       .mergeTerminateRight(UStream.fromEffect(shutdownSignal.await.map(Right(_))))
       .collectLeft
 
-  // TODO: use a dedicated event repo method to recover events
   /**
    * Reconstructs the server's internal retrying states from the loaded server state.
    */
@@ -316,13 +314,13 @@ final class WebhookServer private (
     for {
       retryQueue <- retryingState.get.map(_.retryQueue)
       _          <- mergeShutdown(UStream.fromQueue(retryQueue))
-                      .mapMParUnordered(config.maxSingleDispatchConcurrency)(event =>
+                      .mapMParUnordered(config.maxSingleDispatchConcurrency) { event =>
                         retryEvents(
                           webhookId,
                           retryingState,
                           NonEmptyChunk.single(event)
                         ).catchAll(errorHub.publish)
-                      )
+                      }
                       .runDrain
                       .fork
     } yield ()
@@ -406,76 +404,61 @@ final class WebhookServer private (
         _          <- ZIO.foreach_(retryQueue)(_.offer(event))
       } yield ()
 
-    {
-      for {
-        _ <- stateRepo.getState.flatMap {
-               case Some(rawState) =>
-                 ZIO
-                   .fromEither(rawState.fromJson[PersistentServerState])
-                   .mapError(message => InvalidStateError(rawState, message))
-                   .flatMap(reconstructInternalState)
-               case None           =>
-                 reconstructInternalState(PersistentServerState.empty)
-             }
-        _ <- eventRepo.getEventsByStatuses(NonEmptySet.single(WebhookEventStatus.Delivering)).use { dequeue =>
-               dequeue.poll *> startupLatch.countDown *>
-                 UStream.fromQueue(dequeue).foreach { event =>
-                   for {
-                     webhook <- webhookRepo.requireWebhook(event.key.webhookId)
-                     _       <- recover(event).when(webhook.isAvailable)
-                   } yield ()
-                 }
-             }
-      } yield ()
-    }.catchAll(errorHub.publish(_).unit).fork
-  }
+    for {
+      _ <- stateRepo.getState.flatMap {
+             case Some(rawState) =>
+               ZIO
+                 .fromEither(rawState.fromJson[PersistentServerState])
+                 .mapError(message => InvalidStateError(rawState, message))
+                 .flatMap(reconstructInternalState)
+             case None           =>
+               reconstructInternalState(PersistentServerState.empty)
+           }.catchAll(errorHub.publish)
+      _ <- mergeShutdown(eventRepo.recoverEvents).foreach { event =>
+             (for {
+               webhook <- webhookRepo.requireWebhook(event.key.webhookId)
+               _       <- recover(event).when(webhook.isAvailable)
+             } yield ()).catchAll(errorHub.publish)
+           }
+    } yield ()
+  }.fork *> startupLatch.countDown
 
   /**
    * Starts new [[WebhookEvent]] subscription. Counts down on the `startupLatch` signalling it's
    * ready to accept events.
    */
   private def startNewEventSubscription: URIO[Clock, Any] =
-    eventRepo
-      .getEventsByStatuses(NonEmptySet(WebhookEventStatus.New))
-      .use { eventDequeue =>
-        for {
-          _           <- eventDequeue.poll *> startupLatch.countDown
-          isShutdown  <- shutdownSignal.isDone
-          handleEvents = config.batchingCapacity match {
-                           case Some(capacity) =>
-                             startBatching(eventDequeue, capacity)
-                           case None           =>
-                             mergeShutdown(UStream.fromQueue(eventDequeue)).foreach(deliverNewEvent)
-                         }
-          _           <- handleEvents.unless(isShutdown)
-          _           <- shutdownLatch.countDown
-        } yield ()
-      }
-      .fork
+    eventRepo.subscribeToNewEvents.use { eventDequeue =>
+      for {
+        _           <- eventDequeue.poll *> startupLatch.countDown
+        isShutdown  <- shutdownSignal.isDone
+        handleEvents = config.batchingCapacity match {
+                         case Some(capacity) =>
+                           startBatching(eventDequeue, capacity)
+                         case None           =>
+                           mergeShutdown(UStream.fromQueue(eventDequeue)).foreach(deliverNewEvent)
+                       }
+        _           <- handleEvents.unless(isShutdown)
+        _           <- shutdownLatch.countDown
+      } yield ()
+    }.fork
 
   /**
-   * Performs retrying logic for a webhook. If retrying times out, the webhook is set to
-   * [[WebhookStatus.Unavailable]] and all its events are marked [[WebhookEventStatus.Failed]].
+   * Starts a retry dispatching for a webhook.
    */
-  private def startRetrying(
-    webhookId: WebhookId,
-    retryingState: WebhookState.Retrying
-  ): ZIO[Clock, MissingWebhookError, Unit] =
-    for {
-      retryingState <- Ref.make(retryingState)
-      webhook       <- webhookRepo.requireWebhook(webhookId)
-      _             <- (webhook.batching, config.batchingCapacity) match {
-                         case (WebhookDeliveryBatching.Batched, Some(capacity)) =>
-                           retryBatched(retryingState, webhookId, capacity)
-                         case _                                                 =>
-                           retrySingly(retryingState, webhookId)
-                       }
-    } yield ()
-
   private def startRetryMonitoring: URIO[Clock, Any] = {
     mergeShutdown(UStream.fromQueue(newRetries)).foreach {
       case NewRetry(webhookId, retrying) =>
-        startRetrying(webhookId, retrying).catchAll(errorHub.publish)
+        (for {
+          retryingState <- Ref.make(retrying)
+          webhook       <- webhookRepo.requireWebhook(webhookId)
+          _             <- (webhook.batching, config.batchingCapacity) match {
+                             case (WebhookDeliveryBatching.Batched, Some(capacity)) =>
+                               retryBatched(retryingState, webhookId, capacity)
+                             case _                                                 =>
+                               retrySingly(retryingState, webhookId)
+                           }
+        } yield ()).catchAll(errorHub.publish)
     } *> shutdownLatch.countDown
   }.fork
 

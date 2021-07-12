@@ -75,7 +75,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               events = List(event),
               ScenarioInterest.Events
             ) { (events, _) =>
-              val eventStatuses = events.filterOutput(!_.status.isNew).map(_.status).takeBetween(2, 3)
+              val eventStatuses = events.filterOutput(!_.isNew).map(_.status).takeBetween(2, 3)
               assertM(eventStatuses)(hasSameElements(expectedStatuses))
             }
           },
@@ -443,7 +443,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               plaintextContentHeaders
             )
 
-            TestWebhookEventRepo.getEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
+            TestWebhookEventRepo.subscribeToEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
               events =>
                 for {
                   responses <- Queue.unbounded[Option[WebhookHttpResponse]]
@@ -462,7 +462,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvents = createPlaintextEvents(2)(WebhookId(0))
 
-            TestWebhookEventRepo.getEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
+            TestWebhookEventRepo.subscribeToEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
               events =>
                 for {
                   responses <- Queue.unbounded[Option[WebhookHttpResponse]]
@@ -534,20 +534,20 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
                   _         <- server.start
-                  _         <- TestClock.adjust(10.millis).forever.fork // base retry backoff
+                  _         <- TestClock.adjust(10.millis)
                   _         <- requests.take
                 } yield assertCompletes
             }
-          } @@ ignore
+          }
           // TODO: test continues retrying for multiple webhooks
           // TODO: test continued retrying resumes timeout duration
           // TODO: test server gets all events on restart
-          // TODO: test retries eventually get delivered (property test)
+          // TODO: test retries eventually get delivered  (property test)
           // TODO: test batched retries eventually get delivered (property test)
         )
-      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching)
+      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
       // TODO: write webhook status change tests
-    ) @@ timeout(10.seconds)
+    ) @@ timeout(15.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -608,7 +608,7 @@ object WebhookServerSpecUtil {
         case ScenarioInterest.Errors   =>
           ZManaged.service[WebhookServer].flatMap(_.getErrors)
         case ScenarioInterest.Events   =>
-          TestWebhookEventRepo.getEvents
+          TestWebhookEventRepo.subscribeToEvents
         case ScenarioInterest.Requests =>
           TestWebhookHttpClient.getRequests
         case ScenarioInterest.Webhooks =>

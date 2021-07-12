@@ -11,12 +11,6 @@ import zio.webhooks.WebhookEventStatus._
 sealed trait WebhookEventStatus extends Product with Serializable {
   final def isDone: Boolean = !isPending
 
-  final def isNew: Boolean =
-    this match {
-      case New => true
-      case _   => false
-    }
-
   final def isPending: Boolean =
     this match {
       case New        => true
