@@ -534,11 +534,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
                   _         <- server.start
-                  _         <- TestClock.adjust(10.millis)
                   _         <- requests.take
                 } yield assertCompletes
             }
-          }
+          } @@ timeout(200.millis) @@ flaky
           // TODO: test continues retrying for multiple webhooks
           // TODO: test continued retrying resumes timeout duration
           // TODO: test server gets all events on restart
@@ -547,7 +546,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
       // TODO: write webhook status change tests
-    ) @@ timeout(15.seconds)
+    ) @@ timeout(20.seconds)
 }
 
 object WebhookServerSpecUtil {

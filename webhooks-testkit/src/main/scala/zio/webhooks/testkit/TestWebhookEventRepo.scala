@@ -41,19 +41,16 @@ final private case class TestWebhookEventRepoImpl(
   def createEvent(event: WebhookEvent): UIO[Unit] =
     ref.update(_.updated(event.key, event)) <* hub.publish(event)
 
-  private def getAllEvents: UIO[Chunk[WebhookEvent]] =
-    ref.get.map(map => Chunk.fromIterable(map.values))
-
   def recoverEvents: UStream[WebhookEvent] =
-    UStream.fromEffect(getAllEvents.map(events => UStream.fromChunk(events))).flatten
+    UStream.fromIterableM(ref.get.map(_.values.filter(_.isDelivering)))
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit] =
     for {
-      updatedMap <- ref.updateAndGet { map =>
-                      map ++ (
-                        for ((key, event) <- map if (key.webhookId == webhookId))
+      updatedMap <- ref.modify { map =>
+                      val allFailedByWebhookId =
+                        for ((key, event) <- map if key.webhookId == webhookId)
                           yield (key, event.copy(status = WebhookEventStatus.Failed))
-                      )
+                      (allFailedByWebhookId, map ++ allFailedByWebhookId)
                     }
       _          <- hub.publishAll(updatedMap.values)
     } yield ()
