@@ -533,6 +533,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
+                  server    <- WebhookServer.create
                   _         <- server.start
                   _         <- requests.take
                 } yield assertCompletes

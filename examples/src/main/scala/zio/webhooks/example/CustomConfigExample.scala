@@ -13,8 +13,9 @@ import zio.webhooks.testkit._
 
 /**
  * Differs from the [[BasicExampleWithRetrying]] in that a custom configuration is provided.
- * This also serves as an example of a scenario where deliveries are batched and are retried when
- * delivery fails. A max retry backoff of 2 seconds should be seen when running this example.
+ * This also serves as an example of a scenario where deliveries are batched and are retried in
+ * batches when delivery fails. A max retry backoff of 2 seconds should be seen when running this
+ * example.
  */
 object CustomConfigExample extends App {
 
@@ -34,7 +35,7 @@ object CustomConfigExample extends App {
       )
     )
 
-  // server answers with 200 20% of the time, 404 the other
+  // server answers with 200 40% of the time, 404 the other
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       val payload = request.getBodyAsString
@@ -43,7 +44,7 @@ object CustomConfigExample extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 10)
+                        if (n < 20)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else
@@ -53,6 +54,9 @@ object CustomConfigExample extends App {
                       .orDie
       } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
   }
+
+  // just an alias for a zio-http server to disambiguate it with the webhook server
+  private lazy val httpEndpointServer = Server
 
   private lazy val n       = 2000L
   private lazy val nEvents = UStream
@@ -71,10 +75,10 @@ object CustomConfigExample extends App {
 
   private def program =
     for {
-      _ <- Server.start(port, httpApp).fork
+      _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.spaced(1.milli).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.schedule(Schedule.spaced(333.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
       _ <- zio.clock.sleep(Duration.Infinity)
     } yield ()
 

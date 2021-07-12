@@ -371,8 +371,10 @@ final class WebhookServer private (
       for {
         retryQueue <- internalState.modify { state =>
                         state.webhookState.get(event.key.webhookId) match {
+                          // we're continuing retries for this webhook
                           case Some(retrying: WebhookState.Retrying) =>
                             UIO((Some(retrying.retryQueue), state))
+                          // no retry state was loaded for this webhook, make a new one
                           case None                                  =>
                             ZIO.mapN(
                               Queue.bounded[WebhookEvent](config.retry.capacity),

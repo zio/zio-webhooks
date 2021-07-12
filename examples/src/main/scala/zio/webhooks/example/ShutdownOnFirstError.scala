@@ -42,14 +42,17 @@ object ShutdownOnFirstError extends App {
         .as(Response.status(Status.OK))
   }
 
+  // just an alias for a zio-http server to disambiguate it with the webhook server
+  private lazy val httpEndpointServer = Server
+
   private lazy val port = 8080
 
   private def program = {
     for {
       errorFiber <- WebhookServer.getErrors.use(_.take.flip).fork
-      httpFiber  <- Server.start(port, httpApp).fork
+      httpFiber  <- httpEndpointServer.start(port, httpApp).fork
       _          <- TestWebhookRepo.createWebhook(webhook)
-      _          <- events.schedule(Schedule.fixed(1.second)).foreach(TestWebhookEventRepo.createEvent).fork
+      _          <- events.schedule(Schedule.fixed(100.millis)).foreach(TestWebhookEventRepo.createEvent).fork
       _          <- errorFiber.join.onExit(_ => WebhookServer.shutdown.orDie *> httpFiber.interrupt)
     } yield ()
   }.catchAll {
