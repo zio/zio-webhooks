@@ -57,11 +57,11 @@ object ShutdownOnFirstError extends App {
       _          <- errorFiber.join.onExit(_ => WebhookServer.shutdown.orDie *> httpFiber.interrupt)
     } yield ()
   }.catchAll {
-    case BadWebhookUrlError(id, badUrl) => putStrLnErr(s"Bad url for webhook with id ${id.value}: $badUrl")
-    case InvalidStateError(_, message)  => putStrLnErr(s"Invalid state: $message")
-    case MissingWebhookError(id)        => putStrLnErr(s"Missing webhook: $id")
-    case MissingEventError(key)         => putStrLnErr(s"Missing event: $key")
-    case MissingEventsError(keys)       => putStrLnErr(s"Missing events: $keys")
+    case BadWebhookUrlError(url, message) => putStrLnErr(s"""Bad url "$url", reason: $message """)
+    case InvalidStateError(_, message)    => putStrLnErr(s"Invalid state: $message")
+    case MissingWebhookError(id)          => putStrLnErr(s"Missing webhook: $id")
+    case MissingEventError(key)           => putStrLnErr(s"Missing event: $key")
+    case MissingEventsError(keys)         => putStrLnErr(s"Missing events: $keys")
   }
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

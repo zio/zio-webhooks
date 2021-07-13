@@ -12,7 +12,7 @@ object WebhookError {
    * A [[BadWebhookUrlError]] occurs when a [[WebhookHttpClient]] detects a string that cannot be
    * parsed into a URL for a [[Webhook]], as identified by its [[WebhookId]].
    */
-  final case class BadWebhookUrlError(id: WebhookId, badUrl: String) extends WebhookError
+  final case class BadWebhookUrlError(badUrl: String, message: String) extends WebhookError
 
   /**
    * An [[InvalidStateError]] occurs when decoding `rawState` during event recovery fails with a

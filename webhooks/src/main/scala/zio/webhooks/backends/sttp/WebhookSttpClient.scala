@@ -2,10 +2,11 @@ package zio.webhooks.backends.sttp
 
 import _root_.sttp.client._
 import _root_.sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend
+import sttp.model.Uri
 import zio._
-import zio.webhooks.WebhookHttpClient
-import zio.webhooks.WebhookHttpRequest
-import zio.webhooks.WebhookHttpResponse
+import zio.webhooks.WebhookError.BadWebhookUrlError
+import zio.webhooks.WebhookHttpClient.HttpPostError
+import zio.webhooks.{ WebhookHttpClient, WebhookHttpRequest, WebhookHttpResponse }
 
 import java.io.IOException
 
@@ -15,17 +16,18 @@ import java.io.IOException
  */
 final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpClient {
 
-  def post(webhookRequest: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] =
-    ZIO.effectSuspendTotal {
-      val sttpRequest = basicRequest
-        .post(uri"${webhookRequest.url}") // treat bad URLs as defects
-        .body(webhookRequest.content)
-        .headers(webhookRequest.headers.toMap)
-      sttpClient
-        .send(sttpRequest)
-        .map(response => WebhookHttpResponse(response.code.code))
-        .refineToOrDie[IOException]
-    }
+  def post(webhookRequest: WebhookHttpRequest): IO[HttpPostError, WebhookHttpResponse] =
+    for {
+      url        <- ZIO
+                      .fromEither(Uri.parse(webhookRequest.url))
+                      .mapError(msg => Left(BadWebhookUrlError(webhookRequest.url, msg)))
+      sttpRequest = basicRequest.post(url).body(webhookRequest.content).headers(webhookRequest.headers.toMap)
+      response   <- sttpClient
+                      .send(sttpRequest)
+                      .map(response => WebhookHttpResponse(response.code.code))
+                      .refineToOrDie[IOException]
+                      .mapError(Right(_))
+    } yield response
 }
 
 object WebhookSttpClient {

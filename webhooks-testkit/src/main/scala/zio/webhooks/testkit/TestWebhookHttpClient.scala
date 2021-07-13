@@ -1,6 +1,7 @@
 package zio.webhooks.testkit
 
 import zio._
+import zio.webhooks.WebhookHttpClient.HttpPostError
 import zio.webhooks._
 
 import java.io.IOException
@@ -41,12 +42,12 @@ final case class TestWebhookHttpClientImpl(
   def requests: UManaged[Dequeue[WebhookHttpRequest]] =
     received.subscribe
 
-  def post(request: WebhookHttpRequest): IO[IOException, WebhookHttpResponse] =
+  def post(request: WebhookHttpRequest): IO[HttpPostError, WebhookHttpResponse] =
     for {
       _        <- received.publish(request)
       f        <- ref.get
-      queue    <- ZIO.fromOption(f(request)).orElseFail(new IOException("No response set for given request."))
-      response <- queue.take.flatMap(ZIO.fromOption(_)).orElseFail(new IOException("Query failed"))
+      queue    <- ZIO.fromOption(f(request)).orElseFail(Right(new IOException("No response set for given request.")))
+      response <- queue.take.flatMap(ZIO.fromOption(_)).orElseFail(Right(new IOException("Query failed")))
     } yield response
 
   def setResponse(f: WebhookHttpRequest => Option[Queue[Option[WebhookHttpResponse]]]): UIO[Unit] =
