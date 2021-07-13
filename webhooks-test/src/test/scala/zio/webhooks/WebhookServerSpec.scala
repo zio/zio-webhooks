@@ -12,7 +12,7 @@ import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
-import zio.webhooks.testkit.TestWebhookHttpClient.{ StubResponse, StubResponses }
+import zio.webhooks.testkit.TestWebhookHttpClient._
 import zio.webhooks.testkit._
 
 import java.time.Instant
@@ -160,8 +160,32 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             }
           },
           testM("bad webhook URL errors are published") {
-            assertCompletesM
-          } @@ ignore
+            val webhookWithBadUrl = Webhook(
+              id = WebhookId(0),
+              url = "ne'er-do-well URL",
+              label = "webhook with a bad url",
+              WebhookStatus.Enabled,
+              WebhookDeliveryMode.SingleAtMostOnce
+            )
+
+            val event = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), WebhookId(0)),
+              WebhookEventStatus.New,
+              "test event payload",
+              plaintextContentHeaders
+            )
+
+            val expectedError = BadWebhookUrlError(webhookWithBadUrl.url, "'twas a ne'er do-well")
+
+            webhooksTestScenario(
+              stubResponses = UStream(Left(Some(expectedError))),
+              webhooks = List(webhookWithBadUrl),
+              events = List(event),
+              ScenarioInterest.Errors
+            ) { (errors, _) =>
+              assertM(errors.take)(equalTo(expectedError))
+            }
+          } @@ timeout(2.seconds) @@ failing
         ),
         suite("webhooks with at-least-once delivery")(
           testM("immediately retries once on non-200 response") {
