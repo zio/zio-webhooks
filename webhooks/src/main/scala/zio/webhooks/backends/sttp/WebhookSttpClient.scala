@@ -6,7 +6,7 @@ import sttp.model.Uri
 import zio._
 import zio.webhooks.WebhookError.BadWebhookUrlError
 import zio.webhooks.WebhookHttpClient.HttpPostError
-import zio.webhooks.{ WebhookHttpClient, WebhookHttpRequest, WebhookHttpResponse }
+import zio.webhooks._
 
 import java.io.IOException
 
