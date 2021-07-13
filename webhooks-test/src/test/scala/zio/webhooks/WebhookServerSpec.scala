@@ -536,9 +536,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   server    <- WebhookServer.create
                   _         <- server.start
                   _         <- requests.take
+                  _         <- server.shutdown
                 } yield assertCompletes
             }
-          } @@ timeout(2.seconds) @@ flaky,
+          } @@ nonFlaky,
           testM("resumes timeout duration for retries") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val event   = WebhookEvent(
