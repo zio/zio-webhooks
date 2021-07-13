@@ -538,10 +538,38 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- requests.take
                 } yield assertCompletes
             }
-          } @@ timeout(200.millis) @@ flaky
+          } @@ timeout(2.seconds),
+          testM("continued retrying resumes timeout duration") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+            val event   = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), WebhookId(0)),
+              WebhookEventStatus.New,
+              "event content",
+              plaintextContentHeaders
+            )
+
+            (TestWebhookHttpClient.getRequests zip TestWebhookRepo.getWebhooks).use {
+              case (requests, webhooks) =>
+                for {
+                  responses  <- Queue.unbounded[Option[WebhookHttpResponse]]
+                  server     <- WebhookServer.create
+                  _          <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                  _          <- responses.offerAll(List(None, None, Some(WebhookHttpResponse(200))))
+                  _          <- server.start
+                  _          <- TestWebhookRepo.createWebhook(webhook)
+                  _          <- TestWebhookEventRepo.createEvent(event)
+                  _          <- requests.takeN(2)
+                  _          <- TestClock.adjust(3.days)
+                  _          <- server.shutdown
+                  server     <- WebhookServer.create
+                  _          <- server.start
+                  _          <- TestClock.adjust(4.days)
+                  lastStatus <- webhooks.takeN(2).map(_.last.status)
+                  _          <- requests.take
+                } yield assert(lastStatus)(isSubtype[WebhookStatus.Unavailable](anything))
+            }
+          }
           // TODO: test continues retrying for multiple webhooks
-          // TODO: test continued retrying resumes timeout duration
-          // TODO: test server gets all events on restart
           // TODO: test retries eventually get delivered  (property test)
           // TODO: test batched retries eventually get delivered (property test)
         )
