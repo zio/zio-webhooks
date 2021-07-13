@@ -12,14 +12,14 @@ import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
 /**
- * Differs from the [[BasicExample]] in that the zio-http server responds with a non-200 status some
- * of the time. This behavior prompts the webhook server to retry delivery. The server will keep on
- * retrying events for a webhook with at-least-once delivery semantics one-by-one until the server
- * successfully marks all `n` events delivered.
+ * An example of a webhook server performing event recovery on restart for a webhook with
+ * at-least-once delivery semantics. Half of `n` events are published, followed by the other half of
+ * `n` events on restart. Events that haven't been marked delivered prior to shutdown are retried on
+ * restart. All `n` events are eventually delivered.
  */
-object BasicExampleWithRetrying extends App {
+object EventRecoveryExample extends App {
 
-  // server answers with 200 25% of the time, 404 the other
+  // server answers with 200 40% of the time, 404 the other
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       val payload = request.getBodyAsString
@@ -28,7 +28,7 @@ object BasicExampleWithRetrying extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 25)
+                        if (n < 40)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else
@@ -59,11 +59,19 @@ object BasicExampleWithRetrying extends App {
 
   private def program =
     for {
-      _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- nEvents.foreach(TestWebhookEventRepo.createEvent)
-      _ <- clock.sleep(Duration.Infinity)
+      webhookServer <- WebhookServer.create
+      _             <- webhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _             <- webhookServer.start
+      _             <- httpEndpointServer.start(port, httpApp).fork
+      _             <- TestWebhookRepo.createWebhook(webhook)
+      _             <- nEvents.take(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- webhookServer.shutdown
+      _              = println("Shutdown successful")
+      webhookServer <- WebhookServer.create
+      _             <- webhookServer.start
+      _              = println("Restart successful")
+      _             <- nEvents.drop(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- clock.sleep(Duration.Infinity)
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
@@ -73,8 +81,7 @@ object BasicExampleWithRetrying extends App {
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
         WebhookSttpClient.live,
-        WebhookServerConfig.default,
-        WebhookServer.live
+        WebhookServerConfig.default
       )
       .exitCode
 

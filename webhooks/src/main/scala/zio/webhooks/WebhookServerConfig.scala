@@ -8,9 +8,15 @@ import java.time.Duration
 /**
  * A [[WebhookServerConfig]] contains configuration settings for a [[WebhookServer]]'s error hub
  * capacity, retrying, and batching. For optimal performance, use capacities that are powers of 2.
+ *
+ * @param errorSlidingCapacity Number of errors to keep in the sliding buffer
+ * @param maxSingleDispatchConcurrency Max number of single dispatches, or for retries, for each webhook
+ * @param retry Configuration settings for retries
+ * @param batchingCapacity Optional capacity for each batch. Set this to enable batching.
  */
 final case class WebhookServerConfig(
   errorSlidingCapacity: Int,
+  maxSingleDispatchConcurrency: Int,
   retry: WebhookServerConfig.Retry,
   batchingCapacity: Option[Int] = None
 )
@@ -19,10 +25,12 @@ object WebhookServerConfig {
   val default: ULayer[Has[WebhookServerConfig]] = ZLayer.succeed(
     WebhookServerConfig(
       errorSlidingCapacity = 128,
+      maxSingleDispatchConcurrency = 128,
       Retry(
         capacity = 128,
         exponentialBase = 10.millis,
         exponentialFactor = 2.0,
+        maxBackoff = 1.hour,
         timeout = 7.days
       )
     )
@@ -32,7 +40,7 @@ object WebhookServerConfig {
     default.map(serverConfig => Has(serverConfig.get.copy(batchingCapacity = Some(128))))
 
   /**
-   * Retry configuration settings
+   * Retry configuration settings for each webhook.
    *
    * @param capacity Max number of dispatches to hold for each webhook
    * @param exponentialBase Base duration for spacing out retries
@@ -43,6 +51,7 @@ object WebhookServerConfig {
     capacity: Int,
     exponentialBase: Duration,
     exponentialFactor: Double,
+    maxBackoff: Duration,
     timeout: Duration
   )
 }

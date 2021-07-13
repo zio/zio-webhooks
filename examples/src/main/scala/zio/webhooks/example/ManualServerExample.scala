@@ -17,21 +17,30 @@ import zio.webhooks.testkit._
  */
 object ManualServerExample extends App {
 
-  private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
-    WebhookEvent(
-      WebhookEventKey(WebhookEventId(i), webhook.id),
-      WebhookEventStatus.New,
-      s"""{"payload":$i}""",
-      Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-    )
-  }
-
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       ZIO
         .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
         .as(Response.status(Status.OK))
   }
+
+  // just an alias for a zio-http server to disambiguate it with the webhook server
+  private lazy val httpEndpointServer = Server
+
+  private lazy val n = 5000
+
+  // JSON webhook event stream
+  private lazy val nEvents = UStream
+    .iterate(0L)(_ + 1)
+    .map { i =>
+      WebhookEvent(
+        WebhookEventKey(WebhookEventId(i), webhook.id),
+        WebhookEventStatus.New,
+        s"""{"payload":$i}""",
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+      )
+    }
+    .take(n.toLong)
 
   private lazy val port = 8080
 
@@ -42,11 +51,10 @@ object ManualServerExample extends App {
       server <- WebhookServer.create
       _      <- server.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _      <- server.start
-      _      <- Server.start(port, httpApp).fork
+      _      <- httpEndpointServer.start(port, httpApp).fork
       _      <- TestWebhookRepo.createWebhook(webhook)
-      _      <- events
-                  .schedule(Schedule.fixed(1.second))
-                  .take(100)
+      _      <- nEvents
+                  .schedule(Schedule.fixed(333.micros))
                   .foreach(TestWebhookEventRepo.createEvent)
                   .ensuring((server.shutdown *> putStrLn("Shutdown successful")).orDie)
     } yield ()

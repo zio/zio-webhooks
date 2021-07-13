@@ -1,7 +1,7 @@
 package zio.webhooks
 
 import zio._
-import zio.prelude.NonEmptySet
+import zio.stream.UStream
 import zio.webhooks.WebhookError._
 
 /**
@@ -10,18 +10,9 @@ import zio.webhooks.WebhookError._
 trait WebhookEventRepo {
 
   /**
-   * Used by the server to subscribe to events whose status is in the given set of `statuses`.
+   * Used by the server to recover events for webhooks with at-least-once delivery semantics.
    */
-  def getEventsByStatuses(statuses: NonEmptySet[WebhookEventStatus]): UManaged[Dequeue[WebhookEvent]]
-
-  /**
-   * Used by the server during event recovery to get a webhook's events whose status is in the given
-   * set of `statuses`.
-   */
-  def getEventsByWebhookAndStatus(
-    id: WebhookId,
-    statuses: NonEmptySet[WebhookEventStatus]
-  ): UIO[Chunk[WebhookEvent]]
+  def recoverEvents: UStream[WebhookEvent]
 
   /**
    * Marks all events by the specified webhook id as failed.
@@ -37,4 +28,9 @@ trait WebhookEventRepo {
    * Sets the status of multiple events.
    */
   def setEventStatusMany(keys: NonEmptyChunk[WebhookEventKey], status: WebhookEventStatus): IO[MissingEventsError, Unit]
+
+  /**
+   * Used by the server to subscribe to new webhook events.
+   */
+  def subscribeToNewEvents: UManaged[Dequeue[WebhookEvent]]
 }

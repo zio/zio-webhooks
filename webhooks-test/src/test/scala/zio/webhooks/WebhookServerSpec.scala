@@ -12,7 +12,6 @@ import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
-import zio.webhooks.WebhookStatus._
 import zio.webhooks.testkit._
 
 import java.time.Instant
@@ -76,7 +75,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               events = List(event),
               ScenarioInterest.Events
             ) { (events, _) =>
-              val eventStatuses = events.filterOutput(!_.status.isNew).map(_.status).takeBetween(2, 3)
+              val eventStatuses = events.filterOutput(!_.isNew).map(_.status).takeBetween(2, 3)
               assertM(eventStatuses)(hasSameElements(expectedStatuses))
             }
           },
@@ -185,22 +184,6 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
           },
-          testM("retrying sets webhook status to Retrying, then Enabled on success") {
-            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
-
-            val events = createPlaintextEvents(1)(webhook.id)
-
-            webhooksTestScenario(
-              stubResponses = UStream(None, Some(WebhookHttpResponse(200))),
-              webhooks = List(webhook),
-              events = events,
-              ScenarioInterest.Webhooks
-            ) { (webhooks, _) =>
-              assertM(webhooks.takeN(3).map(_.drop(1).map(_.status)))(
-                hasSameElements(List(WebhookStatus.Retrying(Instant.EPOCH), WebhookStatus.Enabled))
-              )
-            }
-          },
           testM("retries until success before 7-day retry timeout") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
 
@@ -229,15 +212,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Webhooks
-            ) {
-              (webhooks, _) =>
-                for {
-                  status2    <- webhooks.take *> webhooks.take.map(_.status)
-                  status3Poll = TestClock.adjust(1.day) *> webhooks.poll.map(_.map(_.status))
-                  retrySched  = Schedule.recurUntil[Option[WebhookStatus]](_.isDefined) && Schedule.spaced(50.millis)
-                  status3    <- status3Poll.repeat(retrySched).map(_._1).provideSomeLayer[TestClock](Clock.live)
-                } yield assertTrue(status2 == Retrying(Instant.EPOCH)) &&
-                  assert(status3)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
+            ) { (webhooks, _) =>
+              for {
+                status  <- webhooks.take.map(_.status)
+                status2 <- webhooks.take.map(_.status) raceEither TestClock.adjust(7.days).forever
+              } yield assertTrue(status == WebhookStatus.Enabled) &&
+                assert(status2)(isLeft(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
           },
           testM("marks all a webhook's events failed when marked unavailable") {
@@ -255,7 +235,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 .fromQueue(events)
                 .filter(_.status == WebhookEventStatus.Failed)
                 .take(n.toLong)
-                .mergeTerminateLeft(UStream.repeatEffect(TestClock.adjust(1.day)))
+                .mergeTerminateLeft(UStream.repeatEffect(TestClock.adjust(7.days)))
                 .runDrain *> assertCompletesM
             }
           },
@@ -362,7 +342,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             createPlaintextEvents(eventCount / webhookCount)(webhookId)
           }
 
-          val expectedRequestsMade = eventCount / webhookCount // 10
+          val minRequestsMade = eventCount / webhookCount // 10
+          val maxRequestsMade = minRequestsMade * 2
 
           webhooksTestScenario(
             stubResponses = UStream.empty,
@@ -372,8 +353,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           ) { (requests, responseQueue) =>
             for {
               _        <- responseQueue.offerAll(List.fill(10)(Some(WebhookHttpResponse(200))))
-              requests <- requests.takeBetween(expectedRequestsMade, expectedRequestsMade + 1)
-            } yield assertTrue(requests.size == expectedRequestsMade)
+              requests <- requests.takeBetween(minRequestsMade, minRequestsMade + 1)
+            } yield assertTrue((minRequestsMade <= requests.size) && (requests.size <= maxRequestsMade))
           }
         },
         testM("events dispatched by batch are marked delivered") {
@@ -462,7 +443,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               plaintextContentHeaders
             )
 
-            TestWebhookEventRepo.getEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
+            TestWebhookEventRepo.subscribeToEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
               events =>
                 for {
                   responses <- Queue.unbounded[Option[WebhookHttpResponse]]
@@ -481,7 +462,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvents = createPlaintextEvents(2)(WebhookId(0))
 
-            TestWebhookEventRepo.getEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
+            TestWebhookEventRepo.subscribeToEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
               events =>
                 for {
                   responses <- Queue.unbounded[Option[WebhookHttpResponse]]
@@ -497,44 +478,6 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   take      <- events.take.timeout(1.second).provideLayer(Clock.live)
                 } yield assertTrue(event1 && take.isEmpty)
             }
-          },
-          testM("lets batches complete") {
-            val n          = 5
-            val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
-            val testEvents = (0 until n).map { i =>
-              WebhookEvent(
-                WebhookEventKey(WebhookEventId(i.toLong), WebhookId(0)),
-                WebhookEventStatus.New,
-                s"event payload $i\n",
-                plaintextContentHeaders
-              )
-            }
-
-            (TestWebhookHttpClient.getRequests zip TestWebhookEventRepo.getEvents).use {
-              case (requests, events) =>
-                for {
-                  responses <- Queue.unbounded[Option[WebhookHttpResponse]]
-                  server    <- WebhookServer.create
-                  _         <- server.start
-                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(List(Some(WebhookHttpResponse(200)), Some(WebhookHttpResponse(200))))
-                  _         <- TestWebhookRepo.createWebhook(webhook)
-                  _         <- ZIO.foreach_(testEvents)(TestWebhookEventRepo.createEvent)
-                  // wait for n events to be marked delivering
-                  _         <- events.filterOutput(_.status == WebhookEventStatus.Delivering).takeN(n)
-                  _         <- server.shutdown
-                  request   <- requests.take
-                  length     = request.content.split("\n").length
-                } yield assertTrue(1 <= length && length <= n)
-            }
-          },
-          testM("no internal state is saved on shutdown right after startup") {
-            for {
-              server <- WebhookServer.create
-              _      <- server.start
-              _      <- server.shutdown
-              state  <- WebhookStateRepo.getState
-            } yield assertTrue(state.isEmpty)
           },
           testM("retry state is saved") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -557,14 +500,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2) // wait for 2 requests to come through
                   _         <- server.shutdown
-                  state     <- WebhookStateRepo.getState
+                  saveState <- WebhookStateRepo.getState
                                  .repeatUntil(_.isDefined)
                                  .map {
                                    _.map(_.fromJson[PersistentServerState])
                                      .toRight("No save-state")
                                      .flatMap(Predef.identity)
                                  }
-                } yield assertTrue(state.exists(retrying => retrying.map.headOption.exists(_._2.retries.size == 1)))
+                } yield assertTrue(saveState.isRight)
             }
           }
         ),
@@ -590,42 +533,50 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
+                  server    <- WebhookServer.create
                   _         <- server.start
-                  _         <- TestClock.adjust(10.millis).forever.fork // base retry backoff
                   _         <- requests.take
+                  _         <- server.shutdown
                 } yield assertCompletes
             }
-          },
-          testM("retries events not part of saved state") {
-            val webhook      = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
-            val unsavedEvent = WebhookEvent(
+          } @@ nonFlaky,
+          testM("resumes timeout duration for retries") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
+            val event   = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
-              WebhookEventStatus.Delivering,
-              "unsaved event",
+              WebhookEventStatus.New,
+              "event content",
               plaintextContentHeaders
             )
 
-            TestWebhookHttpClient.getRequests.use { requests =>
-              for {
-                responses <- Queue.unbounded[Option[WebhookHttpResponse]]
-                server    <- WebhookServer.create
-                _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                _         <- responses.offerAll(List(None))
-                _         <- TestWebhookRepo.createWebhook(webhook)
-                _         <- TestWebhookEventRepo.createEvent(unsavedEvent)
-                _         <- server.start
-                _         <- requests.take
-              } yield assertCompletes
+            (TestWebhookHttpClient.getRequests zip TestWebhookRepo.getWebhooks).use {
+              case (requests, webhooks) =>
+                for {
+                  responses  <- Queue.unbounded[Option[WebhookHttpResponse]]
+                  server     <- WebhookServer.create
+                  _          <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                  _          <- responses.offerAll(List(None, None, Some(WebhookHttpResponse(200))))
+                  _          <- server.start
+                  _          <- TestWebhookRepo.createWebhook(webhook)
+                  _          <- TestWebhookEventRepo.createEvent(event)
+                  _          <- requests.takeN(2)
+                  _          <- TestClock.adjust(3.days)
+                  _          <- server.shutdown
+                  server     <- WebhookServer.create
+                  _          <- server.start
+                  _          <- TestClock.adjust(4.days)
+                  lastStatus <- webhooks.takeN(2).map(_.last.status)
+                  _          <- requests.take
+                } yield assert(lastStatus)(isSubtype[WebhookStatus.Unavailable](anything))
             }
           }
           // TODO: test continues retrying for multiple webhooks
-          // TODO: test continued retrying resumes timeout duration
-          // TODO: test server gets all events on restart
-          // TODO: test loaded at-most-once delivering events are marked failed
+          // TODO: test retries eventually get delivered  (property test)
+          // TODO: test batched retries eventually get delivered (property test)
         )
-      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.defaultWithBatching) @@ ignore
-      // TODO: write webhook status change tests?
-    ) @@ timeout(10.seconds)
+      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
+      // TODO: write webhook status change tests
+    ) @@ timeout(20.seconds)
 }
 
 object WebhookServerSpecUtil {
@@ -686,7 +637,7 @@ object WebhookServerSpecUtil {
         case ScenarioInterest.Errors   =>
           ZManaged.service[WebhookServer].flatMap(_.getErrors)
         case ScenarioInterest.Events   =>
-          TestWebhookEventRepo.getEvents
+          TestWebhookEventRepo.subscribeToEvents
         case ScenarioInterest.Requests =>
           TestWebhookHttpClient.getRequests
         case ScenarioInterest.Webhooks =>

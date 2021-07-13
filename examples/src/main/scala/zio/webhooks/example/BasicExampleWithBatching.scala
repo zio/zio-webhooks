@@ -12,19 +12,11 @@ import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
 /**
- * Differs from the [[BasicExample]] in that events are batched with the default batching settings
- * of 128 capacity.
+ * Differs from the [[BasicExample]] in that events are batched with the default batching setting
+ * of 128 elements per batch. The server dispatches all events queued up for each webhook since the
+ * last delivery and sends them in a batch.
  */
 object BasicExampleWithBatching extends App {
-
-  private lazy val events = UStream.iterate(0L)(_ + 1).map { i =>
-    WebhookEvent(
-      WebhookEventKey(WebhookEventId(i), webhook.id),
-      WebhookEventStatus.New,
-      s"""{"payload":$i}""",
-      Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-    )
-  }
 
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
@@ -39,14 +31,30 @@ object BasicExampleWithBatching extends App {
       } yield response
   }
 
+  // just an alias for a zio-http server to disambiguate it with the webhook server
+  private lazy val httpEndpointServer = Server
+
+  private lazy val n       = 10000L
+  private lazy val nEvents = UStream
+    .iterate(0L)(_ + 1)
+    .map { i =>
+      WebhookEvent(
+        WebhookEventKey(WebhookEventId(i), webhook.id),
+        WebhookEventStatus.New,
+        s"""{"payload":$i}""",
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+      )
+    }
+    .take(n)
+
   private lazy val port = 8080
 
   private def program =
     for {
-      _ <- Server.start(port, httpApp).fork
+      _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- events.schedule(Schedule.spaced(333.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

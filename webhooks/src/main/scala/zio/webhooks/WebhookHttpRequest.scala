@@ -5,10 +5,10 @@ import zio.Chunk
 /**
  * A [[WebhookHttpRequest]] contains a subset of an HTTP request required to send webhook data.
  */
-final case class WebhookHttpRequest(url: String, content: String, headers: Chunk[(String, String)])
+final case class WebhookHttpRequest private[webhooks] (url: String, content: String, headers: Chunk[(String, String)])
 
 object WebhookHttpRequest {
-  def fromDispatch(dispatch: WebhookDispatch): WebhookHttpRequest = {
+  private[webhooks] def fromDispatch(dispatch: WebhookDispatch): WebhookHttpRequest = {
     val requestContent =
       dispatch.contentType match {
         case Some(WebhookEventContentType.Json) =>
