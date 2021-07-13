@@ -7,6 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
+import zio.webhooks.WebhookError._
 import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
@@ -56,10 +57,11 @@ object ShutdownOnFirstError extends App {
       _          <- errorFiber.join.onExit(_ => WebhookServer.shutdown.orDie *> httpFiber.interrupt)
     } yield ()
   }.catchAll {
-    case WebhookError.InvalidStateError(_, message) => putStrLnErr(s"Invalid state: $message")
-    case WebhookError.MissingWebhookError(id)       => putStrLnErr(s"Missing webhook: $id")
-    case WebhookError.MissingEventError(key)        => putStrLnErr(s"Missing event: $key")
-    case WebhookError.MissingEventsError(keys)      => putStrLnErr(s"Missing events: $keys")
+    case BadWebhookUrlError(id, badUrl) => putStrLnErr(s"Bad url for webhook with id ${id.value}: $badUrl")
+    case InvalidStateError(_, message)  => putStrLnErr(s"Invalid state: $message")
+    case MissingWebhookError(id)        => putStrLnErr(s"Missing webhook: $id")
+    case MissingEventError(key)         => putStrLnErr(s"Missing event: $key")
+    case MissingEventsError(keys)       => putStrLnErr(s"Missing events: $keys")
   }
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

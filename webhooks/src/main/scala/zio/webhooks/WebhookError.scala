@@ -9,23 +9,29 @@ sealed trait WebhookError extends Product with Serializable
 object WebhookError {
 
   /**
+   * A [[BadWebhookUrlError]] occurs when a [[WebhookHttpClient]] detects a string that cannot be
+   * parsed into a URL for a [[Webhook]], as identified by its [[WebhookId]].
+   */
+  final case class BadWebhookUrlError(id: WebhookId, badUrl: String) extends WebhookError
+
+  /**
    * An [[InvalidStateError]] occurs when decoding `rawState` during event recovery fails with a
    * `message`.
    */
   final case class InvalidStateError(rawState: String, message: String) extends WebhookError
 
   /**
-   * A [[MissingWebhookError]] occurs when a webhook we expect to exist is missing.
+   * A [[MissingWebhookError]] occurs when a webhook expected to exist is missing.
    */
   final case class MissingWebhookError(id: WebhookId) extends WebhookError
 
   /**
-   * A [[MissingEventError]] occurs when a webhook event we expect to exist is missing.
+   * A [[MissingEventError]] occurs when a single webhook event expected to exist is missing.
    */
   final case class MissingEventError(key: WebhookEventKey) extends WebhookError
 
   /**
-   * A [[MissingEventsError]] occurs when multiple events we expect to exist are missing.
+   * A [[MissingEventsError]] occurs when multiple events expected to exist are missing.
    */
   final case class MissingEventsError(keys: NonEmptyChunk[WebhookEventKey]) extends WebhookError
 }
