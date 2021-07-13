@@ -185,7 +185,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ) { (errors, _) =>
               assertM(errors.take)(equalTo(expectedError))
             }
-          } @@ timeout(2.seconds) @@ failing
+          }
         ),
         suite("webhooks with at-least-once delivery")(
           testM("immediately retries once on non-200 response") {

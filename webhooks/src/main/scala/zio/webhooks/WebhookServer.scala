@@ -88,13 +88,15 @@ final class WebhookServer private (
   private def deliver(dispatch: WebhookDispatch): URIO[Clock, Unit] = {
     for {
       _        <- markDispatch(dispatch, WebhookEventStatus.Delivering)
-      response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
+      response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).either
       _        <- (dispatch.deliverySemantics, response) match {
-                    case (_, Some(WebhookHttpResponse(200))) =>
+                    case (_, Left(Left(badWebhookUrlError)))  =>
+                      errorHub.publish(badWebhookUrlError)
+                    case (_, Right(WebhookHttpResponse(200))) =>
                       markDispatch(dispatch, WebhookEventStatus.Delivered)
-                    case (AtMostOnce, _)                     =>
+                    case (AtMostOnce, _)                      =>
                       markDispatch(dispatch, WebhookEventStatus.Failed)
-                    case (AtLeastOnce, _)                    =>
+                    case (AtLeastOnce, _)                     =>
                       val webhookId = dispatch.webhookId
                       internalState.update { internalState =>
                         internalState.webhookState.get(webhookId) match {
@@ -272,9 +274,11 @@ final class WebhookServer private (
                     webhook.deliveryMode.semantics,
                     events
                   )
-      response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).option
+      response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).either
       _        <- response match {
-                    case Some(WebhookHttpResponse(200)) =>
+                    case Left(Left(badWebhookUrlError))  =>
+                      errorHub.publish(badWebhookUrlError)
+                    case Right(WebhookHttpResponse(200)) =>
                       for {
                         _                <- retryingState.update(_.removeInFlight(events))
                         _                <- markDispatch(dispatch, WebhookEventStatus.Delivered)
@@ -298,7 +302,7 @@ final class WebhookServer private (
                         setInactive       = retryingState.get.flatMap(_.setInactive)
                         _                <- setInactive.when(allEmpty)
                       } yield ()
-                    case _                              => // retry failed
+                    case _                               => // retry failed
                       for {
                         timestamp <- clock.instant
                         nextState <- retryingState.updateAndGet(_.increaseBackoff(timestamp))
