@@ -6,7 +6,7 @@ import zio._
 import zio.console._
 import zio.duration._
 import zio.magic._
-import zio.stream.UStream
+import zio.stream.{UStream, ZStream}
 import zio.webhooks.WebhookError._
 import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
@@ -17,7 +17,7 @@ import zio.webhooks.testkit._
  */
 object ShutdownOnFirstError extends App {
 
-  private lazy val events = UStream
+  private val goodEvents: ZStream[Any, Nothing, WebhookEvent] = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -27,7 +27,8 @@ object ShutdownOnFirstError extends App {
         Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
       )
     }
-    .take(2) ++ UStream(eventWithoutWebhook)
+
+  private lazy val events = goodEvents.take(2) ++ UStream(eventWithoutWebhook) ++ goodEvents.drop(2)
 
   private lazy val eventWithoutWebhook = WebhookEvent(
     WebhookEventKey(WebhookEventId(-1), WebhookId(-1)),
