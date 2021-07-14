@@ -18,7 +18,7 @@ final case class WebhookServerConfig(
   errorSlidingCapacity: Int,
   maxSingleDispatchConcurrency: Int,
   retry: WebhookServerConfig.Retry,
-  batchingCapacity: Option[Int] = None
+  batchingCapacity: Option[Int]
 )
 
 object WebhookServerConfig {
@@ -32,7 +32,8 @@ object WebhookServerConfig {
         exponentialPower = 2.0,
         maxBackoff = 1.hour,
         timeout = 7.days
-      )
+      ),
+      batchingCapacity = None
     )
   )
 

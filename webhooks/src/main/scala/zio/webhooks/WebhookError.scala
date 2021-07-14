@@ -10,7 +10,7 @@ object WebhookError {
 
   /**
    * A [[BadWebhookUrlError]] occurs when a [[WebhookHttpClient]] detects a string that cannot be
-   * parsed into a URL for a [[Webhook]], as identified by its [[WebhookId]].
+   * parsed into a URL. The parsing failure is included as a message.
    */
   final case class BadWebhookUrlError(badUrl: String, message: String) extends WebhookError
 
