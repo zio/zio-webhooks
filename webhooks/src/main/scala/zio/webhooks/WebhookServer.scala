@@ -380,29 +380,11 @@ final class WebhookServer private (
                             UIO((Some(retrying.retryQueue), state))
                           // no retry state was loaded for this webhook, make a new one
                           case None                                  =>
-                            ZIO.mapN(
-                              Queue.bounded[WebhookEvent](config.retry.capacity),
-                              Queue.bounded[Promise[Nothing, Unit]](config.retry.capacity),
-                              clock.instant
-                            ) { (retryQueue, backoffResetsQueue, now) =>
-                              (
-                                Some(retryQueue),
-                                state.updateWebhookState(
-                                  event.key.webhookId,
-                                  WebhookState.Retrying(
-                                    retryQueue,
-                                    backoffResetsQueue,
-                                    base = config.retry.exponentialBase,
-                                    power = config.retry.exponentialFactor,
-                                    maxBackoff = config.retry.maxBackoff,
-                                    timeout = config.retry.timeout,
-                                    activeSinceTime = now,
-                                    lastRetryTime = now,
-                                    nextBackoff = config.retry.exponentialBase
-                                  )
-                                )
+                            Retrying
+                              .make(config.retry)
+                              .map(retrying =>
+                                (Some(retrying.retryQueue), state.updateWebhookState(event.key.webhookId, retrying))
                               )
-                            }
                           case _                                     =>
                             UIO((None, state))
                         }

@@ -9,7 +9,7 @@ import zio.{ Chunk, NonEmptyChunk }
  * The server, when creating these dispatches, guarantees that all webhook events in this dispatch
  * will have the same [[WebhookEventContentType]].
  */
-private[webhooks] final case class WebhookDispatch private[webhooks] (
+private[webhooks] final case class WebhookDispatch(
   webhookId: WebhookId,
   url: String,
   deliverySemantics: WebhookDeliverySemantics,
