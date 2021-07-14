@@ -88,7 +88,7 @@ final class WebhookServer private (
   }.catchAll(errorHub.publish(_).unit)
 
   /**
-   * Decides the delivery mode for a grouped stream of events based the delivery mode of its
+   * Decides the delivery mode for a grouped stream of events based on the delivery mode of its
    * webhook, then delivers the events in that mode.
    */
   private def deliverGroupedEvents(
@@ -555,7 +555,6 @@ object WebhookServer {
     with Has[WebhookEventRepo]
     with Has[WebhookHttpClient]
     with Has[WebhookServerConfig]
-    with Clock
 
   def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.getErrors)
@@ -601,7 +600,7 @@ object WebhookServer {
   /**
    * Creates a server, ensuring shutdown on release.
    */
-  val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
+  val live: URLayer[WebhookServer.Env with Clock, Has[WebhookServer]] = {
     for {
       server <- WebhookServer.create.toManaged_
       _      <- server.start.toManaged_
