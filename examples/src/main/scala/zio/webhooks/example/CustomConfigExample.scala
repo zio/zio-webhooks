@@ -27,7 +27,7 @@ object CustomConfigExample extends App {
         WebhookServerConfig.Retry(
           capacity = 1024,
           exponentialBase = 100.millis,
-          exponentialFactor = 1.5,
+          exponentialPower = 1.5,
           maxBackoff = 2.seconds,
           timeout = 1.day
         ),

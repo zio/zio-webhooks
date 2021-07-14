@@ -18,11 +18,11 @@ private[webhooks] object PersistentServerState {
    * Persistent version of [[WebhookServer.WebhookState.Retrying]].
    */
   final case class RetryingState(
-    sinceTime: Instant,
-    lastRetryTime: Instant,
-    timeLeft: Duration,
+    activeSinceTime: Instant,
     backoff: Duration,
-    attempt: Int
+    failureCount: Int,
+    lastRetryTime: Instant,
+    timeLeft: Duration
   )
 
   object RetryingState {

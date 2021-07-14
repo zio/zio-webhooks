@@ -29,7 +29,7 @@ object WebhookServerConfig {
       Retry(
         capacity = 128,
         exponentialBase = 10.millis,
-        exponentialFactor = 2.0,
+        exponentialPower = 2.0,
         maxBackoff = 1.hour,
         timeout = 7.days
       )
@@ -44,13 +44,13 @@ object WebhookServerConfig {
    *
    * @param capacity Max number of dispatches to hold for each webhook
    * @param exponentialBase Base duration for spacing out retries
-   * @param exponentialFactor Factor applied to `exponentialBase` to space out retries exponentially
+   * @param exponentialPower Factor applied to `exponentialBase` to space out retries exponentially
    * @param timeout Max duration to wait before retries for a webhook time out
    */
   final case class Retry(
     capacity: Int,
     exponentialBase: Duration,
-    exponentialFactor: Double,
+    exponentialPower: Double,
     maxBackoff: Duration,
     timeout: Duration
   )

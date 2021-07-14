@@ -1,6 +1,5 @@
 package zio.webhooks
 
-import com.github.ghik.silencer.silent
 import zio._
 import zio.clock.Clock
 import zio.duration._
@@ -255,14 +254,16 @@ final class WebhookServer private (
                           retryQueue,
                           backoffResets,
                           config.retry.exponentialBase,
-                          config.retry.exponentialFactor,
-                          maxBackoff = config.retry.maxBackoff,
+                          config.retry.exponentialPower,
+                          config.retry.maxBackoff,
                           persistedState.timeLeft,
-                          persistedState.sinceTime,
-                          persistedState.lastRetryTime,
-                          persistedState.attempt,
-                          persistedState.backoff,
-                          None
+                          persistedState.activeSinceTime,
+                          persistedState.failureCount,
+                          inFlight = Map.empty,
+                          isActive = false,
+                          lastRetryTime = persistedState.lastRetryTime,
+                          nextBackoff = persistedState.backoff,
+                          timerKillSwitch = None
                         )
                       }
       resumedRetry <- loadedState.setActiveWithTimeout(markWebhookUnavailable(webhookId))
@@ -583,11 +584,11 @@ object WebhookServer {
       PersistentServerState(suspendedState.webhookState.collect {
         case (webhookId, retrying: WebhookState.Retrying) =>
           val retryingState = PersistentServerState.RetryingState(
-            sinceTime = retrying.activeSinceTime,
-            lastRetryTime = retrying.lastRetryTime,
-            timeLeft = retrying.timeout,
+            activeSinceTime = retrying.activeSinceTime,
             backoff = retrying.nextBackoff,
-            attempt = retrying.failureCount
+            failureCount = retrying.failureCount,
+            lastRetryTime = retrying.lastRetryTime,
+            timeLeft = retrying.timeout
           )
           (webhookId.value, retryingState)
       })
@@ -625,21 +626,20 @@ object WebhookServer {
 
     case object Disabled extends WebhookState
 
-    @silent("never used")
     final case class Retrying private (
       retryQueue: Queue[WebhookEvent],
       backoffResets: Queue[Promise[Nothing, Unit]],
-      base: Duration,
-      power: Double,
+      exponentialBase: Duration,
+      exponentialPower: Double,
       maxBackoff: Duration,
       timeout: Duration,
       activeSinceTime: Instant,
+      failureCount: Int,
+      inFlight: Map[WebhookEventKey, WebhookEvent],
+      isActive: Boolean,
       lastRetryTime: Instant,
-      failureCount: Int = 0,
       nextBackoff: Duration,
-      timerKillSwitch: Option[Promise[Nothing, Unit]] = None,
-      inFlight: Map[WebhookEventKey, WebhookEvent] = Map.empty,
-      isActive: Boolean = false
+      timerKillSwitch: Option[Promise[Nothing, Unit]]
     ) extends WebhookState {
       def addInFlight(events: Iterable[WebhookEvent]): Retrying    =
         copy(inFlight = inFlight ++ events.map(ev => ev.key -> ev))
@@ -651,10 +651,10 @@ object WebhookServer {
        * Progresses retrying to the next exponential backoff.
        */
       def increaseBackoff(timestamp: Instant): Retrying = {
-        val nextExponential = base * math.pow(2, failureCount.toDouble)
+        val nextExponential = exponentialBase * math.pow(2, failureCount.toDouble)
         val nextBackoff     = if (nextExponential >= maxBackoff) maxBackoff else nextExponential
         val nextAttempt     = if (nextExponential >= maxBackoff) failureCount else failureCount + 1
-        copy(lastRetryTime = timestamp, failureCount = nextAttempt, nextBackoff = nextBackoff)
+        copy(failureCount = nextAttempt, lastRetryTime = timestamp, nextBackoff = nextBackoff)
       }
 
       def removeInFlight(events: Iterable[WebhookEvent]): Retrying =
@@ -672,7 +672,7 @@ object WebhookServer {
        * Reverts retry backoff to the initial state.
        */
       def resetBackoff(timestamp: Instant): Retrying =
-        copy(lastRetryTime = timestamp, failureCount = 0, nextBackoff = base)
+        copy(failureCount = 0, lastRetryTime = timestamp, nextBackoff = exponentialBase)
 
       /**
        * Activates a timer that calls an effect should the retrying state remain active past a
@@ -686,10 +686,10 @@ object WebhookServer {
             timerKillSwitch <- Promise.make[Nothing, Unit]
             runTimer         = timerKillSwitch.await.timeoutTo(false)(_ => true)(timeout).flatMap(onTimeout.unless(_))
             _               <- runTimer.fork
-          } yield copy(timerKillSwitch = Some(timerKillSwitch), isActive = true)
+          } yield copy(isActive = true, timerKillSwitch = Some(timerKillSwitch))
 
       def setInactive: UIO[Retrying] =
-        ZIO.foreach_(timerKillSwitch)(_.succeed(())).as(copy(timerKillSwitch = None, isActive = false))
+        ZIO.foreach_(timerKillSwitch)(_.succeed(())).as(copy(isActive = false, timerKillSwitch = None))
 
       /**
        * Suspends this retry by replacing the backoff with the time left until its backoff completes.
@@ -712,12 +712,16 @@ object WebhookServer {
             retryQueue,
             backoffResetsQueue,
             retryConfig.exponentialBase,
-            retryConfig.exponentialFactor,
+            retryConfig.exponentialPower,
             maxBackoff = retryConfig.maxBackoff,
             timeout = retryConfig.timeout,
             activeSinceTime = timestamp,
+            failureCount = 0,
+            inFlight = Map.empty,
+            isActive = false,
             lastRetryTime = timestamp,
-            nextBackoff = retryConfig.exponentialBase
+            nextBackoff = retryConfig.exponentialBase,
+            timerKillSwitch = None
           )
         )
     }
