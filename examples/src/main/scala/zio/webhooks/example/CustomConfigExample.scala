@@ -42,7 +42,6 @@ object CustomConfigExample extends App {
       for {
         n           <- random.nextIntBounded(100)
         tsString    <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        randomDelay <- random.nextIntBounded(2000).map(_.millis)
         response    <- ZIO
                          .foreach(payload) { payload =>
                            if (n < 20)
@@ -52,7 +51,6 @@ object CustomConfigExample extends App {
                              putStrLn(tsString + payload + " Response: NOT_FOUND") *>
                                UIO(Response.status(Status.NOT_FOUND))
                          }
-                         .delay(randomDelay)
                          .orDie
       } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
   }
