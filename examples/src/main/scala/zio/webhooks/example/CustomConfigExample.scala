@@ -40,18 +40,18 @@ object CustomConfigExample extends App {
     case request @ Method.POST -> Root / "endpoint" =>
       val payload = request.getBodyAsString
       for {
-        n           <- random.nextIntBounded(100)
-        tsString    <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response    <- ZIO
-                         .foreach(payload) { payload =>
-                           if (n < 20)
-                             putStrLn(tsString + payload + " Response: OK") *>
-                               UIO(Response.status(Status.OK))
-                           else
-                             putStrLn(tsString + payload + " Response: NOT_FOUND") *>
-                               UIO(Response.status(Status.NOT_FOUND))
-                         }
-                         .orDie
+        n        <- random.nextIntBounded(100)
+        tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
+        response <- ZIO
+                      .foreach(payload) { payload =>
+                        if (n < 20)
+                          putStrLn(tsString + payload + " Response: OK") *>
+                            UIO(Response.status(Status.OK))
+                        else
+                          putStrLn(tsString + payload + " Response: NOT_FOUND") *>
+                            UIO(Response.status(Status.NOT_FOUND))
+                      }
+                      .orDie
       } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
   }
 
