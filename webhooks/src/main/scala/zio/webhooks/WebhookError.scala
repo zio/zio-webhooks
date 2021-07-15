@@ -1,6 +1,6 @@
 package zio.webhooks
 
-import zio.NonEmptyChunk
+import zio.prelude.NonEmptySet
 
 /**
  * Represents errors that can be raised during the operation of a webhook server.
@@ -33,5 +33,5 @@ object WebhookError {
   /**
    * A [[MissingEventsError]] occurs when multiple events expected to exist are missing.
    */
-  final case class MissingEventsError(keys: NonEmptyChunk[WebhookEventKey]) extends WebhookError
+  final case class MissingEventsError(keys: NonEmptySet[WebhookEventKey]) extends WebhookError
 }

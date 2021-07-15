@@ -1,6 +1,7 @@
 package zio.webhooks.testkit
 
 import zio._
+import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.webhooks.WebhookError._
 import zio.webhooks._
@@ -75,14 +76,14 @@ final private case class TestWebhookEventRepoImpl(
     } yield ()
 
   def setEventStatusMany(
-    keys: NonEmptyChunk[WebhookEventKey],
+    keys: NonEmptySet[WebhookEventKey],
     status: WebhookEventStatus
   ): IO[MissingEventsError, Unit] =
     for {
       result <- ref.modify { map =>
                   val missingKeys = keys.filter(!map.contains(_))
                   if (missingKeys.nonEmpty)
-                    (NonEmptyChunk.fromChunk(missingKeys).toLeft(Iterable.empty[WebhookEvent]), map)
+                    (NonEmptySet.fromSetOption(missingKeys).toLeft(Iterable.empty[WebhookEvent]), map)
                   else {
                     val updated =
                       for ((key, event) <- map if keys.contains(key))

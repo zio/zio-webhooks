@@ -4,6 +4,7 @@ import zio._
 import zio.clock.Clock
 import zio.duration._
 import zio.json._
+import zio.prelude.NonEmptySet
 import zio.stream._
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
@@ -121,7 +122,7 @@ final class WebhookServer private (
   private def deliverNewEvent(newEvent: WebhookEvent): URIO[Clock, Unit] = {
     for {
       webhook <- getWebhook(newEvent.key.webhookId)
-      dispatch = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, NonEmptyChunk(newEvent))
+      dispatch = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, NonEmptySet(newEvent))
       _       <- deliver(dispatch).when(webhook.isAvailable)
     } yield ()
   }.catchAll(errorHub.publish(_).unit)
@@ -134,7 +135,7 @@ final class WebhookServer private (
     latch: Promise[Nothing, Unit]
   ): ZIO[Clock, MissingWebhookError, Nothing] = {
     val deliverBatch = for {
-      batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptyChunk.fromIterable(_, _))
+      batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
       webhookId = batch.head.key.webhookId
       webhook  <- getWebhook(webhookId)
       dispatch  = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
@@ -154,7 +155,7 @@ final class WebhookServer private (
   ): ZIO[Clock, WebhookError, Nothing] = {
     val deliverBatch =
       for {
-        batch <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptyChunk.fromIterable(_, _))
+        batch <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
         _     <- retryEvents(retryState, batch, Some(batchQueue))
       } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.forever
@@ -168,9 +169,9 @@ final class WebhookServer private (
     errorHub.subscribe
 
   /**
-   * Gets a webhook from the server's internal webhook map by [[WebhookId]]. If missing, we look
+   * Looks up a webhook from the server's internal webhook map by [[WebhookId]]. If missing, we look
    * for it in the [[WebhookRepo]], raising a [[MissingWebhookError]] if we don't find one there.
-   * Adds webhooks from a repo to the server's internal webhook map.
+   * Adds webhooks looked up from a repo to the server's internal webhook map.
    */
   private def getWebhook(webhookId: WebhookId): IO[MissingWebhookError, Webhook] =
     for {
@@ -180,7 +181,7 @@ final class WebhookServer private (
                      UIO(webhook)
                    case None          =>
                      for {
-                       webhook <- webhookRepo.requireWebhook(webhookId)
+                       webhook <- webhookRepo.getWebhookById(webhookId)
                        _       <- webhooks.update(_.setWebhook(webhook))
                      } yield webhook
                  }
@@ -333,7 +334,7 @@ final class WebhookServer private (
    */
   private def retryEvents(
     retryState: Ref[RetryState],
-    events: NonEmptyChunk[WebhookEvent],
+    events: NonEmptySet[WebhookEvent],
     batchQueue: Option[Queue[WebhookEvent]] = None
   ): ZIO[Clock, WebhookError, Unit] = {
     val webhookId = events.head.key.webhookId
@@ -395,7 +396,7 @@ final class WebhookServer private (
       retryQueue <- retryState.get.map(_.retryQueue)
       _          <- mergeShutdown(UStream.fromQueue(retryQueue))
                       .mapMParUnordered(config.maxSingleDispatchConcurrency) { event =>
-                        retryEvents(retryState, NonEmptyChunk.single(event)).catchAll(errorHub.publish)
+                        retryEvents(retryState, NonEmptySet.single(event)).catchAll(errorHub.publish)
                       }
                       .runDrain
                       .fork
@@ -686,7 +687,7 @@ object WebhookServer {
     def removeInFlight(events: Iterable[WebhookEvent]): RetryState =
       copy(inFlight = inFlight.removeAll(events.map(_.key)))
 
-    def requeue(events: NonEmptyChunk[WebhookEvent]): URIO[Clock, Unit] =
+    def requeue(events: NonEmptySet[WebhookEvent]): URIO[Clock, Unit] =
       for {
         backoffReset <- Promise.make[Nothing, Unit]
         _            <- backoffResets.offer(backoffReset)

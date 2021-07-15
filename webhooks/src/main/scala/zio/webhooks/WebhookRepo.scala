@@ -11,11 +11,7 @@ trait WebhookRepo {
   /**
    * Retrieves a webhook by id.
    */
-  def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]]
-
-  final def requireWebhook(webhookId: WebhookId): IO[MissingWebhookError, Webhook] =
-    getWebhookById(webhookId)
-      .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
+  def getWebhookById(webhookId: WebhookId): IO[MissingWebhookError, Webhook]
 
   /**
    * Sets the status of a webhook.

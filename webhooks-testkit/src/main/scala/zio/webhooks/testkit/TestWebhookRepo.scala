@@ -40,8 +40,8 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], 
   def getWebhooks: UManaged[Dequeue[Webhook]] =
     hub.subscribe
 
-  def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]] =
-    ref.get.map(_.get(webhookId))
+  def getWebhookById(webhookId: WebhookId): IO[MissingWebhookError, Webhook] =
+    ref.get.map(_.get(webhookId)).flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
 
   def setWebhookStatus(id: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit] =
     for {

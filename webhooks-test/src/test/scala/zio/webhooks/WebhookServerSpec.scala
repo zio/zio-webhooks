@@ -431,15 +431,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             webhooks = List(webhook),
             events = jsonEvents,
             ScenarioInterest.Requests
-          ) { (requests, _) =>
-            for (content <- requests.take.map(_.content))
-              yield {
-                val n              = "event".r.findAllMatchIn(content).size
-                val appendedJson   = (0 until n).map(i => s"""{"event":"payload$i"}""").mkString(",")
-                val expectedOutput = if (n > 1) "[" + appendedJson + "]" else appendedJson
-                assertTrue(content == expectedOutput)
-              }
-          }
+          )((requests, _) => assertM(requests.take.map(_.content))(matchesRegex(jsonPayloadPattern)))
         },
         testM("batched plain text event contents are concatenated") {
           val n               = 2
@@ -451,14 +443,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             webhooks = List(webhook),
             events = plaintextEvents,
             ScenarioInterest.Requests
-          ) { (requests, _) =>
-            for (content <- requests.take.map(_.content))
-              yield {
-                val n              = "event".r.findAllMatchIn(content).size
-                val expectedOutput = (0 until n).map(i => s"event payload $i").mkString
-                assertTrue(content == expectedOutput)
-              }
-          }
+          )((requests, _) => assertM(requests.take.map(_.content))(matchesRegex("(?:event payload \\d+)+")))
         }
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
       suite("manual server start and shutdown")(
@@ -634,6 +619,9 @@ object WebhookServerSpecUtil {
     }
 
   val jsonContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+
+  val jsonPayloadPattern: String =
+    """(?:\{\"event\":\"payload\d+\"})|(?:\[\{\"event\":\"payload\d+\"}(?:,\{\"event\":\"payload\d+\"})*\])"""
 
   type MockEnv = Has[WebhookEventRepo]
     with Has[TestWebhookEventRepo]

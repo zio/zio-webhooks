@@ -40,18 +40,20 @@ object CustomConfigExample extends App {
     case request @ Method.POST -> Root / "endpoint" =>
       val payload = request.getBodyAsString
       for {
-        n        <- random.nextIntBounded(100)
-        tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response <- ZIO
-                      .foreach(payload) { payload =>
-                        if (n < 20)
-                          putStrLn(tsString + payload + " Response: OK") *>
-                            UIO(Response.status(Status.OK))
-                        else
-                          putStrLn(tsString + payload + " Response: NOT_FOUND") *>
-                            UIO(Response.status(Status.NOT_FOUND))
-                      }
-                      .orDie
+        n           <- random.nextIntBounded(100)
+        tsString    <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
+        randomDelay <- random.nextIntBounded(2000).map(_.millis)
+        response    <- ZIO
+                         .foreach(payload) { payload =>
+                           if (n < 20)
+                             putStrLn(tsString + payload + " Response: OK") *>
+                               UIO(Response.status(Status.OK))
+                           else
+                             putStrLn(tsString + payload + " Response: NOT_FOUND") *>
+                               UIO(Response.status(Status.NOT_FOUND))
+                         }
+                         .delay(randomDelay)
+                         .orDie
       } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
   }
 
@@ -78,7 +80,7 @@ object CustomConfigExample extends App {
       _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.spaced(333.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
       _ <- zio.clock.sleep(Duration.Infinity)
     } yield ()
 
