@@ -532,7 +532,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   saveState <- WebhookStateRepo.getState
                                  .repeatUntil(_.isDefined)
                                  .map {
-                                   _.map(_.fromJson[PersistentServerState])
+                                   _.map(_.fromJson[PersistentRetries])
                                      .toRight("No save-state")
                                      .flatMap(Predef.identity)
                                  }
