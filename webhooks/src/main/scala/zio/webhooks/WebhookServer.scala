@@ -36,6 +36,7 @@ final class WebhookServer private (
   private val errorHub: Hub[WebhookError],
   private val newRetries: Queue[NewRetry],
   private val retries: RefM[Retries],
+  private val semaphore: Semaphore,
   private val startupLatch: CountDownLatch,
   private val shutdownLatch: CountDownLatch,
   private val shutdownSignal: Promise[Nothing, Unit],
@@ -99,7 +100,7 @@ final class WebhookServer private (
       webhook <- getWebhook(batchKey.webhookId)
       _       <- webhook.deliveryMode.batching match {
                    case WebhookDeliveryBatching.Single  =>
-                     batchEvents.mapMParUnordered(config.maxSingleDispatchConcurrency)(deliverNewEvent).runDrain
+                     batchEvents.mapM(ev => semaphore.withPermit(deliverNewEvent(ev)).fork).runDrain
                    case WebhookDeliveryBatching.Batched =>
                      for {
                        batchQueue <- batchQueues.modify { map =>
@@ -375,7 +376,8 @@ final class WebhookServer private (
                         setInactive       = retryState.get.flatMap(_.deactivate)
                         _                <- setInactive.when(allEmpty)
                       } yield ()
-                    case _                               => // retry failed
+                    // retry responded with a non-200 status, or an IOException occurred
+                    case _                               =>
                       for {
                         timestamp <- clock.instant
                         nextState <- retryState.updateAndGet(_.increaseBackoff(timestamp))
@@ -394,12 +396,14 @@ final class WebhookServer private (
   private def retrySingly(retryState: Ref[RetryState]): ZIO[Clock, Nothing, Unit] =
     for {
       retryQueue <- retryState.get.map(_.retryQueue)
-      _          <- mergeShutdown(UStream.fromQueue(retryQueue))
-                      .mapMParUnordered(config.maxSingleDispatchConcurrency) { event =>
-                        retryEvents(retryState, NonEmptySet.single(event)).catchAll(errorHub.publish)
-                      }
-                      .runDrain
-                      .fork
+      _          <- mergeShutdown(UStream.fromQueue(retryQueue)).mapM { event =>
+                      semaphore
+                        .withPermit(
+                          retryEvents(retryState, NonEmptySet.single(event))
+                            .catchAll(errorHub.publish)
+                        )
+                        .fork
+                    }.runDrain.fork
     } yield ()
 
   /**
@@ -539,7 +543,8 @@ object WebhookServer {
       webhookState   <- ZIO.service[WebhookStateRepo]
       errorHub       <- Hub.sliding[WebhookError](config.errorSlidingCapacity)
       newRetries     <- Queue.bounded[NewRetry](config.retry.capacity)
-      state          <- RefM.make(Retries(Map.empty))
+      semaphore      <- Semaphore.make(config.maxSingleDispatchConcurrency.toLong)
+      retries        <- RefM.make(Retries(Map.empty))
       // startup sync points: new event sub + event recovery
       startupLatch   <- CountDownLatch.make(2)
       // shutdown sync points: new event sub + event recovery + retrying
@@ -554,7 +559,8 @@ object WebhookServer {
       webhookRepo,
       errorHub,
       newRetries,
-      state,
+      retries,
+      semaphore,
       startupLatch,
       shutdownLatch,
       shutdownSignal,
