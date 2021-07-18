@@ -53,7 +53,7 @@ object BasicExampleWithBatching extends App {
     for {
       _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _ <- TestWebhookRepo.createWebhook(webhook)
+      _ <- TestWebhookRepo.setWebhook(webhook)
       _ <- nEvents.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 

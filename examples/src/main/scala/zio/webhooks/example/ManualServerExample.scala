@@ -49,10 +49,10 @@ object ManualServerExample extends App {
   private def program =
     for {
       server <- WebhookServer.create
-      _      <- server.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _      <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _      <- server.start
       _      <- httpEndpointServer.start(port, httpApp).fork
-      _      <- TestWebhookRepo.createWebhook(webhook)
+      _      <- TestWebhookRepo.setWebhook(webhook)
       _      <- nEvents
                   .schedule(Schedule.fixed(10.millis))
                   .foreach(TestWebhookEventRepo.createEvent)

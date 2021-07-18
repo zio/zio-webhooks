@@ -60,10 +60,10 @@ object EventRecoveryExample extends App {
   private def program =
     for {
       webhookServer <- WebhookServer.create
-      _             <- webhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _             <- webhookServer.start
       _             <- httpEndpointServer.start(port, httpApp).fork
-      _             <- TestWebhookRepo.createWebhook(webhook)
+      _             <- TestWebhookRepo.setWebhook(webhook)
       _             <- nEvents.take(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- webhookServer.shutdown
       _              = println("Shutdown successful")

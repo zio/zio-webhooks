@@ -12,6 +12,7 @@ import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
+import zio.webhooks.WebhookUpdate.WebhookChanged
 import zio.webhooks.testkit.TestWebhookHttpClient._
 import zio.webhooks.testkit._
 
@@ -56,7 +57,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List(webhook),
               events = List(event),
               ScenarioInterest.Webhooks
-            )((webhooks, _) => assertM(webhooks.take)(equalTo(webhook)))
+            )((webhooks, _) => assertM(webhooks.take)(equalTo(WebhookChanged(webhook))))
           },
           testM("event is marked Delivering, then Delivered on successful dispatch") {
             val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
@@ -231,7 +232,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               } yield assertTrue(request1 && request2 && request3)
             }
           },
-          testM("webhook is set unavailable after 7-day retry timeout") {
+          testM("webhook is set unavailable after retry timeout") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(1)(webhook.id)
 
@@ -243,9 +244,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ) { (webhooks, _) =>
               for {
                 status  <- webhooks.take.map(_.status)
-                status2 <- webhooks.take.map(_.status) raceEither TestClock.adjust(7.days).forever
-              } yield assertTrue(status == WebhookStatus.Enabled) &&
-                assert(status2)(isLeft(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
+                status2 <- webhooks.take.map(_.status) race TestClock.adjust(1.day).forever
+              } yield assert(status)(isSome(equalTo(WebhookStatus.Enabled))) &&
+                assert(status2)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
           },
           testM("marks all a webhook's events failed when marked unavailable") {
@@ -466,7 +467,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200))))
                   _         <- server.start
                   _         <- server.shutdown
-                  _         <- TestWebhookRepo.createWebhook(webhook)
+                  _         <- TestWebhookRepo.setWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(testEvent)
                   take      <- events.take.timeout(1.second).provideLayer(Clock.live)
                 } yield assertTrue(take.isEmpty)
@@ -484,7 +485,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200))))
                   _         <- server.start
-                  _         <- TestWebhookRepo.createWebhook(webhook)
+                  _         <- TestWebhookRepo.setWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(testEvents(0))
                   event1    <- events.take.as(true)
                   _         <- server.shutdown
@@ -510,7 +511,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Left(None), Left(None)))
                   _         <- server.start
-                  _         <- TestWebhookRepo.createWebhook(webhook)
+                  _         <- TestWebhookRepo.setWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2) // wait for 2 requests to come through
                   _         <- server.shutdown
@@ -543,7 +544,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
                   _         <- server.start
-                  _         <- TestWebhookRepo.createWebhook(webhook)
+                  _         <- TestWebhookRepo.setWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
@@ -563,7 +564,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               plaintextContentHeaders
             )
 
-            (TestWebhookHttpClient.getRequests zip TestWebhookRepo.getWebhooks).use {
+            (TestWebhookHttpClient.getRequests zip WebhookRepo.subscribeToWebhooks).use {
               case (requests, webhooks) =>
                 for {
                   responses  <- Queue.unbounded[StubResponse]
@@ -571,7 +572,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _          <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _          <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
                   _          <- server.start
-                  _          <- TestWebhookRepo.createWebhook(webhook)
+                  _          <- TestWebhookRepo.setWebhook(webhook)
                   _          <- TestWebhookEventRepo.createEvent(event)
                   _          <- requests.takeN(2)
                   _          <- TestClock.adjust(3.days)
@@ -581,7 +582,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _          <- TestClock.adjust(4.days)
                   lastStatus <- webhooks.takeN(2).map(_.last.status)
                   _          <- requests.take
-                } yield assert(lastStatus)(isSubtype[WebhookStatus.Unavailable](anything))
+                } yield assert(lastStatus)(isSome(isSubtype[WebhookStatus.Unavailable](anything)))
             }
           }
           // TODO: test continues retrying for multiple webhooks
@@ -647,18 +648,18 @@ object WebhookServerSpecUtil {
     case object Errors   extends ScenarioInterest[WebhookError]
     case object Events   extends ScenarioInterest[WebhookEvent]
     case object Requests extends ScenarioInterest[WebhookHttpRequest]
-    case object Webhooks extends ScenarioInterest[Webhook]
+    case object Webhooks extends ScenarioInterest[WebhookUpdate]
 
     final def dequeueFor[A](scenarioInterest: ScenarioInterest[A]): URManaged[SpecEnv, Dequeue[A]] =
       scenarioInterest match {
         case ScenarioInterest.Errors   =>
-          ZManaged.service[WebhookServer].flatMap(_.getErrors)
+          ZManaged.service[WebhookServer].flatMap(_.subscribeToErrors)
         case ScenarioInterest.Events   =>
           TestWebhookEventRepo.subscribeToEvents
         case ScenarioInterest.Requests =>
           TestWebhookHttpClient.getRequests
         case ScenarioInterest.Webhooks =>
-          TestWebhookRepo.getWebhooks
+          WebhookRepo.subscribeToWebhooks
       }
   }
 
@@ -708,7 +709,7 @@ object WebhookServerSpecUtil {
     ScenarioInterest.dequeueFor(scenarioInterest).map(assertion).flatMap(_.forkManaged).use { testFiber =>
       for {
         _          <- TestWebhookHttpClient.setResponse(stubResponses)
-        _          <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook)
+        _          <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
         _          <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
         testResult <- testFiber.join
       } yield testResult
@@ -727,7 +728,7 @@ object WebhookServerSpecUtil {
         responseQueue <- Queue.bounded[StubResponse](1)
         testFiber     <- assertion(dequeue, responseQueue).fork
         _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-        _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.createWebhook)
+        _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
         _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
         _             <- stubResponses.run(ZSink.fromQueue(responseQueue)).fork
         testResult    <- testFiber.join

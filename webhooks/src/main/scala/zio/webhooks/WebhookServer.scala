@@ -163,13 +163,6 @@ final class WebhookServer private (
   }
 
   /**
-   * Exposes a way to listen for [[WebhookError]]s. This provides clients a way to handle server
-   * errors that would otherwise just fail silently.
-   */
-  def getErrors: UManaged[Dequeue[WebhookError]] =
-    errorHub.subscribe
-
-  /**
    * Looks up a webhook from the server's internal webhook map by [[WebhookId]]. If missing, we look
    * for it in the [[WebhookRepo]], raising a [[MissingWebhookError]] if we don't find one there.
    * Adds webhooks looked up from a repo to the server's internal webhook map.
@@ -182,7 +175,9 @@ final class WebhookServer private (
                      UIO(webhook)
                    case None          =>
                      for {
-                       webhook <- webhookRepo.getWebhookById(webhookId)
+                       webhook <- webhookRepo
+                                    .getWebhookById(webhookId)
+                                    .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
                        _       <- webhooks.update(_.setWebhook(webhook))
                      } yield webhook
                  }
@@ -202,11 +197,10 @@ final class WebhookServer private (
    */
   private def markWebhookUnavailable(webhookId: WebhookId): ZIO[Clock, WebhookError, Unit] =
     for {
-      _           <- eventRepo.setAllAsFailedByWebhookId(webhookId)
-      unavailable <- clock.instant.map(WebhookStatus.Unavailable)
-      _           <- webhookRepo.setWebhookStatus(webhookId, unavailable)
-      // TODO: update webhooks ref once added
-      // _           <- internalState.update(state => UIO(state.updateWebhookState(webhookId, WebhookState.Unavailable)))
+      _                 <- eventRepo.setAllAsFailedByWebhookId(webhookId)
+      unavailableStatus <- clock.instant.map(WebhookStatus.Unavailable)
+      _                 <- webhookRepo.setWebhookStatus(webhookId, unavailableStatus)
+      _                 <- webhooks.update(_.updateStatus(webhookId, unavailableStatus))
     } yield ()
 
   /**
@@ -412,6 +406,7 @@ final class WebhookServer private (
    *   - new webhook event subscription
    *   - event recovery for webhooks with at-least-once delivery semantics
    *   - dispatch retry monitoring
+   *   - webhook polling or update subscription
    *
    * The server waits for event recovery and new event subscription to get ready, signalling that
    * the server is ready to accept events.
@@ -421,6 +416,7 @@ final class WebhookServer private (
       _ <- startEventRecovery
       _ <- startRetryMonitoring
       _ <- startNewEventSubscription
+      _ <- startWebhookSubscription
       _ <- startupLatch.await
     } yield ()
 
@@ -511,6 +507,8 @@ final class WebhookServer private (
     } *> shutdownLatch.countDown
   }.fork
 
+  def startWebhookSubscription: URIO[Clock, Any] = ZIO.unit
+
   /**
    * Waits until all work in progress is finished, persists retries, then shuts down.
    */
@@ -521,6 +519,13 @@ final class WebhookServer private (
       persistentState <- retries.get.flatMap(state => clock.instant.map(state.toPersistentServerState))
       _               <- stateRepo.setState(persistentState.toJson)
     } yield ()
+
+  /**
+   * Exposes a way to listen for [[WebhookError]]s. This provides clients a way to handle server
+   * errors that would otherwise just fail silently.
+   */
+  def subscribeToErrors: UManaged[Dequeue[WebhookError]] =
+    errorHub.subscribe
 }
 
 object WebhookServer {
@@ -574,7 +579,7 @@ object WebhookServer {
     with Has[WebhookServerConfig]
 
   def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
-    ZManaged.service[WebhookServer].flatMap(_.getErrors)
+    ZManaged.service[WebhookServer].flatMap(_.subscribeToErrors)
 
   /**
    * [[Retries]] is the server's internal representation of each webhook's [[RetryState]].
@@ -748,15 +753,22 @@ object WebhookServer {
   def shutdown: ZIO[Has[WebhookServer] with Clock, IOException, Any] =
     ZIO.service[WebhookServer].flatMap(_.shutdown) // serviceWith doesn't compile
 
+  def subscribeToErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
+    ZManaged.service[WebhookServer].flatMap(_.subscribeToErrors)
+
   /**
    * An internal map of webhooks.
    */
   private[webhooks] final case class Webhooks private (map: Map[WebhookId, Webhook]) {
+
     def getWebhook(webhookId: WebhookId): Option[Webhook] =
       map.get(webhookId)
 
-    def setWebhook(webhook: Webhook): Webhooks =
-      copy(map = map + (webhook.id -> webhook))
+    def setWebhook(webhook: Webhook): Webhooks                                     =
+      copy(map + (webhook.id -> webhook))
+
+    def updateStatus(webhookId: WebhookId, webhookStatus: WebhookStatus): Webhooks =
+      copy(map.updateWith(webhookId)(_.map(_.copy(status = webhookStatus))))
   }
 
   private[webhooks] object Webhooks {
