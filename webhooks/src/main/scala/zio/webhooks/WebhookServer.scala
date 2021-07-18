@@ -188,16 +188,6 @@ final class WebhookServer private (
     } yield ()
 
   /**
-   * Merges a stream with this webhook server's shutdown signal, terminating it when the shutdown
-   * signal arrives.
-   */
-  private def mergeShutdown[A](stream: UStream[A]): UStream[A] =
-    stream
-      .map(Left(_))
-      .mergeTerminateRight(UStream.fromEffect(shutdownSignal.await.map(Right(_))))
-      .collectLeft
-
-  /**
    * Loads the persisted retry states and resumes them.
    */
   private def loadRetries(loadedState: PersistentRetries): ZIO[Clock, WebhookError, Unit] =
@@ -272,7 +262,7 @@ final class WebhookServer private (
     for {
       batchQueues <- RefM.make(Map.empty[BatchKey, Queue[WebhookEvent]])
       retryQueue  <- retryState.get.map(_.retryQueue)
-      _           <- mergeShutdown(UStream.fromQueue(retryQueue))
+      _           <- mergeShutdown(UStream.fromQueue(retryQueue), shutdownSignal)
                        .groupByKey(ev => BatchKey(webhookId, ev.contentType)) {
                          case (batchKey, batchEvents) =>
                            ZStream.fromEffect {
@@ -374,7 +364,7 @@ final class WebhookServer private (
   private def retrySingly(retryState: Ref[RetryState]): ZIO[Clock, Nothing, Unit] =
     for {
       retryQueue <- retryState.get.map(_.retryQueue)
-      _          <- mergeShutdown(UStream.fromQueue(retryQueue)).mapM { event =>
+      _          <- mergeShutdown(UStream.fromQueue(retryQueue), shutdownSignal).mapM { event =>
                       singleDispatchPermits.withPermit(retryEvents(retryState, NonEmptySet.single(event))).fork
                     }.runDrain.fork
     } yield ()
@@ -406,7 +396,7 @@ final class WebhookServer private (
   private def startBatching(dequeue: Dequeue[WebhookEvent], batchingCapacity: Int): URIO[Clock, Unit] =
     for {
       batchQueues <- RefM.make(Map.empty[BatchKey, Queue[WebhookEvent]])
-      _           <- mergeShutdown(UStream.fromQueue(dequeue)).groupByKey { ev =>
+      _           <- mergeShutdown(UStream.fromQueue(dequeue), shutdownSignal).groupByKey { ev =>
                        val (webhookId, contentType) = ev.webhookIdAndContentType
                        BatchKey(webhookId, contentType)
                      } {
@@ -437,7 +427,7 @@ final class WebhookServer private (
                )
                .catchAll(errorHub.publish)
            )
-      _ <- mergeShutdown(eventRepo.recoverEvents).foreach { event =>
+      _ <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal).foreach { event =>
              (for {
                webhook <- webhooks.getWebhook(event.key.webhookId)
                _       <- recoverEvent(event).when(webhook.isAvailable)
@@ -460,7 +450,7 @@ final class WebhookServer private (
                          case Some(capacity) =>
                            startBatching(eventDequeue, capacity)
                          case None           =>
-                           mergeShutdown(UStream.fromQueue(eventDequeue)).foreach(deliverNewEvent)
+                           mergeShutdown(UStream.fromQueue(eventDequeue), shutdownSignal).foreach(deliverNewEvent)
                        }
         _           <- handleEvents.unless(isShutdown)
         _           <- shutdownLatch.countDown
@@ -471,7 +461,7 @@ final class WebhookServer private (
    * Listens for new retries and starts retry dispatching for a webhook.
    */
   private def startRetryMonitoring: URIO[Clock, Any] = {
-    mergeShutdown(UStream.fromQueue(newRetries)).foreach {
+    mergeShutdown(UStream.fromQueue(newRetries), shutdownSignal).foreach {
       case NewRetry(webhookId, retryState) =>
         (for {
           retryState <- Ref.make(retryState)
@@ -508,12 +498,6 @@ final class WebhookServer private (
 }
 
 object WebhookServer {
-
-  /**
-   * A [[BatchKey]] specifies how the server groups events for batching: by [[WebhookId]] and
-   * content type.
-   */
-  private[webhooks] final case class BatchKey(webhookId: WebhookId, contentType: Option[String])
 
   /**
    * Creates a server, pulling dependencies from the environment then initializing internal state.
