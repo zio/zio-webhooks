@@ -32,7 +32,6 @@ final class WebhookServer private (
   private val eventRepo: WebhookEventRepo,
   private val httpClient: WebhookHttpClient,
   private val stateRepo: WebhookStateRepo,
-  private val webhookRepo: WebhookRepo,
   private val errorHub: Hub[WebhookError],
   private val newRetries: Queue[NewRetry],
   private val retries: RefM[Retries],
@@ -40,7 +39,7 @@ final class WebhookServer private (
   private val startupLatch: CountDownLatch,
   private val shutdownLatch: CountDownLatch,
   private val shutdownSignal: Promise[Nothing, Unit],
-  private val webhooks: Ref[Webhooks]
+  private val webhooks: WebhooksProxy
 ) {
 
   /**
@@ -97,7 +96,7 @@ final class WebhookServer private (
     batchEvents: UStream[WebhookEvent]
   ): ZIO[Clock, MissingWebhookError, Unit] =
     for {
-      webhook <- getWebhook(batchKey.webhookId)
+      webhook <- webhooks.getWebhook(batchKey.webhookId)
       _       <- webhook.deliveryMode.batching match {
                    case WebhookDeliveryBatching.Single  =>
                      batchEvents.mapM(ev => singleDispatchPermits.withPermit(deliverNewEvent(ev)).fork).runDrain
@@ -122,8 +121,8 @@ final class WebhookServer private (
 
   private def deliverNewEvent(newEvent: WebhookEvent): URIO[Clock, Unit] = {
     for {
-      webhook <- getWebhook(newEvent.key.webhookId)
-      dispatch = zio.webhooks.internal.WebhookDispatch(
+      webhook <- webhooks.getWebhook(newEvent.key.webhookId)
+      dispatch = WebhookDispatch(
                    webhook.id,
                    webhook.url,
                    webhook.deliveryMode.semantics,
@@ -143,8 +142,8 @@ final class WebhookServer private (
     val deliverBatch = for {
       batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
       webhookId = batch.head.key.webhookId
-      webhook  <- getWebhook(webhookId)
-      dispatch  = zio.webhooks.internal.WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
+      webhook  <- webhooks.getWebhook(webhookId)
+      dispatch  = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
       _        <- deliver(dispatch).when(webhook.isAvailable)
     } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.forever
@@ -163,32 +162,11 @@ final class WebhookServer private (
       for {
         batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
         webhookId = batch.head.key.webhookId
-        webhook  <- getWebhook(webhookId)
+        webhook  <- webhooks.getWebhook(webhookId)
         _        <- retryEvents(retryState, batch, Some(batchQueue)).when(webhook.isAvailable)
       } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.forever
   }
-
-  /**
-   * Looks up a webhook from the server's internal webhook map by [[WebhookId]]. If missing, we look
-   * for it in the [[WebhookRepo]], raising a [[MissingWebhookError]] if we don't find one there.
-   * Adds webhooks looked up from a repo to the server's internal webhook map.
-   */
-  private def getWebhook(webhookId: WebhookId): IO[MissingWebhookError, Webhook] =
-    for {
-      option  <- webhooks.get.map(_.getWebhook(webhookId))
-      webhook <- option match {
-                   case Some(webhook) =>
-                     UIO(webhook)
-                   case None          =>
-                     for {
-                       webhook <- webhookRepo
-                                    .getWebhookById(webhookId)
-                                    .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
-                       _       <- webhooks.update(_.setWebhook(webhook))
-                     } yield webhook
-                 }
-    } yield webhook
 
   /**
    * Sets the new event status of all the events in a dispatch.
@@ -206,8 +184,7 @@ final class WebhookServer private (
     for {
       _                 <- eventRepo.setAllAsFailedByWebhookId(webhookId)
       unavailableStatus <- clock.instant.map(WebhookStatus.Unavailable)
-      _                 <- webhookRepo.setWebhookStatus(webhookId, unavailableStatus)
-      _                 <- webhooks.update(_.updateStatus(webhookId, unavailableStatus))
+      _                 <- webhooks.setWebhookStatus(webhookId, unavailableStatus)
     } yield ()
 
   /**
@@ -341,9 +318,9 @@ final class WebhookServer private (
   ): ZIO[Clock, WebhookError, Unit] = {
     val webhookId = events.head.key.webhookId
     for {
-      webhook  <- getWebhook(webhookId)
+      webhook  <- webhooks.getWebhook(webhookId)
       _        <- retryState.update(_.addInFlight(events))
-      dispatch  = zio.webhooks.internal.WebhookDispatch(
+      dispatch  = WebhookDispatch(
                     webhook.id,
                     webhook.url,
                     webhook.deliveryMode.semantics,
@@ -462,7 +439,7 @@ final class WebhookServer private (
            )
       _ <- mergeShutdown(eventRepo.recoverEvents).foreach { event =>
              (for {
-               webhook <- getWebhook(event.key.webhookId)
+               webhook <- webhooks.getWebhook(event.key.webhookId)
                _       <- recoverEvent(event).when(webhook.isAvailable)
              } yield ()).catchAll(errorHub.publish)
            }
@@ -498,7 +475,7 @@ final class WebhookServer private (
       case NewRetry(webhookId, retryState) =>
         (for {
           retryState <- Ref.make(retryState)
-          webhook    <- getWebhook(webhookId)
+          webhook    <- webhooks.getWebhook(webhookId)
           _          <- (webhook.batching, config.batchingCapacity) match {
                           case (WebhookDeliveryBatching.Batched, Some(capacity)) =>
                             retryBatched(retryState, webhookId, capacity)
@@ -557,13 +534,12 @@ object WebhookServer {
       // shutdown sync points: new event sub + event recovery + retrying
       shutdownLatch  <- CountDownLatch.make(2)
       shutdownSignal <- Promise.make[Nothing, Unit]
-      webhooks       <- Ref.make(Webhooks.make)
+      webhooks       <- WebhooksProxy.make(webhookRepo)
     } yield new WebhookServer(
       config,
       eventRepo,
       httpClient,
       webhookState,
-      webhookRepo,
       errorHub,
       newRetries,
       retries,
@@ -757,23 +733,4 @@ object WebhookServer {
 
   def subscribeToErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.subscribeToErrors)
-
-  /**
-   * An internal map of webhooks.
-   */
-  private[webhooks] final case class Webhooks private (map: Map[WebhookId, Webhook]) {
-
-    def getWebhook(webhookId: WebhookId): Option[Webhook] =
-      map.get(webhookId)
-
-    def setWebhook(webhook: Webhook): Webhooks                                     =
-      copy(map + (webhook.id -> webhook))
-
-    def updateStatus(webhookId: WebhookId, webhookStatus: WebhookStatus): Webhooks =
-      copy(map.updateWith(webhookId)(_.map(_.copy(status = webhookStatus))))
-  }
-
-  private[webhooks] object Webhooks {
-    def make: Webhooks = Webhooks(Map.empty)
-  }
 }
