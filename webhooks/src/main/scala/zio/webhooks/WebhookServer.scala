@@ -36,7 +36,7 @@ final class WebhookServer private (
   private val errorHub: Hub[WebhookError],
   private val newRetries: Queue[NewRetry],
   private val retries: RefM[Retries],
-  private val semaphore: Semaphore,
+  private val singleDispatchPermits: Semaphore,
   private val startupLatch: CountDownLatch,
   private val shutdownLatch: CountDownLatch,
   private val shutdownSignal: Promise[Nothing, Unit],
@@ -100,7 +100,7 @@ final class WebhookServer private (
       webhook <- getWebhook(batchKey.webhookId)
       _       <- webhook.deliveryMode.batching match {
                    case WebhookDeliveryBatching.Single  =>
-                     batchEvents.mapM(ev => semaphore.withPermit(deliverNewEvent(ev)).fork).runDrain
+                     batchEvents.mapM(ev => singleDispatchPermits.withPermit(deliverNewEvent(ev)).fork).runDrain
                    case WebhookDeliveryBatching.Batched =>
                      for {
                        batchQueue <- batchQueues.modify { map =>
@@ -156,8 +156,10 @@ final class WebhookServer private (
   ): ZIO[Clock, WebhookError, Nothing] = {
     val deliverBatch =
       for {
-        batch <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
-        _     <- retryEvents(retryState, batch, Some(batchQueue))
+        batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
+        webhookId = batch.head.key.webhookId
+        webhook  <- getWebhook(webhookId)
+        _        <- retryEvents(retryState, batch, Some(batchQueue)).when(webhook.isAvailable)
       } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.forever
   }
@@ -382,7 +384,7 @@ final class WebhookServer private (
                       } yield ()
                   }
     } yield ()
-  }
+  }.catchAll(errorHub.publish(_).unit)
 
   /**
    * Retries events one-by-one asynchronously, taking events and
@@ -391,12 +393,7 @@ final class WebhookServer private (
     for {
       retryQueue <- retryState.get.map(_.retryQueue)
       _          <- mergeShutdown(UStream.fromQueue(retryQueue)).mapM { event =>
-                      semaphore
-                        .withPermit(
-                          retryEvents(retryState, NonEmptySet.single(event))
-                            .catchAll(errorHub.publish)
-                        )
-                        .fork
+                      singleDispatchPermits.withPermit(retryEvents(retryState, NonEmptySet.single(event))).fork
                     }.runDrain.fork
     } yield ()
 
