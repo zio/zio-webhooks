@@ -42,7 +42,7 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], 
   def removeWebhook(webhookId: WebhookId): UIO[Unit]                                     =
     ref.update(_ - webhookId)
 
-  def setWebhook(webhook: Webhook): UIO[Unit] =
+  def setWebhook(webhook: Webhook): UIO[Unit]                                                      =
     ref.update(_ + (webhook.id -> webhook)) <* hub.publish(webhook)
 
   def setWebhookStatus(webhookId: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit] =
