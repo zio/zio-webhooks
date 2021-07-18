@@ -632,6 +632,7 @@ object WebhookServerSpecUtil {
     with Has[WebhookStateRepo]
     with Has[TestWebhookHttpClient]
     with Has[WebhookHttpClient]
+    with Has[WebhooksProxy]
 
   lazy val mockEnv: ZLayer[Clock with Has[WebhookServerConfig], Nothing, MockEnv] =
     ZLayer
@@ -639,7 +640,8 @@ object WebhookServerSpecUtil {
         TestWebhookRepo.test,
         TestWebhookEventRepo.test,
         TestWebhookStateRepo.test,
-        TestWebhookHttpClient.test
+        TestWebhookHttpClient.test,
+        WebhooksProxy.live
       )
 
   val plaintextContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
@@ -681,6 +683,7 @@ object WebhookServerSpecUtil {
     with Has[TestWebhookHttpClient]
     with Has[WebhookHttpClient]
     with Has[WebhookServer]
+    with Has[WebhooksProxy]
 
   lazy val specEnv: URLayer[Clock with Has[WebhookServerConfig], SpecEnv] =
     ZLayer
@@ -689,7 +692,8 @@ object WebhookServerSpecUtil {
         TestWebhookEventRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
-        WebhookServer.live
+        WebhookServer.live,
+        WebhooksProxy.live
       )
 
   type TestServerEnv = Has[WebhookRepo]

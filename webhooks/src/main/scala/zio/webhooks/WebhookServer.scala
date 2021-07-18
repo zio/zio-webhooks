@@ -507,8 +507,8 @@ object WebhookServer {
       config         <- ZIO.service[WebhookServerConfig]
       eventRepo      <- ZIO.service[WebhookEventRepo]
       httpClient     <- ZIO.service[WebhookHttpClient]
-      webhookRepo    <- ZIO.service[WebhookRepo]
       webhookState   <- ZIO.service[WebhookStateRepo]
+      webhooks       <- ZIO.service[WebhooksProxy]
       errorHub       <- Hub.sliding[WebhookError](config.errorSlidingCapacity)
       newRetries     <- Queue.bounded[NewRetry](config.retry.capacity)
       semaphore      <- Semaphore.make(config.maxSingleDispatchConcurrency.toLong)
@@ -518,7 +518,6 @@ object WebhookServer {
       // shutdown sync points: new event sub + event recovery + retrying
       shutdownLatch  <- CountDownLatch.make(2)
       shutdownSignal <- Promise.make[Nothing, Unit]
-      webhooks       <- WebhooksProxy.make(webhookRepo)
     } yield new WebhookServer(
       config,
       eventRepo,
@@ -534,7 +533,7 @@ object WebhookServer {
       webhooks
     )
 
-  type Env = Has[WebhookRepo]
+  type Env = Has[WebhooksProxy]
     with Has[WebhookStateRepo]
     with Has[WebhookEventRepo]
     with Has[WebhookHttpClient]

@@ -7,7 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks._
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -74,7 +74,8 @@ object BasicExampleWithRetrying extends App {
         TestWebhookEventRepo.test,
         WebhookSttpClient.live,
         WebhookServerConfig.default,
-        WebhookServer.live
+        WebhookServer.live,
+        WebhooksProxy.live
       )
       .exitCode
 

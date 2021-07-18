@@ -1,14 +1,13 @@
-package zio.webhooks.internal
+package zio.webhooks
 
 import zio._
 import zio.webhooks.WebhookError.MissingWebhookError
-import zio.webhooks._
 
 /**
  * Mediates access to [[Webhook]]s, caching webhooks in memory while keeping them updated by polling
- * given some duration or with a subscription.
+ * for some interval or with a subscription.
  */
-private[webhooks] final class WebhooksProxy private (
+final class WebhooksProxy private (
   private val webhookRepo: WebhookRepo,
   private val cache: Ref[Map[WebhookId, Webhook]]
 ) {
@@ -53,7 +52,10 @@ private[webhooks] final class WebhooksProxy private (
     } yield ()
 }
 
-private[webhooks] object WebhooksProxy {
-  def make(webhookRepo: WebhookRepo): UIO[WebhooksProxy] =
+object WebhooksProxy {
+  val live: URLayer[Has[WebhookRepo], Has[WebhooksProxy]] =
+    ZIO.serviceWith[WebhookRepo](make).toLayer
+
+  private def make(webhookRepo: WebhookRepo): UIO[WebhooksProxy] =
     Ref.make(Map.empty[WebhookId, Webhook]).map(new WebhooksProxy(webhookRepo, _))
 }

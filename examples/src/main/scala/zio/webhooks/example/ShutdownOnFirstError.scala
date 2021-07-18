@@ -8,7 +8,7 @@ import zio.duration._
 import zio.magic._
 import zio.stream._
 import zio.webhooks.WebhookError._
-import zio.webhooks._
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -73,7 +73,8 @@ object ShutdownOnFirstError extends App {
         TestWebhookStateRepo.test,
         WebhookServer.live,
         WebhookServerConfig.default,
-        WebhookSttpClient.live
+        WebhookSttpClient.live,
+        WebhooksProxy.live
       )
       .exitCode
 
