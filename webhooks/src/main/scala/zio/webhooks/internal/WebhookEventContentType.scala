@@ -1,8 +1,8 @@
-package zio.webhooks
+package zio.webhooks.internal
 
 /**
- * A [[WebhookEventContentType]] is an HTTP content type supported by the [[WebhookServer]]. The
- * server uses this to indicate how the string contents of a batch of [[WebhookEvent]]s are put
+ * A [[WebhookEventContentType]] is an HTTP content type supported by the [[zio.webhooks.WebhookServer]]. The
+ * server uses this to indicate how the string contents of a batch of [[zio.webhooks.WebhookEvent]]s are put
  * together.
  *
  * Currently supported content types include:

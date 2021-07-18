@@ -13,6 +13,7 @@ import zio.test.environment._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.WebhookUpdate.WebhookChanged
+import zio.webhooks.internal.PersistentRetries
 import zio.webhooks.testkit.TestWebhookHttpClient._
 import zio.webhooks.testkit._
 

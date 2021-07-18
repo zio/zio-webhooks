@@ -9,7 +9,7 @@ import zio.stream._
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServer._
-import zio.webhooks.internal.CountDownLatch
+import zio.webhooks.internal._
 
 import java.io.IOException
 import java.time.{ Instant, Duration => JDuration }
@@ -123,7 +123,12 @@ final class WebhookServer private (
   private def deliverNewEvent(newEvent: WebhookEvent): URIO[Clock, Unit] = {
     for {
       webhook <- getWebhook(newEvent.key.webhookId)
-      dispatch = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, NonEmptySet(newEvent))
+      dispatch = zio.webhooks.internal.WebhookDispatch(
+                   webhook.id,
+                   webhook.url,
+                   webhook.deliveryMode.semantics,
+                   NonEmptySet(newEvent)
+                 )
       _       <- deliver(dispatch).when(webhook.isAvailable)
     } yield ()
   }.catchAll(errorHub.publish(_).unit)
@@ -139,7 +144,7 @@ final class WebhookServer private (
       batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
       webhookId = batch.head.key.webhookId
       webhook  <- getWebhook(webhookId)
-      dispatch  = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
+      dispatch  = zio.webhooks.internal.WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
       _        <- deliver(dispatch).when(webhook.isAvailable)
     } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.forever
@@ -338,7 +343,7 @@ final class WebhookServer private (
     for {
       webhook  <- getWebhook(webhookId)
       _        <- retryState.update(_.addInFlight(events))
-      dispatch  = WebhookDispatch(
+      dispatch  = zio.webhooks.internal.WebhookDispatch(
                     webhook.id,
                     webhook.url,
                     webhook.deliveryMode.semantics,

@@ -1,7 +1,8 @@
-package zio.webhooks
+package zio.webhooks.internal
 
 import zio.Chunk
 import zio.prelude.NonEmptySet
+import zio.webhooks._
 
 /**
  * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]] containing one or more

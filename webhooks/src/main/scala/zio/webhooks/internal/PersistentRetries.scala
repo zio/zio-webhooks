@@ -1,7 +1,7 @@
-package zio.webhooks
+package zio.webhooks.internal
 
 import zio.json._
-import zio.webhooks.PersistentRetries.RetryingState
+import zio.webhooks.internal.PersistentRetries.RetryingState
 
 import java.time.{ Duration, Instant }
 
@@ -15,7 +15,7 @@ private[webhooks] object PersistentRetries {
   val empty: PersistentRetries = PersistentRetries(Map.empty)
 
   /**
-   * Persistent version of [[WebhookServer.RetryState]].
+   * Persistent version of [[zio.webhooks.WebhookServer.RetryState]].
    */
   final case class RetryingState(
     activeSinceTime: Instant,
