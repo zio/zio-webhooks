@@ -34,8 +34,8 @@ final class WebhookServer private (
   private val stateRepo: WebhookStateRepo,
   private val errorHub: Hub[WebhookError],
   private val newRetries: Queue[NewRetry],
+  private val permits: Semaphore,
   private val retries: RefM[Retries],
-  private val singleDispatches: Semaphore,
   private val startupLatch: CountDownLatch,
   private val shutdownLatch: CountDownLatch,
   private val shutdownSignal: Promise[Nothing, Unit],
@@ -314,7 +314,7 @@ final class WebhookServer private (
     for {
       retryQueue <- retryState.get.map(_.retryQueue)
       _          <- mergeShutdown(UStream.fromQueue(retryQueue), shutdownSignal).mapM { event =>
-                      singleDispatches.withPermit(retryEvents(retryState, NonEmptySet.single(event))).fork
+                      permits.withPermit(retryEvents(retryState, NonEmptySet.single(event))).fork
                     }.runDrain.fork
     } yield ()
 
@@ -403,7 +403,7 @@ final class WebhookServer private (
                      case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>
                        batchDispatcher.enqueueEvent(event)
                      case _                                                        =>
-                       singleDispatches.withPermit(deliverNewEvent(event)).fork
+                       permits.withPermit(deliverNewEvent(event)).fork
                    }).when(webhook.isAvailable)
     } yield ()
 
@@ -475,8 +475,8 @@ object WebhookServer {
       webhookState,
       errorHub,
       newRetries,
-      retries,
       singleDispatches,
+      retries,
       startupLatch,
       shutdownLatch,
       shutdownSignal,

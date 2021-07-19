@@ -66,10 +66,10 @@ object EventRecoveryExample extends App {
       _             <- TestWebhookRepo.setWebhook(webhook)
       _             <- nEvents.take(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- webhookServer.shutdown
-      _              = println("Shutdown successful")
+      _             <- putStrLn("Shutdown successful")
       webhookServer <- WebhookServer.create
       _             <- webhookServer.start
-      _              = println("Restart successful")
+      _             <- putStrLn("Restart successful")
       _             <- nEvents.drop(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- clock.sleep(Duration.Infinity)
     } yield ()

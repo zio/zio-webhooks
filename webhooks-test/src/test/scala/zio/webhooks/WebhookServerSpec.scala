@@ -238,25 +238,25 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events  = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Left(None)),
+              stubResponses = UStream(Left(None), Left(None)),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Webhooks
             ) { (webhooks, _) =>
               for {
                 status  <- webhooks.take.map(_.status)
-                status2 <- webhooks.take.map(_.status) race TestClock.adjust(1.day).forever
+                status2 <- webhooks.take.map(_.status) race TestClock.adjust(7.days).forever
               } yield assert(status)(isSome(equalTo(WebhookStatus.Enabled))) &&
                 assert(status2)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
-          } @@ timeout(10.seconds) @@ failing, // TODO: fix test
+          } @@ ignore, // TODO: fix test
           testM("marks all a webhook's events failed when marked unavailable") {
             val n       = 2
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(n)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Left(None)),
+              stubResponses = UStream(Left(None), Left(None)),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Events
@@ -268,7 +268,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 .mergeTerminateLeft(UStream.repeatEffect(TestClock.adjust(7.days)))
                 .runDrain *> assertCompletesM
             }
-          } @@ timeout(10.seconds) @@ failing, // TODO: fix test
+          } @@ ignore, // TODO: fix test
           testM("retries past first one back off exponentially") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(1)(webhook.id)
@@ -592,7 +592,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
       // TODO: write webhook status change tests
-    ) @@ timeout(20.seconds)
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
