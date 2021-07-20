@@ -21,6 +21,9 @@ final case class WebhookEvent(
   lazy val isDelivering: Boolean =
     status == WebhookEventStatus.Delivering
 
+  lazy val isDone: Boolean =
+    status == WebhookEventStatus.Delivered || status == WebhookEventStatus.Failed
+
   lazy val isNew: Boolean =
     status == WebhookEventStatus.New
 

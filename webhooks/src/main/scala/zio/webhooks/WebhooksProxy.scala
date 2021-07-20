@@ -6,6 +6,7 @@ import zio.duration.Duration
 import zio.prelude.NonEmptySet
 import zio.webhooks.WebhookError.MissingWebhookError
 import zio.webhooks.WebhooksProxy.UpdateMode
+import zio.webhooks.WebhooksProxy.UpdateMode.PollingFunction
 
 /**
  * Mediates access to [[Webhook]]s, caching webhooks in memory while keeping them updated by polling
@@ -38,6 +39,12 @@ final class WebhooksProxy private (
                  }
     } yield webhook
 
+  private def pollForUpdates(pollingFunction: PollingFunction): UIO[Unit] =
+    for {
+      keys <- cache.get.map(map => NonEmptySet.fromIterableOption(map.keys))
+      _    <- ZIO.foreach_(keys)(pollingFunction(_).flatMap(cache.set))
+    } yield ()
+
   def setWebhookStatus(webhookId: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit] =
     for {
       webhookExists <- cache.modify(map =>
@@ -60,32 +67,19 @@ final class WebhooksProxy private (
     for {
       _ <- updateMode match {
              case UpdateMode.Polling(pollingInterval, pollingFunction) =>
-               val loop = for {
-                 keys <- cache.get.map(map => NonEmptySet.fromIterableOption(map.keys))
-                 _    <- ZIO.foreach_(keys) { keys =>
-                           for {
-                             updates <- pollingFunction(keys)
-                             _       <- cache.set(updates)
-                           } yield ()
-                         }
-               } yield ()
-               loop.repeat(Schedule.fixed(pollingInterval))
+               pollForUpdates(pollingFunction).repeat(Schedule.fixed(pollingInterval)).fork
              case UpdateMode.Subscription(subscription)                =>
-               subscription.use { queue =>
-                 val loop =
-                   for {
-                     update <- queue.take
-                     _      <- update match {
-                                 case WebhookUpdate.WebhookRemoved(webhookId) =>
-                                   cache.update(_ - webhookId)
-                                 case WebhookUpdate.WebhookChanged(webhook)   =>
-                                   cache.update(_ + (webhook.id -> webhook))
-                               }
-                   } yield ()
-                 loop.forever.fork
-               }
+               subscription.use(updateCache(_).forever.fork)
            }
     } yield this
+
+  private def updateCache(queue: Dequeue[WebhookUpdate]): UIO[Unit] =
+    queue.take.flatMap {
+      case WebhookUpdate.WebhookRemoved(webhookId) =>
+        cache.update(_ - webhookId)
+      case WebhookUpdate.WebhookChanged(webhook)   =>
+        cache.update(_.updateWith(webhook.id)(_.map(_ => webhook)))
+    }
 }
 
 object WebhooksProxy {

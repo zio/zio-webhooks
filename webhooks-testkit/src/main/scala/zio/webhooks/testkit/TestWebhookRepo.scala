@@ -3,7 +3,7 @@ package zio.webhooks.testkit
 import zio._
 import zio.prelude.NonEmptySet
 import zio.webhooks.WebhookError._
-import zio.webhooks.WebhookUpdate.WebhookChanged
+import zio.webhooks.WebhookUpdate._
 import zio.webhooks.WebhooksProxy.UpdateMode
 import zio.webhooks._
 
@@ -57,7 +57,7 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], 
     ref.get.map(_.filter { case (id, _) => webhookIds.contains(id) })
 
   def removeWebhook(webhookId: WebhookId): UIO[Unit]                                     =
-    ref.update(_ - webhookId)
+    ref.update(_ - webhookId) /* <* hub.publish(WebhookRemoved(webhookId))*/
 
   def setWebhook(webhook: Webhook): UIO[Unit]                                                      =
     ref.update(_ + (webhook.id -> webhook)) <* hub.publish(webhook)

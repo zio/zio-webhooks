@@ -58,21 +58,23 @@ final private case class TestWebhookEventRepoImpl(
 
   def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingEventError, Unit] =
     for {
-      eventOpt <- ref.modify { map =>
-                    map.get(key) match {
-                      case None        =>
-                        (None, map)
-                      case Some(event) =>
-                        val updatedEvent = event.copy(status = status)
-                        (Some(updatedEvent), map.updated(key, updatedEvent))
+      maybeEvent <- ref.modify { map =>
+                      map.get(key) match {
+                        case None        =>
+                          (None, map)
+                        case Some(event) =>
+                          val updatedEvent = event.copy(status = status)
+                          // remove event when done to save memory for long-running tests
+                          val updatedMap   = if (updatedEvent.isDone) map - key else map.updated(key, updatedEvent)
+                          (Some(updatedEvent), updatedMap)
+                      }
                     }
-                  }
-      _        <- eventOpt match {
-                    case None        =>
-                      ZIO.fail(MissingEventError(key))
-                    case Some(event) =>
-                      hub.publish(event).unit
-                  }
+      _          <- maybeEvent match {
+                      case None        =>
+                        ZIO.fail(MissingEventError(key))
+                      case Some(event) =>
+                        hub.publish(event).unit
+                    }
     } yield ()
 
   def setEventStatusMany(
