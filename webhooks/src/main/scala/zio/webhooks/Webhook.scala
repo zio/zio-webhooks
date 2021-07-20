@@ -15,6 +15,6 @@ final case class Webhook(
 ) {
   val batching: WebhookDeliveryBatching = deliveryMode.batching
 
-  def isAvailable: Boolean =
+  def isEnabled: Boolean =
     status == Enabled
 }

@@ -72,6 +72,7 @@ object BasicExampleWithRetrying extends App {
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.default,
         WebhookServer.live,

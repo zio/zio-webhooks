@@ -249,7 +249,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               } yield assert(status)(isSome(equalTo(WebhookStatus.Enabled))) &&
                 assert(status2)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
-          } @@ ignore, // TODO: fix test
+          } @@ ignore, // TODO: fix test, works when new retry dispatch isn't forked
           testM("marks all a webhook's events failed when marked unavailable") {
             val n       = 2
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -268,7 +268,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 .mergeTerminateLeft(UStream.repeatEffect(TestClock.adjust(7.days)))
                 .runDrain *> assertCompletesM
             }
-          } @@ ignore, // TODO: fix test
+          } @@ ignore, // TODO: fix test, works when new retry dispatch isn't forked
           testM("retries past first one back off exponentially") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(1)(webhook.id)
@@ -565,7 +565,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               plaintextContentHeaders
             )
 
-            (TestWebhookHttpClient.getRequests zip WebhookRepo.subscribeToWebhooks).use {
+            (TestWebhookHttpClient.getRequests zip TestWebhookRepo.subscribeToWebhooks).use {
               case (requests, webhooks) =>
                 for {
                   responses  <- Queue.unbounded[StubResponse]
@@ -641,6 +641,7 @@ object WebhookServerSpecUtil {
         TestWebhookEventRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhooksProxy.live
       )
 
@@ -662,7 +663,7 @@ object WebhookServerSpecUtil {
         case ScenarioInterest.Requests =>
           TestWebhookHttpClient.getRequests
         case ScenarioInterest.Webhooks =>
-          WebhookRepo.subscribeToWebhooks
+          TestWebhookRepo.subscribeToWebhooks
       }
   }
 
@@ -692,6 +693,7 @@ object WebhookServerSpecUtil {
         TestWebhookEventRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookServer.live,
         WebhooksProxy.live
       )

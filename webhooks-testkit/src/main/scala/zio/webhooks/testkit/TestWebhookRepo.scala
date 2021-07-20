@@ -4,12 +4,23 @@ import zio._
 import zio.prelude.NonEmptySet
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookUpdate.WebhookChanged
+import zio.webhooks.WebhooksProxy.UpdateMode
 import zio.webhooks._
 
 trait TestWebhookRepo {
   def removeWebhook(webhookId: WebhookId): UIO[Unit]
 
+  /**
+   * Polls webhooks by id for updates. Implementations must return a map of webhookIds to webhooks.
+   */
+  def pollWebhooksById(webhookIds: NonEmptySet[WebhookId]): UIO[Map[WebhookId, Webhook]]
+
   def setWebhook(webhook: Webhook): UIO[Unit]
+
+  /**
+   * Subscribes to webhook updates.
+   */
+  def subscribeToWebhookUpdates: UManaged[Dequeue[WebhookUpdate]]
 }
 
 object TestWebhookRepo {
@@ -23,10 +34,16 @@ object TestWebhookRepo {
     } yield Has.allOf[TestWebhookRepo, WebhookRepo](impl, impl)
   }.toLayerMany
 
+  val subscriptionUpdateMode: URLayer[Has[TestWebhookRepo], Has[UpdateMode]] =
+    ZIO.service[TestWebhookRepo].map(repo => UpdateMode.Subscription(repo.subscribeToWebhookUpdates)).toLayer
+
   // Accessor Methods
 
   def setWebhook(webhook: Webhook): URIO[Has[TestWebhookRepo], Unit] =
     ZIO.serviceWith(_.setWebhook(webhook))
+
+  def subscribeToWebhooks: URManaged[Has[TestWebhookRepo], Dequeue[WebhookUpdate]] =
+    ZManaged.service[TestWebhookRepo].flatMap(_.subscribeToWebhookUpdates)
 }
 
 final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], hub: Hub[Webhook])

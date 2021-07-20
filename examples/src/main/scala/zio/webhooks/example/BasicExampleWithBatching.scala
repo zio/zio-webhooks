@@ -63,6 +63,7 @@ object BasicExampleWithBatching extends App {
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.defaultWithBatching,
         WebhookServer.live,

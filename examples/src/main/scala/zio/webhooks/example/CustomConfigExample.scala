@@ -88,6 +88,7 @@ object CustomConfigExample extends App {
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         customConfig,
         WebhookServer.live,

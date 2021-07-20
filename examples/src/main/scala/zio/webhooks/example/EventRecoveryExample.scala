@@ -80,6 +80,7 @@ object EventRecoveryExample extends App {
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.default,
         WebhooksProxy.live

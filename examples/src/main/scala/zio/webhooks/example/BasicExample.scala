@@ -63,9 +63,10 @@ object BasicExample extends App {
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
       .injectCustom(
+        TestWebhookEventRepo.test,
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
-        TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.default,
         WebhookServer.live,

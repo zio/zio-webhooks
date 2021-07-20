@@ -84,7 +84,7 @@ final class WebhookServer private (
                    webhook.deliveryMode.semantics,
                    NonEmptySet(newEvent)
                  )
-      _       <- deliver(dispatch).when(webhook.isAvailable)
+      _       <- deliver(dispatch).when(webhook.isEnabled)
     } yield ()
   }.catchAll(errorHub.publish(_).unit)
 
@@ -211,9 +211,9 @@ final class WebhookServer private (
                                               )
                                             }
                         queueEmpty       <- newState.retryQueue.size.map(_ <= 0)
-                        batchExistsEmpty <- ZIO.foreach(batchQueue)(_.size.map(_ <= 0))
+                        batchExistsEmpty <- ZIO.foreach(batchQueue)(_.size.map(_ <= 0)).map(_.getOrElse(true))
                         inFlightEmpty    <- retryState.get.map(_.inFlight.isEmpty)
-                        allEmpty          = queueEmpty && inFlightEmpty && batchExistsEmpty.getOrElse(true)
+                        allEmpty          = queueEmpty && inFlightEmpty && batchExistsEmpty
                         setInactive       = retryState.get.flatMap(_.deactivate)
                         _                <- setInactive.when(allEmpty)
                       } yield ()
@@ -274,7 +274,7 @@ final class WebhookServer private (
       _ <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal).foreach { event =>
              (for {
                webhook <- webhooks.getWebhookById(event.key.webhookId)
-               _       <- recoverEvent(event).when(webhook.isAvailable)
+               _       <- recoverEvent(event).when(webhook.isEnabled)
              } yield ()).catchAll(errorHub.publish)
            }
     } yield ()
@@ -320,7 +320,7 @@ final class WebhookServer private (
                        batchDispatcher.enqueueEvent(event)
                      case _                                                        =>
                        permits.withPermit(deliverNewEvent(event)).fork
-                   }).when(webhook.isAvailable)
+                   }).when(webhook.isEnabled)
     } yield ()
 
   /**
@@ -357,7 +357,10 @@ final class WebhookServer private (
                                                     webhook.deliveryMode.semantics,
                                                     NonEmptySet.single(event)
                                                   )
-                                                  permits.withPermit(retryEvents(retryState, dispatch)).fork
+                                                  permits
+                                                    .withPermit(retryEvents(retryState, dispatch))
+                                                    .fork
+                                                    .when(webhook.isEnabled)
                                               }
                                  } yield ()
                              }
