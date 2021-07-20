@@ -8,7 +8,7 @@ import zio.webhooks._
 private[webhooks] final class BatchDispatcher private (
   private val batchingCapacity: Int,
   private val batchQueues: RefM[Map[BatchKey, Queue[WebhookEvent]]],
-  private val deliver: WebhookDispatch => UIO[Unit],
+  private val deliver: (WebhookDispatch, Queue[WebhookEvent]) => UIO[Unit],
   private val errorHub: Hub[WebhookError],
   private val inputQueue: Queue[WebhookEvent],
   private val shutdownSignal: Promise[Nothing, Unit],
@@ -21,7 +21,7 @@ private[webhooks] final class BatchDispatcher private (
       webhookId = batch.head.key.webhookId
       webhook  <- webhooks.getWebhookById(webhookId)
       dispatch  = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
-      _        <- deliver(dispatch).when(webhook.isAvailable)
+      _        <- deliver(dispatch, batchQueue).when(webhook.isAvailable)
     } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.catchAll(errorHub.publish(_)).forever
   }
@@ -58,7 +58,7 @@ private[webhooks] final class BatchDispatcher private (
 private[webhooks] object BatchDispatcher {
   def create(
     capacity: Int,
-    deliver: WebhookDispatch => UIO[Unit],
+    deliver: (WebhookDispatch, Queue[WebhookEvent]) => UIO[Unit],
     errorHub: Hub[WebhookError],
     shutdownSignal: Promise[Nothing, Unit],
     webhooks: WebhooksProxy
