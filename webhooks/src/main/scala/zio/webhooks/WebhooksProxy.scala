@@ -17,7 +17,7 @@ final class WebhooksProxy private (
    * for it in the [[WebhookRepo]], raising a [[MissingWebhookError]] if we don't find one there.
    * Adds webhooks looked up from a repo to the server's internal webhook map.
    */
-  def getWebhook(webhookId: WebhookId): IO[MissingWebhookError, Webhook] =
+  def getWebhookById(webhookId: WebhookId): IO[MissingWebhookError, Webhook] =
     for {
       option  <- cache.get.map(_.get(webhookId))
       webhook <- option match {

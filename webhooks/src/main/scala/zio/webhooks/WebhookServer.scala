@@ -87,7 +87,7 @@ final class WebhookServer private (
 
   private def deliverNewEvent(newEvent: WebhookEvent): URIO[Clock, Unit] = {
     for {
-      webhook <- webhooks.getWebhook(newEvent.key.webhookId)
+      webhook <- webhooks.getWebhookById(newEvent.key.webhookId)
       dispatch = WebhookDispatch(
                    webhook.id,
                    webhook.url,
@@ -111,7 +111,7 @@ final class WebhookServer private (
       for {
         batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
         webhookId = batch.head.key.webhookId
-        webhook  <- webhooks.getWebhook(webhookId)
+        webhook  <- webhooks.getWebhookById(webhookId)
         _        <- retryEvents(retryState, batch, Some(batchQueue)).when(webhook.isAvailable)
       } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.forever
@@ -257,7 +257,7 @@ final class WebhookServer private (
   ): ZIO[Clock, WebhookError, Unit] = {
     val webhookId = events.head.key.webhookId
     for {
-      webhook  <- webhooks.getWebhook(webhookId)
+      webhook  <- webhooks.getWebhookById(webhookId)
       _        <- retryState.update(_.addInFlight(events))
       dispatch  = WebhookDispatch(
                     webhook.id,
@@ -313,9 +313,9 @@ final class WebhookServer private (
   private def retrySingly(retryState: Ref[RetryState]): ZIO[Clock, Nothing, Unit] =
     for {
       retryQueue <- retryState.get.map(_.retryQueue)
-      _          <- mergeShutdown(UStream.fromQueue(retryQueue), shutdownSignal).mapM { event =>
+      _          <- mergeShutdown(UStream.fromQueue(retryQueue), shutdownSignal).foreach { event =>
                       permits.withPermit(retryEvents(retryState, NonEmptySet.single(event))).fork
-                    }.runDrain.fork
+                    }.fork
     } yield ()
 
   /**
@@ -359,7 +359,7 @@ final class WebhookServer private (
            )
       _ <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal).foreach { event =>
              (for {
-               webhook <- webhooks.getWebhook(event.key.webhookId)
+               webhook <- webhooks.getWebhookById(event.key.webhookId)
                _       <- recoverEvent(event).when(webhook.isAvailable)
              } yield ()).catchAll(errorHub.publish)
            }
@@ -380,7 +380,9 @@ final class WebhookServer private (
                              .environment[Clock]
                              .map(clock => (dispatch: WebhookDispatch) => deliver(dispatch).provide(clock))
         batchDispatcher <- ZIO.foreach(config.batchingCapacity)(
-                             BatchDispatcher.start(_, deliverFunc, errorHub, shutdownSignal, webhooks)
+                             BatchDispatcher
+                               .create(_, deliverFunc, errorHub, shutdownSignal, webhooks)
+                               .tap(_.start.fork)
                            )
         handleEvent      = (shutdownSignal.await raceEither eventDequeue.take).flatMap {
                              case Left(_)      =>
@@ -398,7 +400,7 @@ final class WebhookServer private (
 
   private def handleNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent) =
     for {
-      webhook <- webhooks.getWebhook(event.key.webhookId)
+      webhook <- webhooks.getWebhookById(event.key.webhookId)
       _       <- ((batchDispatcher, webhook.batching) match {
                      case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>
                        batchDispatcher.enqueueEvent(event)
@@ -415,7 +417,7 @@ final class WebhookServer private (
       case NewRetry(webhookId, retryState) =>
         (for {
           retryState <- Ref.make(retryState)
-          webhook    <- webhooks.getWebhook(webhookId)
+          webhook    <- webhooks.getWebhookById(webhookId)
           _          <- (webhook.batching, config.batchingCapacity) match {
                           case (WebhookDeliveryBatching.Batched, Some(capacity)) =>
                             retryBatched(retryState, webhookId, capacity)

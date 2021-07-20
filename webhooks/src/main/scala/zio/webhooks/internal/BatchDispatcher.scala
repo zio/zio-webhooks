@@ -14,19 +14,20 @@ private[webhooks] final class BatchDispatcher private (
   private val shutdownSignal: Promise[Nothing, Unit],
   private val webhooks: WebhooksProxy
 ) {
-  def enqueueEvent(event: WebhookEvent): UIO[Unit] =
-    inputQueue.offer(event).unit
 
   private def doBatching(batchQueue: Queue[WebhookEvent], latch: Promise[Nothing, Unit]): UIO[Nothing] = {
     val deliverBatch = for {
       batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
       webhookId = batch.head.key.webhookId
-      webhook  <- webhooks.getWebhook(webhookId)
+      webhook  <- webhooks.getWebhookById(webhookId)
       dispatch  = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
       _        <- deliver(dispatch).when(webhook.isAvailable)
     } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.catchAll(errorHub.publish(_)).forever
   }
+
+  def enqueueEvent(event: WebhookEvent): UIO[Unit] =
+    inputQueue.offer(event).unit
 
   def start: UIO[Any] =
     mergeShutdown(UStream.fromQueue(inputQueue), shutdownSignal).groupByKey { ev =>
@@ -55,9 +56,7 @@ private[webhooks] final class BatchDispatcher private (
 }
 
 private[webhooks] object BatchDispatcher {
-  type Env = Has[WebhooksProxy]
-
-  def start(
+  def create(
     capacity: Int,
     deliver: WebhookDispatch => UIO[Unit],
     errorHub: Hub[WebhookError],
@@ -76,6 +75,5 @@ private[webhooks] object BatchDispatcher {
                       shutdownSignal,
                       webhooks
                     )
-      _          <- dispatcher.start.fork
     } yield dispatcher
 }

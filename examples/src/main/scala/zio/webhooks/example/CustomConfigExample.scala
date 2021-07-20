@@ -44,7 +44,7 @@ object CustomConfigExample extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 20)
+                        if (n < 40)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else
