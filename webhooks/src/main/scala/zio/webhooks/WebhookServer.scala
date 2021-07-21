@@ -216,8 +216,7 @@ final class WebhookServer private (
                         batchExistsEmpty <- ZIO.foreach(batchQueue)(_.size.map(_ <= 0)).map(_.getOrElse(true))
                         inFlightEmpty    <- retryState.get.map(_.inFlight.isEmpty)
                         allEmpty          = queueEmpty && inFlightEmpty && batchExistsEmpty
-                        setInactive       = retryState.update(_.deactivate)
-                        _                <- setInactive.when(allEmpty)
+                        _                <- retryState.update(_.deactivate).when(allEmpty)
                       } yield ()
                     // retry responded with a non-200 status, or an IOException occurred
                     case _                               =>

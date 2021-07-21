@@ -374,21 +374,18 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
 
             webhooksTestScenario(
-              initialStubResponses = UStream.empty,
+              initialStubResponses = UStream.repeat(Left(None)),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Requests
-            ) {
-              (requests, stubResponses) =>
-                for {
-                  _           <- TestWebhookEventRepo.createEvent(firstEvent)
-                  _           <- requests.take
-                  _           <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
-                  // HTTP client fails twice
-                  _           <- stubResponses.offerAll(List(Left(None), Left(None)))
-                  _           <- clock.sleep(150.millis).provideLayer(Clock.live)
-                  lastRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
-                } yield assert(lastRequest)(isNone)
+            ) { (requests, _) =>
+              for {
+                _          <- TestWebhookEventRepo.createEvent(firstEvent)
+                _          <- requests.take
+                _          <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
+                waitForHalt = requests.take.timeout(50.millis).repeatUntil(_.isEmpty).provideLayer(Clock.live)
+                _          <- waitForHalt race TestClock.adjust(10.millis).forever
+              } yield assertCompletes
             }
           }
         ),
@@ -798,7 +795,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           // TODO: test retries eventually get delivered  (global integration test)
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(10.seconds)
+    ) @@ timeout(20.seconds)
 }
 
 object WebhookServerSpecUtil {
