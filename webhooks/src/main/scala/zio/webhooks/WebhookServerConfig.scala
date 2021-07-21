@@ -44,8 +44,8 @@ object WebhookServerConfig {
    * Retry configuration settings for each webhook.
    *
    * @param capacity Max number of dispatches to hold for each webhook
-   * @param exponentialBase Base duration for spacing out retries
-   * @param exponentialPower Factor applied to `exponentialBase` to space out retries exponentially
+   * @param exponentialBase Base duration for retry backoff
+   * @param exponentialPower Factor repeatedly applied to `exponentialBase` for exponential retry backoff
    * @param timeout Max duration to wait before retries for a webhook time out
    */
   final case class Retry(
