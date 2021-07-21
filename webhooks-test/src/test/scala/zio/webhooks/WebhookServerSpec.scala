@@ -37,7 +37,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
 
             webhooksTestScenario(
-              stubResponses = UStream(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List(event),
               ScenarioInterest.Requests
@@ -54,7 +54,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
 
             webhooksTestScenario(
-              stubResponses = UStream(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List(event),
               ScenarioInterest.Webhooks
@@ -73,7 +73,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val expectedStatuses = List(WebhookEventStatus.Delivering, WebhookEventStatus.Delivered)
 
             webhooksTestScenario(
-              stubResponses = UStream(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List(event),
               ScenarioInterest.Events
@@ -88,7 +88,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val eventsToNWebhooks = webhooks.map(_.id).flatMap(webhook => createPlaintextEvents(1)(webhook))
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = webhooks,
               events = eventsToNWebhooks,
               ScenarioInterest.Requests
@@ -99,7 +99,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val webhook = singleWebhook(0, WebhookStatus.Disabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               ScenarioInterest.Requests
@@ -111,7 +111,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               singleWebhook(0, WebhookStatus.Unavailable(Instant.EPOCH), WebhookDeliveryMode.SingleAtMostOnce)
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               ScenarioInterest.Requests
@@ -122,7 +122,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               ScenarioInterest.Requests
@@ -133,7 +133,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Right(WebhookHttpResponse(404))),
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(404))),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               ScenarioInterest.Events
@@ -151,7 +151,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val expectedErrorCount = missingWebhookIds.size
 
             webhooksTestScenario(
-              stubResponses = UStream(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
               webhooks = List.empty,
               events = eventsMissingWebhooks,
               ScenarioInterest.Errors
@@ -180,7 +180,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val expectedError = BadWebhookUrlError(webhookWithBadUrl.url, "'twas a ne'er do-well")
 
             webhooksTestScenario(
-              stubResponses = UStream(Left(Some(expectedError))),
+              initialStubResponses = UStream(Left(Some(expectedError))),
               webhooks = List(webhookWithBadUrl),
               events = List(event),
               ScenarioInterest.Errors
@@ -216,7 +216,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Requests
@@ -265,7 +265,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Events
@@ -322,8 +322,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             )
 
             webhooksTestScenario(
-              stubResponses = UStream.repeat(Left(None)).take(3) ++ UStream(Right(WebhookHttpResponse(200))) ++
-                UStream.repeat(Left(None)),
+              initialStubResponses = UStream[StubResponse](
+                Left(None),
+                Left(None),
+                Left(None),
+                Right(WebhookHttpResponse(200)),
+                Left(None),
+                Left(None)
+              ),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Requests
@@ -332,16 +338,55 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 for {
                   _           <- TestWebhookEventRepo.createEvent(firstEvent)
                   _           <- requests.take
-                  _           <- TestWebhookRepo.setWebhook(webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtLeastOnce))
+                  _           <- TestWebhookRepo.setWebhook(
+                                   webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtLeastOnce)
+                                 )
                   _           <- clock.sleep(150.millis).provideLayer(Clock.live)
                   _           <- TestWebhookEventRepo.createEvent(secondEvent)
                   // retries until event is delivered
                   _           <- requests.takeN(3) race TestClock.adjust(10.millis).forever
-                  _           <- TestWebhookRepo.setWebhook(webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtMostOnce))
+                  _           <- TestWebhookRepo.setWebhook(
+                                   webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtMostOnce)
+                                 )
                   _           <- clock.sleep(150.millis).provideLayer(Clock.live)
                   _           <- TestWebhookEventRepo.createEvent(thirdEvent)
                   _           <- requests.take
-                  // stops retrying
+                  // shouldn't retry as we've changed webhook delivery semantics to at-most-once
+                  lastRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
+                } yield assert(lastRequest)(isNone)
+            }
+          },
+          testM("disabling a webhook with at-least-once delivery semantics halts retries") {
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                "test url",
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtLeastOnce
+              )
+
+            val firstEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              initialStubResponses = UStream.empty,
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Requests
+            ) {
+              (requests, stubResponses) =>
+                for {
+                  _           <- TestWebhookEventRepo.createEvent(firstEvent)
+                  _           <- requests.take
+                  _           <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
+                  // HTTP client fails twice
+                  _           <- stubResponses.offerAll(List(Left(None), Left(None)))
+                  _           <- clock.sleep(150.millis).provideLayer(Clock.live)
                   lastRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
                 } yield assert(lastRequest)(isNone)
             }
@@ -354,7 +399,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream(Right(WebhookHttpResponse(500)), Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream(Right(WebhookHttpResponse(500)), Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
@@ -366,7 +411,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream(Left(None), Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream(Left(None), Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
@@ -378,7 +423,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream(Left(None), Left(None), Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream(Left(None), Left(None), Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
@@ -396,7 +441,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events  = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream(Left(None), Left(None)),
+              initialStubResponses = UStream(Left(None), Left(None)),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Webhooks
@@ -415,7 +460,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events  = createPlaintextEvents(n)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream(Left(None), Left(None)),
+              initialStubResponses = UStream(Left(None), Left(None)),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Events
@@ -433,7 +478,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events  = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses =
+              initialStubResponses =
                 UStream.fromIterable(List.fill(5)(Left(None))) ++ UStream(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
@@ -460,7 +505,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val events = createPlaintextEvents(3)(webhook.id)
 
             webhooksTestScenario(
-              stubResponses = UStream(Left(None)) ++ UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = UStream(Left(None)) ++ UStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
@@ -506,7 +551,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           val expectedRequestsMade = 10
 
           webhooksTestScenario(
-            stubResponses = UStream.empty,
+            initialStubResponses = UStream.empty,
             webhooks = List(webhook),
             events = Iterable.empty,
             ScenarioInterest.Requests
@@ -536,7 +581,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           val maxRequestsMade = minRequestsMade * 2
 
           webhooksTestScenario(
-            stubResponses = UStream.empty,
+            initialStubResponses = UStream.empty,
             webhooks = webhooks,
             events = events,
             ScenarioInterest.Requests
@@ -554,7 +599,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           val testEvents = createPlaintextEvents(n)(webhook.id).grouped(batchCount).toList
 
           webhooksTestScenario(
-            stubResponses = UStream.empty,
+            initialStubResponses = UStream.empty,
             webhooks = List(webhook),
             events = Iterable.empty,
             ScenarioInterest.Events
@@ -577,7 +622,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           val plaintextEvents = createPlaintextEvents(4)(webhook.id)
 
           webhooksTestScenario(
-            stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+            initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = jsonEvents ++ plaintextEvents,
             ScenarioInterest.Requests
@@ -588,7 +633,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           val jsonEvents = createJsonEvents(100)(webhook.id)
 
           webhooksTestScenario(
-            stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+            initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = jsonEvents,
             ScenarioInterest.Requests
@@ -600,7 +645,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           val plaintextEvents = createPlaintextEvents(n)(webhook.id)
 
           webhooksTestScenario(
-            stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+            initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = plaintextEvents,
             ScenarioInterest.Requests
@@ -624,7 +669,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[StubResponse]
                   server    <- WebhookServer.create
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200))))
+                  _         <- responses.offerAll(
+                                 List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
+                               )
                   _         <- server.start
                   _         <- server.shutdown
                   _         <- TestWebhookRepo.setWebhook(webhook)
@@ -643,7 +690,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[StubResponse]
                   server    <- WebhookServer.create
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200))))
+                  _         <- responses.offerAll(
+                                 List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
+                               )
                   _         <- server.start
                   _         <- TestWebhookRepo.setWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(testEvents(0))
@@ -880,7 +929,7 @@ object WebhookServerSpecUtil {
     }
 
   def webhooksTestScenario[A](
-    stubResponses: UStream[StubResponse],
+    initialStubResponses: UStream[StubResponse],
     webhooks: Iterable[Webhook],
     events: Iterable[WebhookEvent],
     scenarioInterest: ScenarioInterest[A]
@@ -894,7 +943,7 @@ object WebhookServerSpecUtil {
         _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
         _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
         _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
-        _             <- stubResponses.run(ZSink.fromQueue(responseQueue)).fork
+        _             <- initialStubResponses.run(ZSink.fromQueue(responseQueue)).fork
         testResult    <- testFiber.join
       } yield testResult
     }
