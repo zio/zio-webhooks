@@ -2,12 +2,15 @@ package zio.webhooks.testkit
 
 import zio._
 import zio.prelude.NonEmptySet
+import zio.stream.UStream
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookUpdate._
 import zio.webhooks.WebhooksProxy.UpdateMode
 import zio.webhooks._
 
 trait TestWebhookRepo {
+  def getWebhookUpdates: UStream[WebhookUpdate]
+
   def removeWebhook(webhookId: WebhookId): UIO[Unit]
 
   /**
@@ -29,13 +32,13 @@ object TestWebhookRepo {
   val test: ULayer[Has[TestWebhookRepo] with Has[WebhookRepo]] = {
     for {
       ref <- Ref.make(Map.empty[WebhookId, Webhook])
-      hub <- Hub.unbounded[Webhook]
+      hub <- Hub.unbounded[WebhookUpdate]
       impl = TestWebhookRepoImpl(ref, hub)
     } yield Has.allOf[TestWebhookRepo, WebhookRepo](impl, impl)
   }.toLayerMany
 
   val subscriptionUpdateMode: URLayer[Has[TestWebhookRepo], Has[UpdateMode]] =
-    ZIO.service[TestWebhookRepo].map(repo => UpdateMode.Subscription(repo.subscribeToWebhookUpdates)).toLayer
+    ZIO.service[TestWebhookRepo].map(repo => UpdateMode.Subscription(repo.getWebhookUpdates)).toLayer
 
   // Accessor Methods
 
@@ -46,21 +49,24 @@ object TestWebhookRepo {
     ZManaged.service[TestWebhookRepo].flatMap(_.subscribeToWebhookUpdates)
 }
 
-final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], hub: Hub[Webhook])
+final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], hub: Hub[WebhookUpdate])
     extends WebhookRepo
     with TestWebhookRepo {
 
   def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]] =
     ref.get.map(_.get(webhookId))
 
+  def getWebhookUpdates: UStream[WebhookUpdate] =
+    UStream.fromHub(hub)
+
   def pollWebhooksById(webhookIds: NonEmptySet[WebhookId]): UIO[Map[WebhookId, Webhook]] =
     ref.get.map(_.filter { case (id, _) => webhookIds.contains(id) })
 
   def removeWebhook(webhookId: WebhookId): UIO[Unit]                                     =
-    ref.update(_ - webhookId) /* <* hub.publish(WebhookRemoved(webhookId))*/
+    ref.update(_ - webhookId) <* hub.publish(WebhookRemoved(webhookId))
 
   def setWebhook(webhook: Webhook): UIO[Unit]                                                      =
-    ref.update(_ + (webhook.id -> webhook)) <* hub.publish(webhook)
+    ref.update(_ + (webhook.id -> webhook)) <* hub.publish(WebhookChanged(webhook))
 
   def setWebhookStatus(webhookId: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit] =
     for {
@@ -74,11 +80,11 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], 
                          }
                        }
       _             <- webhookExists match {
-                         case Some(updatedWebhook) => hub.publish(updatedWebhook)
+                         case Some(updatedWebhook) => hub.publish(WebhookChanged(updatedWebhook))
                          case None                 => ZIO.fail(MissingWebhookError(webhookId))
                        }
     } yield ()
 
   def subscribeToWebhookUpdates: UManaged[Dequeue[WebhookUpdate]] =
-    hub.subscribe.map(_.map(WebhookChanged))
+    hub.subscribe
 }

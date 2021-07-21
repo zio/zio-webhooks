@@ -187,6 +187,51 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ) { (errors, _) =>
               assertM(errors.take)(equalTo(expectedError))
             }
+          },
+          testM("changing a webhook's URL changes the next request URL") {
+            val firstUrl  = "first url"
+            val secondUrl = "second url"
+
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                firstUrl,
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtMostOnce
+              )
+
+            val firstEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            val secondEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(1), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 1",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              stubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Requests
+            ) {
+              (requests, _) =>
+                for {
+                  _               <- TestWebhookEventRepo.createEvent(firstEvent)
+                  actualFirstUrl  <- requests.take.map(_.url)
+                  _               <- TestWebhookRepo.setWebhook(webhook.copy(url = secondUrl))
+                  // TODO: allow time for change to propagate, can sync on request instead
+                  _               <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _               <- TestWebhookEventRepo.createEvent(secondEvent)
+                  actualSecondUrl <- requests.take.map(_.url)
+                } yield assertTrue(actualFirstUrl == firstUrl && actualSecondUrl == secondUrl)
+            }
           }
         ),
         suite("webhooks with at-least-once delivery")(
@@ -250,6 +295,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 assert(status2)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
           } @@ ignore, // TODO: fix test, works when new retry dispatch isn't forked
+          // TODO: try timing out with Clock.live
           testM("marks all a webhook's events failed when marked unavailable") {
             val n       = 2
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -587,11 +633,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             }
           }
           // TODO: test continues retrying for multiple webhooks
-          // TODO: test retries eventually get delivered  (property test)
-          // TODO: test batched retries eventually get delivered (property test)
+          // TODO: test retries eventually get delivered  (global integration test)
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-      // TODO: write webhook status change tests
     ) @@ timeout(10.seconds)
 }
 

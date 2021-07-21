@@ -4,6 +4,7 @@ import zio._
 import zio.clock.Clock
 import zio.duration.Duration
 import zio.prelude.NonEmptySet
+import zio.stream.UStream
 import zio.webhooks.WebhookError.MissingWebhookError
 import zio.webhooks.WebhooksProxy.UpdateMode
 import zio.webhooks.WebhooksProxy.UpdateMode.PollingFunction
@@ -60,26 +61,23 @@ final class WebhooksProxy private (
                          webhookRepo.setWebhookStatus(webhookId, status)
                        else
                          ZIO.fail(MissingWebhookError(webhookId))
-
     } yield ()
 
-  private def update: URIO[Clock, WebhooksProxy] =
+  private[webhooks] def start: URIO[Clock, Unit] =
     for {
       _ <- updateMode match {
              case UpdateMode.Polling(pollingInterval, pollingFunction) =>
-               pollForUpdates(pollingFunction).repeat(Schedule.fixed(pollingInterval)).fork
+               pollForUpdates(pollingFunction).repeat(Schedule.fixed(pollingInterval))
              case UpdateMode.Subscription(subscription)                =>
-               subscription.use(updateCache(_).forever.fork)
+               subscription.foreach {
+                 case WebhookUpdate.WebhookRemoved(webhookId) =>
+                   cache.update(_ - webhookId)
+                 case WebhookUpdate.WebhookChanged(webhook)   =>
+                   // we only update if the webhook is relevant i.e., getWebhook was called to get it before
+                   cache.update(_.updateWith(webhook.id)(_.map(_ => webhook)))
+               }
            }
-    } yield this
-
-  private def updateCache(queue: Dequeue[WebhookUpdate]): UIO[Unit] =
-    queue.take.flatMap {
-      case WebhookUpdate.WebhookRemoved(webhookId) =>
-        cache.update(_ - webhookId)
-      case WebhookUpdate.WebhookChanged(webhook)   =>
-        cache.update(_.updateWith(webhook.id)(_.map(_ => webhook)))
-    }
+    } yield ()
 }
 
 object WebhooksProxy {
@@ -89,14 +87,18 @@ object WebhooksProxy {
     ZIO.services[WebhookRepo, UpdateMode].flatMap((start _).tupled).toLayer
 
   private def start(webhookRepo: WebhookRepo, updateMode: UpdateMode): URIO[Clock, WebhooksProxy] =
-    Ref.make(Map.empty[WebhookId, Webhook]).flatMap(new WebhooksProxy(_, webhookRepo, updateMode).update)
+    for {
+      cache <- Ref.make(Map.empty[WebhookId, Webhook])
+      proxy  = new WebhooksProxy(cache, webhookRepo, updateMode)
+      _     <- proxy.start.fork
+    } yield proxy
 
   sealed trait UpdateMode extends Product with Serializable
   object UpdateMode {
     final case class Polling(interval: Duration, f: PollingFunction) extends UpdateMode
 
-    type PollingFunction = (NonEmptySet[WebhookId]) => UIO[Map[WebhookId, Webhook]]
+    type PollingFunction = NonEmptySet[WebhookId] => UIO[Map[WebhookId, Webhook]]
 
-    final case class Subscription(value: UManaged[Dequeue[WebhookUpdate]]) extends UpdateMode
+    final case class Subscription(value: UStream[WebhookUpdate]) extends UpdateMode
   }
 }
