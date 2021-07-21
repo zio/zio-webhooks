@@ -1,6 +1,6 @@
 package zio.webhooks
 
-import zio.NonEmptyChunk
+import zio.prelude.NonEmptySet
 
 /**
  * Represents errors that can be raised during the operation of a webhook server.
@@ -10,7 +10,7 @@ object WebhookError {
 
   /**
    * A [[BadWebhookUrlError]] occurs when a [[WebhookHttpClient]] detects a string that cannot be
-   * parsed into a URL for a [[Webhook]], as identified by its [[WebhookId]].
+   * parsed into a URL. The parsing failure is included as a message.
    */
   final case class BadWebhookUrlError(badUrl: String, message: String) extends WebhookError
 
@@ -33,5 +33,5 @@ object WebhookError {
   /**
    * A [[MissingEventsError]] occurs when multiple events expected to exist are missing.
    */
-  final case class MissingEventsError(keys: NonEmptyChunk[WebhookEventKey]) extends WebhookError
+  final case class MissingEventsError(keys: NonEmptySet[WebhookEventKey]) extends WebhookError
 }

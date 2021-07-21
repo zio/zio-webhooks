@@ -8,7 +8,7 @@ import zio.duration._
 import zio.magic._
 import zio.stream._
 import zio.webhooks.WebhookError._
-import zio.webhooks._
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -53,7 +53,7 @@ object ShutdownOnFirstError extends App {
     for {
       errorFiber <- WebhookServer.getErrors.use(_.take.flip).fork
       httpFiber  <- httpEndpointServer.start(port, httpApp).fork
-      _          <- TestWebhookRepo.createWebhook(webhook)
+      _          <- TestWebhookRepo.setWebhook(webhook)
       _          <- events.schedule(Schedule.fixed(100.millis)).foreach(TestWebhookEventRepo.createEvent).fork
       _          <- errorFiber.join.onExit(_ => WebhookServer.shutdown.orDie *> httpFiber.interrupt)
     } yield ()
@@ -71,9 +71,11 @@ object ShutdownOnFirstError extends App {
         TestWebhookEventRepo.test,
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookServer.live,
         WebhookServerConfig.default,
-        WebhookSttpClient.live
+        WebhookSttpClient.live,
+        WebhooksProxy.live
       )
       .exitCode
 

@@ -7,7 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks._
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -53,7 +53,7 @@ object BasicExampleWithBatching extends App {
     for {
       _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _ <- TestWebhookRepo.createWebhook(webhook)
+      _ <- TestWebhookRepo.setWebhook(webhook)
       _ <- nEvents.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
@@ -63,9 +63,11 @@ object BasicExampleWithBatching extends App {
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.defaultWithBatching,
-        WebhookServer.live
+        WebhookServer.live,
+        WebhooksProxy.live
       )
       .exitCode
 

@@ -1,5 +1,7 @@
 package zio
 
+import zio.stream.UStream
+
 package object webhooks {
 
   private[webhooks] implicit class MapOps[K, V](self: Map[K, V]) {
@@ -23,4 +25,10 @@ package object webhooks {
       }
     }
   }
+
+  def mergeShutdown[A](stream: UStream[A], shutdownSignal: Promise[Nothing, Unit]): UStream[A] =
+    stream
+      .map(Left(_))
+      .mergeTerminateRight(UStream.fromEffect(shutdownSignal.await.map(Right(_))))
+      .collectLeft
 }

@@ -10,7 +10,7 @@ import java.time.Duration
  * capacity, retrying, and batching. For optimal performance, use capacities that are powers of 2.
  *
  * @param errorSlidingCapacity Number of errors to keep in the sliding buffer
- * @param maxSingleDispatchConcurrency Max number of single dispatches, or for retries, for each webhook
+ * @param maxSingleDispatchConcurrency Max number of single dispatches allowed at any given time
  * @param retry Configuration settings for retries
  * @param batchingCapacity Optional capacity for each batch. Set this to enable batching.
  */
@@ -18,7 +18,7 @@ final case class WebhookServerConfig(
   errorSlidingCapacity: Int,
   maxSingleDispatchConcurrency: Int,
   retry: WebhookServerConfig.Retry,
-  batchingCapacity: Option[Int] = None
+  batchingCapacity: Option[Int]
 )
 
 object WebhookServerConfig {
@@ -29,10 +29,11 @@ object WebhookServerConfig {
       Retry(
         capacity = 128,
         exponentialBase = 10.millis,
-        exponentialFactor = 2.0,
+        exponentialPower = 2.0,
         maxBackoff = 1.hour,
         timeout = 7.days
-      )
+      ),
+      batchingCapacity = None
     )
   )
 
@@ -43,14 +44,14 @@ object WebhookServerConfig {
    * Retry configuration settings for each webhook.
    *
    * @param capacity Max number of dispatches to hold for each webhook
-   * @param exponentialBase Base duration for spacing out retries
-   * @param exponentialFactor Factor applied to `exponentialBase` to space out retries exponentially
+   * @param exponentialBase Base duration for retry backoff
+   * @param exponentialPower Factor repeatedly applied to `exponentialBase` for exponential retry backoff
    * @param timeout Max duration to wait before retries for a webhook time out
    */
   final case class Retry(
     capacity: Int,
     exponentialBase: Duration,
-    exponentialFactor: Double,
+    exponentialPower: Double,
     maxBackoff: Duration,
     timeout: Duration
   )

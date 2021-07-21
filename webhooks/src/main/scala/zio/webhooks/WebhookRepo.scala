@@ -13,12 +13,8 @@ trait WebhookRepo {
    */
   def getWebhookById(webhookId: WebhookId): UIO[Option[Webhook]]
 
-  final def requireWebhook(webhookId: WebhookId): IO[MissingWebhookError, Webhook] =
-    getWebhookById(webhookId)
-      .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
-
   /**
-   * Sets the status of a webhook.
+   * Sets the status of a webhook with `id` to a new `status`.
    */
-  def setWebhookStatus(id: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit]
+  def setWebhookStatus(webhookId: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit]
 }

@@ -1,6 +1,7 @@
 package zio.webhooks
 
 import zio._
+import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.webhooks.WebhookError._
 
@@ -20,14 +21,15 @@ trait WebhookEventRepo {
   def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit]
 
   /**
-   * Sets the status of the specified event.
+   * Sets the status of an event.
    */
   def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingEventError, Unit]
 
   /**
-   * Sets the status of multiple events.
+   * Sets the status of multiple events. Allows clients to specify custom logic to minimize overhead
+   * when setting the event status of multiple events.
    */
-  def setEventStatusMany(keys: NonEmptyChunk[WebhookEventKey], status: WebhookEventStatus): IO[MissingEventsError, Unit]
+  def setEventStatusMany(keys: NonEmptySet[WebhookEventKey], status: WebhookEventStatus): IO[MissingEventsError, Unit]
 
   /**
    * Used by the server to subscribe to new webhook events.

@@ -1,6 +1,7 @@
 package zio.webhooks.testkit
 
 import zio._
+import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.webhooks.WebhookError._
 import zio.webhooks._
@@ -57,32 +58,34 @@ final private case class TestWebhookEventRepoImpl(
 
   def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingEventError, Unit] =
     for {
-      eventOpt <- ref.modify { map =>
-                    map.get(key) match {
-                      case None        =>
-                        (None, map)
-                      case Some(event) =>
-                        val updatedEvent = event.copy(status = status)
-                        (Some(updatedEvent), map.updated(key, updatedEvent))
+      maybeEvent <- ref.modify { map =>
+                      map.get(key) match {
+                        case None        =>
+                          (None, map)
+                        case Some(event) =>
+                          val updatedEvent = event.copy(status = status)
+                          // remove event when done to save memory for long-running tests
+                          val updatedMap   = if (updatedEvent.isDone) map - key else map.updated(key, updatedEvent)
+                          (Some(updatedEvent), updatedMap)
+                      }
                     }
-                  }
-      _        <- eventOpt match {
-                    case None        =>
-                      ZIO.fail(MissingEventError(key))
-                    case Some(event) =>
-                      hub.publish(event).unit
-                  }
+      _          <- maybeEvent match {
+                      case None        =>
+                        ZIO.fail(MissingEventError(key))
+                      case Some(event) =>
+                        hub.publish(event).unit
+                    }
     } yield ()
 
   def setEventStatusMany(
-    keys: NonEmptyChunk[WebhookEventKey],
+    keys: NonEmptySet[WebhookEventKey],
     status: WebhookEventStatus
   ): IO[MissingEventsError, Unit] =
     for {
       result <- ref.modify { map =>
                   val missingKeys = keys.filter(!map.contains(_))
                   if (missingKeys.nonEmpty)
-                    (NonEmptyChunk.fromChunk(missingKeys).toLeft(Iterable.empty[WebhookEvent]), map)
+                    (NonEmptySet.fromSetOption(missingKeys).toLeft(Iterable.empty[WebhookEvent]), map)
                   else {
                     val updated =
                       for ((key, event) <- map if keys.contains(key))

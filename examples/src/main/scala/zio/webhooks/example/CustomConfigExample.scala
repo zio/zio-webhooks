@@ -7,7 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks._
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -27,7 +27,7 @@ object CustomConfigExample extends App {
         WebhookServerConfig.Retry(
           capacity = 1024,
           exponentialBase = 100.millis,
-          exponentialFactor = 1.5,
+          exponentialPower = 1.5,
           maxBackoff = 2.seconds,
           timeout = 1.day
         ),
@@ -44,7 +44,7 @@ object CustomConfigExample extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 20)
+                        if (n < 40)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else
@@ -77,8 +77,8 @@ object CustomConfigExample extends App {
     for {
       _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.spaced(333.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- TestWebhookRepo.setWebhook(webhook)
+      _ <- nEvents.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
       _ <- zio.clock.sleep(Duration.Infinity)
     } yield ()
 
@@ -88,9 +88,11 @@ object CustomConfigExample extends App {
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         customConfig,
-        WebhookServer.live
+        WebhookServer.live,
+        WebhooksProxy.live
       )
       .exitCode
 

@@ -7,7 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks._
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -53,8 +53,8 @@ object BasicExample extends App {
     for {
       _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _ <- TestWebhookRepo.createWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.fixed(1.milli)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- TestWebhookRepo.setWebhook(webhook)
+      _ <- nEvents.schedule(Schedule.fixed(10.milli)).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   /**
@@ -63,12 +63,14 @@ object BasicExample extends App {
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
       .injectCustom(
+        TestWebhookEventRepo.test,
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
-        TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.default,
-        WebhookServer.live
+        WebhookServer.live,
+        WebhooksProxy.live
       )
       .exitCode
 

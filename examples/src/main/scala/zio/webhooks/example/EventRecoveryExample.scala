@@ -7,7 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks._
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -60,16 +60,16 @@ object EventRecoveryExample extends App {
   private def program =
     for {
       webhookServer <- WebhookServer.create
-      _             <- webhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _             <- webhookServer.start
       _             <- httpEndpointServer.start(port, httpApp).fork
-      _             <- TestWebhookRepo.createWebhook(webhook)
+      _             <- TestWebhookRepo.setWebhook(webhook)
       _             <- nEvents.take(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- webhookServer.shutdown
-      _              = println("Shutdown successful")
+      _             <- putStrLn("Shutdown successful")
       webhookServer <- WebhookServer.create
       _             <- webhookServer.start
-      _              = println("Restart successful")
+      _             <- putStrLn("Restart successful")
       _             <- nEvents.drop(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- clock.sleep(Duration.Infinity)
     } yield ()
@@ -80,8 +80,10 @@ object EventRecoveryExample extends App {
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
-        WebhookServerConfig.default
+        WebhookServerConfig.default,
+        WebhooksProxy.live
       )
       .exitCode
 

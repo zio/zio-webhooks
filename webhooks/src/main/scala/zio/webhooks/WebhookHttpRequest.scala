@@ -1,6 +1,7 @@
 package zio.webhooks
 
 import zio.Chunk
+import zio.webhooks.internal._
 
 /**
  * A [[WebhookHttpRequest]] contains a subset of an HTTP request required to send webhook data.

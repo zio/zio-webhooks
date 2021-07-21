@@ -7,7 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks._
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -49,12 +49,12 @@ object ManualServerExample extends App {
   private def program =
     for {
       server <- WebhookServer.create
-      _      <- server.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _      <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _      <- server.start
       _      <- httpEndpointServer.start(port, httpApp).fork
-      _      <- TestWebhookRepo.createWebhook(webhook)
+      _      <- TestWebhookRepo.setWebhook(webhook)
       _      <- nEvents
-                  .schedule(Schedule.fixed(1.milli))
+                  .schedule(Schedule.fixed(10.millis))
                   .foreach(TestWebhookEventRepo.createEvent)
                   .ensuring((server.shutdown *> putStrLn("Shutdown successful")).orDie)
     } yield ()
@@ -65,8 +65,10 @@ object ManualServerExample extends App {
         TestWebhookRepo.test,
         TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
+        TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
-        WebhookServerConfig.default
+        WebhookServerConfig.default,
+        WebhooksProxy.live
       )
       .exitCode
 

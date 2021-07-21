@@ -1,6 +1,8 @@
-package zio.webhooks
+package zio.webhooks.internal
 
-import zio.{ Chunk, NonEmptyChunk }
+import zio.Chunk
+import zio.prelude.NonEmptySet
+import zio.webhooks._
 
 /**
  * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]] containing one or more
@@ -9,11 +11,11 @@ import zio.{ Chunk, NonEmptyChunk }
  * The server, when creating these dispatches, guarantees that all webhook events in this dispatch
  * will have the same [[WebhookEventContentType]].
  */
-private[webhooks] final case class WebhookDispatch private[webhooks] (
+private[webhooks] final case class WebhookDispatch(
   webhookId: WebhookId,
   url: String,
   deliverySemantics: WebhookDeliverySemantics,
-  events: NonEmptyChunk[WebhookEvent]
+  events: NonEmptySet[WebhookEvent]
 ) {
   lazy val contentType: Option[WebhookEventContentType] =
     events.head.headers.find(_._1.toLowerCase == "content-type") match {
@@ -30,8 +32,8 @@ private[webhooks] final case class WebhookDispatch private[webhooks] (
         None
     }
 
-  lazy val head: WebhookEvent                   = events.head
-  lazy val headers: Chunk[(String, String)]     = events.head.headers
-  lazy val keys: NonEmptyChunk[WebhookEventKey] = events.map(_.key)
-  lazy val size: Int                            = events.size
+  lazy val head: WebhookEvent                 = events.head
+  lazy val headers: Chunk[(String, String)]   = events.head.headers
+  lazy val keys: NonEmptySet[WebhookEventKey] = NonEmptySet.fromSet(events.head.key, events.tail.map(_.key))
+  lazy val size: Int                          = events.size
 }
