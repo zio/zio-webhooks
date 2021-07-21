@@ -63,21 +63,19 @@ final class WebhooksProxy private (
                          ZIO.fail(MissingWebhookError(webhookId))
     } yield ()
 
-  private[webhooks] def start: URIO[Clock, Unit] =
-    for {
-      _ <- updateMode match {
-             case UpdateMode.Polling(pollingInterval, pollingFunction) =>
-               pollForUpdates(pollingFunction).repeat(Schedule.fixed(pollingInterval))
-             case UpdateMode.Subscription(subscription)                =>
-               subscription.foreach {
-                 case WebhookUpdate.WebhookRemoved(webhookId) =>
-                   cache.update(_ - webhookId)
-                 case WebhookUpdate.WebhookChanged(webhook)   =>
-                   // we only update if the webhook is relevant i.e., getWebhook was called to get it before
-                   cache.update(_.updateWith(webhook.id)(_.map(_ => webhook)))
-               }
-           }
-    } yield ()
+  private[webhooks] def start: URIO[Clock, Any] =
+    updateMode match {
+      case UpdateMode.Polling(pollingInterval, pollingFunction) =>
+        pollForUpdates(pollingFunction).repeat(Schedule.fixed(pollingInterval))
+      case UpdateMode.Subscription(subscription)                =>
+        subscription.foreach {
+          case WebhookUpdate.WebhookRemoved(webhookId) =>
+            cache.update(_ - webhookId)
+          case WebhookUpdate.WebhookChanged(webhook)   =>
+            // we only update if the webhook is relevant i.e., getWebhook was called to get it before
+            cache.update(_.updateWith(webhook.id)(_.map(_ => webhook)))
+        }
+    }
 }
 
 object WebhooksProxy {

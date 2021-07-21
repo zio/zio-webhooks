@@ -396,14 +396,19 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 WebhookDeliveryMode.SingleAtMostOnce
               )
 
-            val events = UStream.iterate(0L)(_ + 1).map { id =>
-              WebhookEvent(
-                WebhookEventKey(WebhookEventId(id), webhook.id),
-                WebhookEventStatus.New,
-                "event payload " + id,
-                plaintextContentHeaders
-              )
-            }
+            val firstEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            val secondEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(1), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 1",
+              plaintextContentHeaders
+            )
 
             webhooksTestScenario(
               initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
@@ -412,10 +417,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Errors
             ) { (errors, _) =>
               for {
-                _ <- events.foreach(TestWebhookEventRepo.createEvent).fork
+                _ <- TestWebhookEventRepo.createEvent(firstEvent)
+                _ <- clock.sleep(150.millis).provideLayer(Clock.live)
                 _ <- TestWebhookRepo.removeWebhook(webhook.id)
-                _ <- errors.take
-              } yield assertCompletes
+                _ <- TestWebhookEventRepo.createEvent(secondEvent)
+                error <- errors.take
+              } yield assertTrue(error == MissingWebhookError(webhook.id))
             }
           }
         ),
