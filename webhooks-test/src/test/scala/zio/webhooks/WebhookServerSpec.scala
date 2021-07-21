@@ -226,7 +226,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _               <- TestWebhookEventRepo.createEvent(firstEvent)
                   actualFirstUrl  <- requests.take.map(_.url)
                   _               <- TestWebhookRepo.setWebhook(webhook.copy(url = secondUrl))
-                  // TODO: allow time for change to propagate, can sync on request instead
+                  // allow time for change to propagate, TODO: maybe sync on something else?
                   _               <- clock.sleep(150.millis).provideLayer(Clock.live)
                   _               <- TestWebhookEventRepo.createEvent(secondEvent)
                   actualSecondUrl <- requests.take.map(_.url)
@@ -286,6 +286,64 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assert(actualSecondEvent)(isNone) && assert(actualThirdEvent)(
                   isSome(isSubtype[WebhookEvent](anything))
                 )
+            }
+          },
+          testM("toggling a webhook's delivery semantics toggles whether retries are attempted") {
+            val firstUrl = "first url"
+
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                firstUrl,
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtMostOnce
+              )
+
+            val firstEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            val secondEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(1), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 1",
+              plaintextContentHeaders
+            )
+
+            val thirdEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(2), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 2",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              stubResponses = UStream.repeat(Left(None)).take(3) ++ UStream(Right(WebhookHttpResponse(200))) ++
+                UStream.repeat(Left(None)),
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Requests
+            ) {
+              (requests, _) =>
+                for {
+                  _           <- TestWebhookEventRepo.createEvent(firstEvent)
+                  _           <- requests.take
+                  _           <- TestWebhookRepo.setWebhook(webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtLeastOnce))
+                  _           <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _           <- TestWebhookEventRepo.createEvent(secondEvent)
+                  // retries until event is delivered
+                  _           <- requests.takeN(3) race TestClock.adjust(10.millis).forever
+                  _           <- TestWebhookRepo.setWebhook(webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtMostOnce))
+                  _           <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _           <- TestWebhookEventRepo.createEvent(thirdEvent)
+                  _           <- requests.take
+                  // stops retrying
+                  lastRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
+                } yield assert(lastRequest)(isNone)
             }
           }
         ),
