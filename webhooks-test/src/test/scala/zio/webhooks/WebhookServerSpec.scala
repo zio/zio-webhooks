@@ -289,12 +289,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             }
           },
           testM("toggling a webhook's delivery semantics toggles whether retries are attempted") {
-            val firstUrl = "first url"
-
             val webhook =
               Webhook(
                 WebhookId(0),
-                firstUrl,
+                "test url",
                 "test webhook",
                 WebhookStatus.Enabled,
                 WebhookDeliveryMode.SingleAtMostOnce
@@ -366,7 +364,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 WebhookDeliveryMode.SingleAtLeastOnce
               )
 
-            val firstEvent = WebhookEvent(
+            val event = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload 0",
@@ -380,11 +378,43 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             ) { (requests, _) =>
               for {
-                _          <- TestWebhookEventRepo.createEvent(firstEvent)
+                _          <- TestWebhookEventRepo.createEvent(event)
                 _          <- requests.take
                 _          <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
                 waitForHalt = requests.take.timeout(50.millis).repeatUntil(_.isEmpty).provideLayer(Clock.live)
                 _          <- waitForHalt race TestClock.adjust(10.millis).forever
+              } yield assertCompletes
+            }
+          },
+          testM("removing a webhook for an event causes a missing webhook error to be published") {
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                "test url",
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtMostOnce
+              )
+
+            val event = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Errors
+            ) { (errors, _) =>
+              for {
+                _ <- TestWebhookRepo.removeWebhook(webhook.id)
+                _ <- TestWebhookEventRepo.createEvent(event)
+                // allow time for change to propagate, TODO: maybe sync on something else?
+                _ <- clock.sleep(150.millis).provideLayer(Clock.live)
+                _ <- errors.take
               } yield assertCompletes
             }
           }
@@ -795,7 +825,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           // TODO: test retries eventually get delivered  (global integration test)
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(20.seconds)
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {

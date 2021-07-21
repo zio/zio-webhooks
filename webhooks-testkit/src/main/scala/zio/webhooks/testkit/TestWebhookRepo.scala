@@ -27,7 +27,9 @@ trait TestWebhookRepo {
 }
 
 object TestWebhookRepo {
-  // Layer Definitions
+
+  def removeWebhook(webhookId: WebhookId): URIO[Has[TestWebhookRepo], Unit] =
+    ZIO.serviceWith(_.removeWebhook(webhookId))
 
   val test: ULayer[Has[TestWebhookRepo] with Has[WebhookRepo]] = {
     for {
@@ -39,8 +41,6 @@ object TestWebhookRepo {
 
   val subscriptionUpdateMode: URLayer[Has[TestWebhookRepo], Has[UpdateMode]] =
     ZIO.service[TestWebhookRepo].map(repo => UpdateMode.Subscription(repo.getWebhookUpdates)).toLayer
-
-  // Accessor Methods
 
   def setWebhook(webhook: Webhook): URIO[Has[TestWebhookRepo], Unit] =
     ZIO.serviceWith(_.setWebhook(webhook))
