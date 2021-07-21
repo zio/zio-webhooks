@@ -417,10 +417,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Errors
             ) { (errors, _) =>
               for {
-                _ <- TestWebhookEventRepo.createEvent(firstEvent)
-                _ <- clock.sleep(150.millis).provideLayer(Clock.live)
-                _ <- TestWebhookRepo.removeWebhook(webhook.id)
-                _ <- TestWebhookEventRepo.createEvent(secondEvent)
+                _     <- TestWebhookEventRepo.createEvent(firstEvent)
+                _     <- clock.sleep(150.millis).provideLayer(Clock.live)
+                _     <- TestWebhookRepo.removeWebhook(webhook.id)
+                _     <- TestWebhookEventRepo.createEvent(secondEvent)
                 error <- errors.take
               } yield assertTrue(error == MissingWebhookError(webhook.id))
             }
