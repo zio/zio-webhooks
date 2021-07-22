@@ -187,244 +187,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ) { (errors, _) =>
               assertM(errors.take)(equalTo(expectedError))
             }
-          },
-          // TODO: sync webhook change tests on some other update to fix flakiness
-          testM("changing a webhook's URL eventually changes the next request URL") {
-            val firstUrl  = "first url"
-            val secondUrl = "second url"
-
-            val webhook =
-              Webhook(
-                WebhookId(0),
-                firstUrl,
-                "test webhook",
-                WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
-              )
-
-            val firstEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 0",
-              plaintextContentHeaders
-            )
-
-            val secondEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(1), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 1",
-              plaintextContentHeaders
-            )
-
-            webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
-              webhooks = List(webhook),
-              events = List.empty,
-              ScenarioInterest.Requests
-            ) {
-              (requests, _) =>
-                for {
-                  _               <- TestWebhookEventRepo.createEvent(firstEvent)
-                  actualFirstUrl  <- requests.take.map(_.url)
-                  _               <- TestWebhookRepo.setWebhook(webhook.copy(url = secondUrl))
-                  _               <- clock.sleep(150.millis).provideLayer(Clock.live)
-                  _               <- TestWebhookEventRepo.createEvent(secondEvent)
-                  actualSecondUrl <- requests.take.map(_.url)
-                } yield assertTrue(actualFirstUrl == firstUrl && actualSecondUrl == secondUrl)
-            }
-          } @@ timeout(1.second) @@ flaky,
-          testM("toggling a webhook's status toggles event delivery") {
-            val webhook =
-              Webhook(
-                WebhookId(0),
-                "test url",
-                "test webhook",
-                WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
-              )
-
-            val firstEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 0",
-              plaintextContentHeaders
-            )
-
-            val secondEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(1), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 1",
-              plaintextContentHeaders
-            )
-
-            val thirdEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(2), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 2",
-              plaintextContentHeaders
-            )
-
-            webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
-              webhooks = List(webhook),
-              events = List.empty,
-              ScenarioInterest.Events
-            ) {
-              (events, _) =>
-                for {
-                  _                 <- TestWebhookEventRepo.createEvent(firstEvent)
-                  deliveringEvents   = events.filterOutput(_.isDelivering)
-                  _                 <- deliveringEvents.take
-                  _                 <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
-                  _                 <- clock.sleep(150.millis).provideLayer(Clock.live)
-                  _                 <- TestWebhookEventRepo.createEvent(secondEvent)
-                  actualSecondEvent <- deliveringEvents.take.timeout(100.millis).provideLayer(Clock.live)
-                  _                 <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Enabled))
-                  _                 <- clock.sleep(150.millis).provideLayer(Clock.live)
-                  _                 <- TestWebhookEventRepo.createEvent(thirdEvent)
-                  actualThirdEvent  <- deliveringEvents.take.timeout(100.millis).provideLayer(Clock.live)
-                } yield assert(actualSecondEvent)(isNone) && assert(actualThirdEvent)(
-                  isSome(isSubtype[WebhookEvent](anything))
-                )
-            }
-          } @@ timeout(1.second) @@ flaky,
-          testM("toggling a webhook's delivery semantics toggles whether retries are attempted") {
-            val webhook =
-              Webhook(
-                WebhookId(0),
-                "test url",
-                "test webhook",
-                WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
-              )
-
-            val firstEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 0",
-              plaintextContentHeaders
-            )
-
-            val secondEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(1), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 1",
-              plaintextContentHeaders
-            )
-
-            val thirdEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(2), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 2",
-              plaintextContentHeaders
-            )
-
-            webhooksTestScenario(
-              initialStubResponses = UStream[StubResponse](
-                Left(None),
-                Left(None),
-                Left(None),
-                Right(WebhookHttpResponse(200)),
-                Left(None),
-                Left(None)
-              ),
-              webhooks = List(webhook),
-              events = List.empty,
-              ScenarioInterest.Requests
-            ) {
-              (requests, _) =>
-                for {
-                  _           <- TestWebhookEventRepo.createEvent(firstEvent)
-                  _           <- requests.take
-                  _           <- TestWebhookRepo.setWebhook(
-                                   webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtLeastOnce)
-                                 )
-                  _           <- clock.sleep(150.millis).provideLayer(Clock.live)
-                  _           <- TestWebhookEventRepo.createEvent(secondEvent)
-                  // retries until event is delivered
-                  _           <- requests.takeN(3) race TestClock.adjust(10.millis).forever
-                  _           <- TestWebhookRepo.setWebhook(
-                                   webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtMostOnce)
-                                 )
-                  _           <- clock.sleep(150.millis).provideLayer(Clock.live)
-                  _           <- TestWebhookEventRepo.createEvent(thirdEvent)
-                  _           <- requests.take
-                  // shouldn't retry as we've changed webhook delivery semantics to at-most-once
-                  lastRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
-                } yield assert(lastRequest)(isNone)
-            }
-          } @@ timeout(1.second) @@ flaky,
-          testM("disabling a webhook with at-least-once delivery semantics halts retries") {
-            val webhook =
-              Webhook(
-                WebhookId(0),
-                "test url",
-                "test webhook",
-                WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtLeastOnce
-              )
-
-            val event = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 0",
-              plaintextContentHeaders
-            )
-
-            webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Left(None)),
-              webhooks = List(webhook),
-              events = List.empty,
-              ScenarioInterest.Requests
-            ) { (requests, _) =>
-              for {
-                _          <- TestWebhookEventRepo.createEvent(event)
-                _          <- requests.take
-                _          <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
-                waitForHalt = requests.take.timeout(50.millis).repeatUntil(_.isEmpty).provideLayer(Clock.live)
-                _          <- waitForHalt race TestClock.adjust(10.millis).forever
-              } yield assertCompletes
-            }
-          } @@ timeout(1.second) @@ flaky,
-          testM("removing a webhook for an event causes a missing webhook error to be published") {
-            val webhook =
-              Webhook(
-                WebhookId(0),
-                "test url",
-                "test webhook",
-                WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
-              )
-
-            val firstEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 0",
-              plaintextContentHeaders
-            )
-
-            val secondEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(1), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 1",
-              plaintextContentHeaders
-            )
-
-            webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
-              webhooks = List(webhook),
-              events = List.empty,
-              ScenarioInterest.Errors
-            ) { (errors, _) =>
-              for {
-                _     <- TestWebhookEventRepo.createEvent(firstEvent)
-                _     <- clock.sleep(150.millis).provideLayer(Clock.live)
-                _     <- TestWebhookRepo.removeWebhook(webhook.id)
-                _     <- TestWebhookEventRepo.createEvent(secondEvent)
-                error <- errors.take
-              } yield assertTrue(error == MissingWebhookError(webhook.id))
-            }
-          } @@ timeout(1.second) @@ flaky
+          }
         ),
         suite("webhooks with at-least-once delivery")(
           testM("immediately retries once on non-200 response") {
@@ -574,7 +337,246 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                             }
             } yield testResult
           }
-        )
+        ),
+        // TODO: sync webhook change tests on some other update to fix flakiness
+        suite("on webhook changes")(
+          testM("changing a webhook's URL eventually changes the next request URL") {
+            val firstUrl  = "first url"
+            val secondUrl = "second url"
+
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                firstUrl,
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtMostOnce
+              )
+
+            val firstEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            val secondEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(1), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 1",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Requests
+            ) {
+              (requests, _) =>
+                for {
+                  _               <- TestWebhookEventRepo.createEvent(firstEvent)
+                  actualFirstUrl  <- requests.take.map(_.url)
+                  _               <- TestWebhookRepo.setWebhook(webhook.copy(url = secondUrl))
+                  _               <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _               <- TestWebhookEventRepo.createEvent(secondEvent)
+                  actualSecondUrl <- requests.take.map(_.url)
+                } yield assertTrue(actualFirstUrl == firstUrl && actualSecondUrl == secondUrl)
+            }
+          } @@ timeout(1.second),
+          testM("toggling a webhook's status toggles event delivery") {
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                "test url",
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtMostOnce
+              )
+
+            val firstEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            val secondEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(1), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 1",
+              plaintextContentHeaders
+            )
+
+            val thirdEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(2), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 2",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Events
+            ) {
+              (events, _) =>
+                for {
+                  _                 <- TestWebhookEventRepo.createEvent(firstEvent)
+                  deliveringEvents   = events.filterOutput(_.isDelivering)
+                  _                 <- deliveringEvents.take
+                  _                 <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
+                  _                 <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _                 <- TestWebhookEventRepo.createEvent(secondEvent)
+                  actualSecondEvent <- deliveringEvents.take.timeout(100.millis).provideLayer(Clock.live)
+                  _                 <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Enabled))
+                  _                 <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _                 <- TestWebhookEventRepo.createEvent(thirdEvent)
+                  actualThirdEvent  <- deliveringEvents.take.timeout(100.millis).provideLayer(Clock.live)
+                } yield assert(actualSecondEvent)(isNone) && assert(actualThirdEvent)(
+                  isSome(isSubtype[WebhookEvent](anything))
+                )
+            }
+          } @@ timeout(1.second),
+          testM("toggling a webhook's delivery semantics toggles whether retries are attempted") {
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                "test url",
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtMostOnce
+              )
+
+            val firstEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            val secondEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(1), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 1",
+              plaintextContentHeaders
+            )
+
+            val thirdEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(2), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 2",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              initialStubResponses = UStream[StubResponse](
+                Left(None),
+                Left(None),
+                Left(None),
+                Right(WebhookHttpResponse(200)),
+                Left(None),
+                Left(None)
+              ),
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Requests
+            ) {
+              (requests, _) =>
+                for {
+                  _           <- TestWebhookEventRepo.createEvent(firstEvent)
+                  _           <- requests.take
+                  _           <- TestWebhookRepo.setWebhook(
+                                   webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtLeastOnce)
+                                 )
+                  _           <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _           <- TestWebhookEventRepo.createEvent(secondEvent)
+                  // retries until event is delivered
+                  _           <- requests.takeN(3) race TestClock.adjust(10.millis).forever
+                  _           <- TestWebhookRepo.setWebhook(
+                                   webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtMostOnce)
+                                 )
+                  _           <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _           <- TestWebhookEventRepo.createEvent(thirdEvent)
+                  _           <- requests.take
+                  // shouldn't retry as we've changed webhook delivery semantics to at-most-once
+                  lastRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
+                } yield assert(lastRequest)(isNone)
+            }
+          } @@ timeout(1.second),
+          testM("disabling a webhook with at-least-once delivery semantics halts retries") {
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                "test url",
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtLeastOnce
+              )
+
+            val event = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              initialStubResponses = UStream.repeat(Left(None)),
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Requests
+            ) { (requests, _) =>
+              for {
+                _          <- TestWebhookEventRepo.createEvent(event)
+                _          <- requests.take
+                _          <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
+                waitForHalt = requests.take.timeout(50.millis).repeatUntil(_.isEmpty).provideLayer(Clock.live)
+                _          <- waitForHalt race TestClock.adjust(10.millis).forever
+              } yield assertCompletes
+            }
+          } @@ timeout(1.second),
+          testM("removing a webhook for an event causes a missing webhook error to be published") {
+            val webhook =
+              Webhook(
+                WebhookId(0),
+                "test url",
+                "test webhook",
+                WebhookStatus.Enabled,
+                WebhookDeliveryMode.SingleAtMostOnce
+              )
+
+            val firstEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 0",
+              plaintextContentHeaders
+            )
+
+            val secondEvent = WebhookEvent(
+              WebhookEventKey(WebhookEventId(1), webhook.id),
+              WebhookEventStatus.New,
+              "event payload 1",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              webhooks = List(webhook),
+              events = List.empty,
+              ScenarioInterest.Errors
+            ) { (errors, _) =>
+              for {
+                _     <- TestWebhookEventRepo.createEvent(firstEvent)
+                _     <- clock.sleep(150.millis).provideLayer(Clock.live)
+                _     <- TestWebhookRepo.removeWebhook(webhook.id)
+                _     <- TestWebhookEventRepo.createEvent(secondEvent)
+                error <- errors.take
+              } yield assertTrue(error == MissingWebhookError(webhook.id))
+            }
+          } @@ timeout(1.second)
+        ) @@ flaky
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
         testM("batches events queued up since last request") {
