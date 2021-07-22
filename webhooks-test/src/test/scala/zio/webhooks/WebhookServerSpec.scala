@@ -832,7 +832,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           // TODO: test retries eventually get delivered  (global integration test)
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(20.seconds)
+    ) @@ timeout(30.seconds)
 }
 
 object WebhookServerSpecUtil {
