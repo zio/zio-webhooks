@@ -63,12 +63,15 @@ lazy val zioWebhooks = module("zio-webhooks", "webhooks")
   )
 
 lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
+  .configs(IntegrationTest)
   .settings(
+    Defaults.itSettings,
     publish / skip := true,
     libraryDependencies ++= Seq(
-      "dev.zio"              %% "zio-test"     % zioVersion      % "test",
-      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "test",
-      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "test"
+      "dev.zio"              %% "zio-test"     % zioVersion      % "it,test",
+      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "it,test",
+      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "it,test",
+      "io.d11"               %% "zhttp"        % zioHttpVersion  % "it"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
