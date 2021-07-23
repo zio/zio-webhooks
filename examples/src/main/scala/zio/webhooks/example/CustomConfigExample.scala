@@ -58,8 +58,8 @@ object CustomConfigExample extends App {
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
 
-  private lazy val n       = 2000L
-  private lazy val nEvents = UStream
+  private lazy val n      = 2000L
+  private lazy val events = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -78,7 +78,7 @@ object CustomConfigExample extends App {
       _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.setWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.spaced(100.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
       _ <- zio.clock.sleep(Duration.Infinity)
     } yield ()
 

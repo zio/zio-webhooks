@@ -651,6 +651,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             } yield assertTrue(batchCount <= deliveredEvents.size && deliveredEvents.size <= n)
           }
         },
+        // TODO: find sync point for this test
         testM("batches events on webhook and content-type") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
@@ -663,7 +664,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             events = jsonEvents ++ plaintextEvents,
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
-        },
+        } @@ timeout(100.millis) @@ flaky,
         testM("JSON event contents are batched into a JSON array") {
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val jsonEvents = createJsonEvents(100)(webhook.id)

@@ -54,7 +54,7 @@ object ShutdownOnFirstError extends App {
       errorFiber <- WebhookServer.getErrors.use(_.take.flip).fork
       httpFiber  <- httpEndpointServer.start(port, httpApp).fork
       _          <- TestWebhookRepo.setWebhook(webhook)
-      _          <- events.schedule(Schedule.fixed(100.millis)).foreach(TestWebhookEventRepo.createEvent).fork
+      _          <- events.schedule(Schedule.fixed(50.micros)).foreach(TestWebhookEventRepo.createEvent).fork
       _          <- errorFiber.join.onExit(_ => WebhookServer.shutdown.orDie *> httpFiber.interrupt)
     } yield ()
   }.catchAll {

@@ -27,7 +27,7 @@ object TestWebhookEventRepo {
   val test: ULayer[Has[WebhookEventRepo] with Has[TestWebhookEventRepo]] = {
     for {
       ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
-      hub <- Hub.unbounded[WebhookEvent]
+      hub <- Hub.bounded[WebhookEvent](256)
       impl = TestWebhookEventRepoImpl(ref, hub)
     } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo](impl, impl)
   }.toLayerMany
@@ -90,7 +90,7 @@ final private case class TestWebhookEventRepoImpl(
                     val updated =
                       for ((key, event) <- map if keys.contains(key))
                         yield (key, event.copy(status = status))
-                    (Right(updated.values), map ++ updated)
+                    (Right(updated.values), if (status.isDone) map -- keys else map ++ updated)
                   }
                 }
       _      <- result match {

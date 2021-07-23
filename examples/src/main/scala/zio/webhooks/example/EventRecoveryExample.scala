@@ -42,8 +42,8 @@ object EventRecoveryExample extends App {
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
 
-  private lazy val n       = 500L
-  private lazy val nEvents = UStream
+  private lazy val n      = 3000L
+  private lazy val events = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -64,13 +64,13 @@ object EventRecoveryExample extends App {
       _             <- webhookServer.start
       _             <- httpEndpointServer.start(port, httpApp).fork
       _             <- TestWebhookRepo.setWebhook(webhook)
-      _             <- nEvents.take(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- events.take(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- webhookServer.shutdown
       _             <- putStrLn("Shutdown successful")
       webhookServer <- WebhookServer.create
       _             <- webhookServer.start
       _             <- putStrLn("Restart successful")
-      _             <- nEvents.drop(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- events.drop(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- clock.sleep(Duration.Infinity)
     } yield ()
 

@@ -32,10 +32,8 @@ object BasicExample extends App {
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
 
-  private lazy val n = 5000
-
   // JSON webhook event stream
-  private lazy val nEvents = UStream
+  private lazy val events = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -45,7 +43,6 @@ object BasicExample extends App {
         Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
       )
     }
-    .take(n.toLong)
 
   private lazy val port = 8080
 
@@ -54,7 +51,7 @@ object BasicExample extends App {
       _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.setWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.fixed(10.milli)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   /**
