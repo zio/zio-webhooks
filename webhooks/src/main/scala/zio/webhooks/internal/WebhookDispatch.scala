@@ -5,8 +5,8 @@ import zio.prelude.NonEmptySet
 import zio.webhooks._
 
 /**
- * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]] containing one or more
- * [[WebhookEvent]]s.
+ * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]] containing a batch of one or
+ * more [[WebhookEvent]]s.
  *
  * The server, when creating these dispatches, guarantees that all webhook events in this dispatch
  * will have the same [[WebhookEventContentType]].
