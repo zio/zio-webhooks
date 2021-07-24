@@ -35,7 +35,6 @@ final class WebhookServer private (
   private val stateRepo: WebhookStateRepo,
   private val errorHub: Hub[WebhookError],
   private val newRetries: Queue[RetryState],
-  private val permits: Semaphore,
   private val retries: RefM[Retries],
   private val startupLatch: CountDownLatch,
   private val shutdownLatch: CountDownLatch,
@@ -320,7 +319,7 @@ final class WebhookServer private (
                      case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>
                        batchDispatcher.enqueueEvent(event)
                      case _                                                        =>
-                       permits.withPermit(deliverNewEvent(event)).fork
+                       deliverNewEvent(event).fork
                    }).when(webhook.isEnabled)
     } yield ()
 
@@ -356,9 +355,7 @@ final class WebhookServer private (
                                                         webhook.deliveryMode.semantics,
                                                         NonEmptySet.single(event)
                                                       )
-                                                      permits
-                                                        .withPermit(retryEvents(retryState, dispatch))
-                                                        .fork
+                                                      retryEvents(retryState, dispatch).fork
                                                   }
                                    _           <- if (webhook.isEnabled)
                                                     deliverEvent
@@ -402,21 +399,20 @@ object WebhookServer {
    */
   def create: URIO[Env, WebhookServer] =
     for {
-      clock            <- ZIO.service[Clock.Service]
-      config           <- ZIO.service[WebhookServerConfig]
-      eventRepo        <- ZIO.service[WebhookEventRepo]
-      httpClient       <- ZIO.service[WebhookHttpClient]
-      webhookState     <- ZIO.service[WebhookStateRepo]
-      webhooks         <- ZIO.service[WebhooksProxy]
-      errorHub         <- Hub.sliding[WebhookError](config.errorSlidingCapacity)
-      newRetries       <- Queue.bounded[RetryState](config.retry.capacity)
-      singleDispatches <- Semaphore.make(config.maxSingleDispatchConcurrency.toLong)
-      retries          <- RefM.make(Retries(Map.empty))
+      clock          <- ZIO.service[Clock.Service]
+      config         <- ZIO.service[WebhookServerConfig]
+      eventRepo      <- ZIO.service[WebhookEventRepo]
+      httpClient     <- ZIO.service[WebhookHttpClient]
+      webhookState   <- ZIO.service[WebhookStateRepo]
+      webhooks       <- ZIO.service[WebhooksProxy]
+      errorHub       <- Hub.sliding[WebhookError](config.errorSlidingCapacity)
+      newRetries     <- Queue.bounded[RetryState](config.retry.capacity)
+      retries        <- RefM.make(Retries(Map.empty))
       // startup sync points: new event sub + event recovery
-      startupLatch     <- CountDownLatch.make(2)
+      startupLatch   <- CountDownLatch.make(2)
       // shutdown sync points: new event sub + event recovery + retrying
-      shutdownLatch    <- CountDownLatch.make(2)
-      shutdownSignal   <- Promise.make[Nothing, Unit]
+      shutdownLatch  <- CountDownLatch.make(2)
+      shutdownSignal <- Promise.make[Nothing, Unit]
     } yield new WebhookServer(
       clock,
       config,
@@ -425,7 +421,6 @@ object WebhookServer {
       webhookState,
       errorHub,
       newRetries,
-      singleDispatches,
       retries,
       startupLatch,
       shutdownLatch,

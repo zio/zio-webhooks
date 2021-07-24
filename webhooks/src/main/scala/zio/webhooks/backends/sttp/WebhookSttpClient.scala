@@ -14,23 +14,30 @@ import java.io.IOException
  * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] using sttp's ZIO backend, i.e.
  * [[sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend]].
  */
-final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpClient {
+final case class WebhookSttpClient(sttpClient: SttpClient, permits: Semaphore) extends WebhookHttpClient {
 
   def post(webhookRequest: WebhookHttpRequest): IO[HttpPostError, WebhookHttpResponse] =
-    for {
-      url        <- ZIO
-                      .fromEither(Uri.parse(webhookRequest.url))
-                      .mapError(msg => Left(BadWebhookUrlError(webhookRequest.url, msg)))
-      sttpRequest = basicRequest.post(url).body(webhookRequest.content).headers(webhookRequest.headers.toMap)
-      response   <- sttpClient
-                      .send(sttpRequest)
-                      .map(response => WebhookHttpResponse(response.code.code))
-                      .refineToOrDie[IOException]
-                      .mapError(Right(_))
-    } yield response
+    permits.withPermit {
+      for {
+        url        <- ZIO
+                        .fromEither(Uri.parse(webhookRequest.url))
+                        .mapError(msg => Left(BadWebhookUrlError(webhookRequest.url, msg)))
+        sttpRequest = basicRequest.post(url).body(webhookRequest.content).headers(webhookRequest.headers.toMap)
+        response   <- sttpClient
+                        .send(sttpRequest)
+                        .map(response => WebhookHttpResponse(response.code.code))
+                        .refineToOrDie[IOException]
+                        .mapError(Right(_))
+      } yield response
+    }
 }
 
 object WebhookSttpClient {
-  val live: TaskLayer[Has[WebhookHttpClient]] =
-    AsyncHttpClientZioBackend.managed().map(WebhookSttpClient(_)).toLayer
+  val live: RLayer[Has[Int], Has[WebhookHttpClient]] = {
+    for {
+      sttpBackend <- AsyncHttpClientZioBackend.managed()
+      capacity    <- ZManaged.service[Int]
+      permits     <- Semaphore.make(capacity.toLong).toManaged_
+    } yield WebhookSttpClient(sttpBackend, permits)
+  }.toLayer
 }

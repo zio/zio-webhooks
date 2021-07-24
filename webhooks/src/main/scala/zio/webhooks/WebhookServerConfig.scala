@@ -10,13 +10,13 @@ import java.time.Duration
  * capacity, retrying, and batching. For optimal performance, use capacities that are powers of 2.
  *
  * @param errorSlidingCapacity Number of errors to keep in the sliding buffer
- * @param maxSingleDispatchConcurrency Max number of single dispatches allowed at any given time
+ * @param maxDispatchConcurrency Max number of single dispatches allowed at any given time
  * @param retry Configuration settings for retries
  * @param batchingCapacity Optional capacity for each batch. Set this to enable batching.
  */
 final case class WebhookServerConfig(
   errorSlidingCapacity: Int,
-  maxSingleDispatchConcurrency: Int,
+  maxDispatchConcurrency: Int,
   retry: WebhookServerConfig.Retry,
   batchingCapacity: Option[Int]
 )
@@ -25,7 +25,7 @@ object WebhookServerConfig {
   val default: ULayer[Has[WebhookServerConfig]] = ZLayer.succeed(
     WebhookServerConfig(
       errorSlidingCapacity = 128,
-      maxSingleDispatchConcurrency = 128,
+      maxDispatchConcurrency = 256,
       Retry(
         capacity = 128,
         exponentialBase = 10.millis,
@@ -39,6 +39,9 @@ object WebhookServerConfig {
 
   val defaultWithBatching: ULayer[Has[WebhookServerConfig]] =
     default.map(serverConfig => Has(serverConfig.get.copy(batchingCapacity = Some(128))))
+
+  val dispatchConcurrency: ULayer[Has[Int]] =
+    default.map(config => Has(config.get.maxDispatchConcurrency))
 
   /**
    * Retry configuration settings for each webhook.

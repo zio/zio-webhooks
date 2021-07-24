@@ -74,6 +74,7 @@ object ShutdownOnFirstError extends App {
         TestWebhookRepo.subscriptionUpdateMode,
         WebhookServer.live,
         WebhookServerConfig.default,
+        WebhookServerConfig.dispatchConcurrency,
         WebhookSttpClient.live,
         WebhooksProxy.live
       )
