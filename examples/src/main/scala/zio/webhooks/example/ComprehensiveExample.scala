@@ -21,14 +21,16 @@ import java.io.IOException
 object ComprehensiveExample extends App {
   // JSON webhook event stream
   private lazy val nEvents = UStream
-    .iterate(0L)(_ + 1).zip(UStream.repeatEffect(random.nextIntBounded(webhookCount)))
-    .map { case (i, webhookId) =>
-      WebhookEvent(
-        WebhookEventKey(WebhookEventId(i), WebhookId(webhookId.toLong)),
-        WebhookEventStatus.New,
-        s"""{"event":$i}""",
-        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-      )
+    .iterate(0L)(_ + 1)
+    .zip(UStream.repeatEffect(random.nextIntBounded(webhookCount)))
+    .map {
+      case (i, webhookId) =>
+        WebhookEvent(
+          WebhookEventKey(WebhookEventId(i), WebhookId(webhookId.toLong)),
+          WebhookEventStatus.New,
+          s"""{"event":$i}""",
+          Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+        )
     }
 
   private lazy val port = 8080
@@ -38,7 +40,7 @@ object ComprehensiveExample extends App {
       _ <- EndpointBehavior.run.fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
-      _ <- nEvents/*.schedule(Schedule.spaced(50.micros))*/.foreach(TestWebhookEventRepo.createEvent)
+      _ <- nEvents.schedule(Schedule.spaced(16.micros)).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   /**
@@ -120,17 +122,19 @@ object EndpointBehavior {
       val payload  = request.getBodyAsString
       val response =
         for {
-          n          <- random.nextIntBounded(100)
-          timeString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-          response   <- ZIO
-                          .foreach(payload) { payload =>
-                            val line = s"$timeString webhook $id $payload"
-                            if (n < 60)
-                              putStrLn(line + " Response: OK") *> UIO(Response.status(Status.OK))
-                            else
-                              putStrLn(line + " Response: NOT_FOUND") *> UIO(Response.status(Status.NOT_FOUND))
-                          }
-                          .orDie
+          n           <- random.nextIntBounded(100)
+          timeString  <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
+          randomDelay <- random.nextIntBounded(200).map(_.millis)
+          response    <- ZIO
+                           .foreach(payload) { payload =>
+                             val line = s"$timeString webhook $id $payload"
+                             if (n < 60)
+                               putStrLn(line + " Response: OK") *> UIO(Response.status(Status.OK))
+                             else
+                               putStrLn(line + " Response: NOT_FOUND") *> UIO(Response.status(Status.NOT_FOUND))
+                           }
+                           .orDie
+                           .delay(randomDelay)
         } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
       response.uninterruptible
   }
@@ -140,10 +144,17 @@ object EndpointBehavior {
 
   val normalBehavior = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" / id =>
-      val response = ZIO
-        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: webhook: $id $str OK"""))
-        .as(Response.status(Status.OK))
-        .orDie
+      val response =
+        for {
+          randomDelay <- random.nextIntBounded(200).map(_.millis)
+          response    <- ZIO
+                           .foreach(request.getBodyAsString) { str =>
+                             putStrLn(s"""SERVER RECEIVED PAYLOAD: webhook: $id $str OK""")
+                           }
+                           .as(Response.status(Status.OK))
+                           .orDie
+                           .delay(randomDelay)
+        } yield response
       response.uninterruptible
   }
 
