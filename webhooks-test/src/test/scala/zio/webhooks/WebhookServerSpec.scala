@@ -834,7 +834,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           // TODO: test continues retrying for multiple webhooks
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(10.seconds)
+    ) @@ timeout(30.seconds)
 }
 
 object WebhookServerSpecUtil {
