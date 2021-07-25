@@ -26,13 +26,17 @@ final case class WebhookSttpClient(sttpClient: SttpClient, permits: Semaphore) e
         response   <- sttpClient
                         .send(sttpRequest)
                         .map(response => WebhookHttpResponse(response.code.code))
-                        .refineToOrDie[IOException]
-                        .mapError(Right(_))
+                        .refineToOrDie[SttpClientException]
+                        .mapError(e => Right(new IOException(e.getMessage)))
       } yield response
     }
 }
 
 object WebhookSttpClient {
+
+  /**
+   * A layer built with an STTP ZIO backend with the default settings
+   */
   val live: RLayer[Has[Int], Has[WebhookHttpClient]] = {
     for {
       sttpBackend <- AsyncHttpClientZioBackend.managed()

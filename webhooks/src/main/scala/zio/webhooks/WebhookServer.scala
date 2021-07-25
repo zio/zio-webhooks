@@ -45,8 +45,8 @@ final class WebhookServer private (
   /**
    * Attempts delivery of a [[WebhookDispatch]] to a webhook's endpoint. On successful delivery,
    * events are marked [[WebhookEventStatus.Delivered]]. On failure, events delivered to
-   * at-least-once webhooks with are enqueued for retrying, while dispatches to at-most-once
-   * webhooks are marked failed.
+   * at-least-once webhooks are enqueued for retrying, while dispatches to at-most-once webhooks are
+   * marked failed.
    */
   private def deliver(dispatch: WebhookDispatch): UIO[Unit] = {
     for {
@@ -72,19 +72,6 @@ final class WebhookServer private (
                         } yield retries.updateRetryState(webhookId, retryState)
                       }
                   }
-    } yield ()
-  }.catchAll(errorHub.publish(_).unit)
-
-  private def deliverNewEvent(newEvent: WebhookEvent): UIO[Unit] = {
-    for {
-      webhook <- webhooksProxy.getWebhookById(newEvent.key.webhookId)
-      dispatch = WebhookDispatch(
-                   webhook.id,
-                   webhook.url,
-                   webhook.deliveryMode.semantics,
-                   NonEmptySet(newEvent)
-                 )
-      _       <- deliver(dispatch).when(webhook.isEnabled)
     } yield ()
   }.catchAll(errorHub.publish(_).unit)
 
@@ -312,16 +299,37 @@ final class WebhookServer private (
   private def handleNewEvent(
     batchDispatcher: Option[BatchDispatcher],
     event: WebhookEvent
-  ): IO[MissingWebhookError, Unit] =
+  ): IO[MissingWebhookError, Unit] = {
+    val webhookId = event.key.webhookId
     for {
-      webhook <- webhooksProxy.getWebhookById(event.key.webhookId)
-      _       <- ((batchDispatcher, webhook.batching) match {
-                     case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>
-                       batchDispatcher.enqueueEvent(event)
-                     case _                                                        =>
-                       deliverNewEvent(event).fork
+      retries <- retries.get
+      webhook <- webhooksProxy.getWebhookById(webhookId)
+      _       <- (retries.map.get(webhookId) match {
+                     case Some(retryState) =>
+                       if (retryState.isActive)
+                         retryState.enqueue(event)
+                       else
+                         deliverEvent(batchDispatcher, event, webhook)
+                     case None             =>
+                       deliverEvent(batchDispatcher, event, webhook)
                    }).when(webhook.isEnabled)
     } yield ()
+  }
+
+  private def deliverEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent, webhook: Webhook): UIO[Any] =
+    (batchDispatcher, webhook.batching) match {
+      case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>
+        batchDispatcher.enqueueEvent(event)
+      case _                                                        =>
+        deliver(
+          WebhookDispatch(
+            webhook.id,
+            webhook.url,
+            webhook.deliveryMode.semantics,
+            NonEmptySet(event)
+          )
+        ).fork
+    }
 
   /**
    * Listens for new retries and starts retry dispatching for a webhook.
@@ -527,6 +535,9 @@ object WebhookServer {
      */
     def deactivate: UIO[RetryState]                                  =
       ZIO.foreach_(timerKillSwitch)(_.succeed(())).as(copy(isActive = false, timerKillSwitch = None))
+
+    def enqueue(event: WebhookEvent): UIO[Boolean] =
+      retryQueue.offer(event)
 
     /**
      * A convenience method for adding events to the retry queue.
