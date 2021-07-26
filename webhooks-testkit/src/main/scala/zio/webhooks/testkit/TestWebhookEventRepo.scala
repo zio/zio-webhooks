@@ -27,7 +27,7 @@ object TestWebhookEventRepo {
   val test: ULayer[Has[WebhookEventRepo] with Has[TestWebhookEventRepo]] = {
     for {
       ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
-      hub <- Hub.bounded[WebhookEvent](256)
+      hub <- Hub.unbounded[WebhookEvent]
       impl = TestWebhookEventRepoImpl(ref, hub)
     } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo](impl, impl)
   }.toLayerMany

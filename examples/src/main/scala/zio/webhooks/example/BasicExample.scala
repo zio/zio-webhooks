@@ -7,9 +7,9 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
+import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
  * Runs a webhook server and a zio-http server to which webhook events are delivered. The webhook
@@ -24,9 +24,13 @@ object BasicExample extends App {
   // reliable endpoint
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
-      ZIO
-        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-        .as(Response.status(Status.OK))
+      for {
+        randomDelay <- random.nextIntBounded(300).map(_.millis)
+        response    <- ZIO
+                         .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+                         .as(Response.status(Status.OK))
+                         .delay(randomDelay) // random delay to simulate latency
+      } yield response
   }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
