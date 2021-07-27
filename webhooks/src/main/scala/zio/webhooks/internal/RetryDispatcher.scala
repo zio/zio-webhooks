@@ -25,7 +25,7 @@ private[webhooks] final case class RetryDispatcher(
    * Activates a timer that marks a webhook unavailable should the retry state remain active past
    * the timeout duration. The timer is killed when retrying is deactivated.
    */
-  private def activateWithTimeout[E](webhookId: WebhookId): UIO[Unit] =
+  private[internal] def activateWithTimeout: UIO[Unit] =
     retryStates.update { retryStates =>
       val currentState = retryStates(webhookId)
       for {
@@ -128,7 +128,7 @@ private[webhooks] final case class RetryDispatcher(
                            _     <- ZIO.foreach_(event) { event =>
                                       val webhookId = event.key.webhookId
                                       for {
-                                        _           <- activateWithTimeout(webhookId)
+                                        _           <- activateWithTimeout
                                         webhook     <- webhooksProxy.getWebhookById(webhookId)
                                         deliverEvent = (batchDispatcher, webhook.batching) match {
                                                          case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>

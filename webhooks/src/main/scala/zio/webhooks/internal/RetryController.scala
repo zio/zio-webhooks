@@ -5,8 +5,11 @@ import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.webhooks._
 
+import java.time.Instant
+
 /**
- * The [[RetryController]] provides the entry point for retrying webhook events.
+ * The [[RetryController]] provides the entry point for retrying webhook events, and manages
+ * dispatchers and state for each webhook.
  */
 private[webhooks] final case class RetryController(
   private val clock: zio.clock.Clock.Service,
@@ -24,7 +27,74 @@ private[webhooks] final case class RetryController(
   def isActive(webhookId: WebhookId): UIO[Boolean] =
     retryStates.get.map(_.get(webhookId).exists(_.isActive))
 
-  def retry(events: NonEmptySet[WebhookEvent]): UIO[Any] =
+  def loadRetries(persistentRetries: PersistentRetries): IO[WebhookError, Unit] =
+    for {
+      loadedRetries <- ZIO.foreach(persistentRetries.retryStates) {
+                         case (id, loadedState) =>
+                           loadRetry(WebhookId(id), loadedState).map((WebhookId(id), _))
+                       }
+      _             <- retryDispatchers.set(loadedRetries.map { case (id, (dispatcher, _)) => (id, dispatcher) })
+      _             <- retryStates.set(loadedRetries.map { case (id, (_, retryState)) => (id, retryState) })
+      _             <- retryDispatchers.get.flatMap {
+                         ZIO.foreach_(_) {
+                           case (_, retryDispatcher) =>
+                             retryDispatcher.start.fork *> retryDispatcher.activateWithTimeout
+                         }
+                       }
+    } yield ()
+
+  def persistRetries(timestamp: Instant): UIO[PersistentRetries] =
+    suspendRetries(timestamp).map(map =>
+      PersistentRetries(map.map {
+        case (webhookId, retryState) =>
+          val persistentRetry = PersistentRetries.RetryState(
+            activeSinceTime = retryState.activeSinceTime,
+            backoff = retryState.backoff,
+            failureCount = retryState.failureCount,
+            lastRetryTime = retryState.lastRetryTime,
+            timeLeft = retryState.timeoutDuration
+          )
+          (webhookId.value, persistentRetry)
+      })
+    )
+
+  /**
+   * Resumes retry delivery for a webhook given a persisted retry state loaded on startup.
+   */
+  private def loadRetry(
+    webhookId: WebhookId,
+    loadedState: PersistentRetries.RetryState
+  ): IO[WebhookError, (RetryDispatcher, RetryState)] =
+    Queue.bounded[WebhookEvent](config.retry.capacity).map { retryQueue =>
+      (
+        RetryDispatcher(
+          clock,
+          config,
+          errorHub,
+          eventRepo,
+          httpClient,
+          retryStates,
+          retryQueue,
+          shutdownSignal,
+          webhookId,
+          webhooksProxy
+        ),
+        RetryState(
+          loadedState.activeSinceTime,
+          loadedState.backoff,
+          loadedState.failureCount,
+          isActive = false,
+          loadedState.lastRetryTime,
+          loadedState.timeLeft,
+          timerKillSwitch = None
+        )
+      )
+    }
+
+  def retry(event: WebhookEvent): UIO[Any] =
+    inputQueue.offer(event)
+
+  def retryMany(events: NonEmptySet[WebhookEvent]): UIO[Any] =
     inputQueue.offerAll(events)
 
   def start: UIO[Unit] =
@@ -71,4 +141,7 @@ private[webhooks] final case class RetryController(
         _          <- retryQueue.offer(event)
       } yield ()
     } *> shutdownLatch.countDown
+
+  private def suspendRetries(timestamp: Instant): UIO[Map[WebhookId, RetryState]] =
+    retryStates.get.map(_.map { case (id, retryState) => (id, retryState.suspend(timestamp)) })
 }

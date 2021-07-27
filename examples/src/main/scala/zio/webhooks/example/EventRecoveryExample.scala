@@ -19,7 +19,7 @@ import zio.webhooks.testkit._
  */
 object EventRecoveryExample extends App {
 
-  // server answers with 200 40% of the time, 404 the other
+  // server answers with 200 70% of the time, 404 the other
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
       val payload = request.getBodyAsString
@@ -28,7 +28,7 @@ object EventRecoveryExample extends App {
         tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
         response <- ZIO
                       .foreach(payload) { payload =>
-                        if (n < 40)
+                        if (n < 70)
                           putStrLn(tsString + payload + " Response: OK") *>
                             UIO(Response.status(Status.OK))
                         else
@@ -68,6 +68,7 @@ object EventRecoveryExample extends App {
       _             <- webhookServer.shutdown
       _             <- putStrLn("Shutdown successful")
       webhookServer <- WebhookServer.create
+      _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _             <- webhookServer.start
       _             <- putStrLn("Restart successful")
       _             <- events.drop(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)

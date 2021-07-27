@@ -2,6 +2,7 @@ package zio.webhooks
 
 import zio._
 import zio.clock.Clock
+import zio.json._
 import zio.prelude.NonEmptySet
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
@@ -19,7 +20,7 @@ import java.io.IOException
  * which lets all dispatching work finish. Finally, the retry state is persisted, which allows
  * retries to resume after server restarts.
  *
- * A [[live]] server layer is provided in the companion object for convenience and proper resource
+ * A `live` server layer is provided in the companion object for convenience and proper resource
  * management, ensuring [[shutdown]] is called by the finalizer.
  */
 final class WebhookServer private (
@@ -54,7 +55,7 @@ final class WebhookServer private (
                     case (AtMostOnce, _)                      =>
                       markDispatch(dispatch, WebhookEventStatus.Failed)
                     case (AtLeastOnce, _)                     =>
-                      retryController.retry(dispatch.events)
+                      retryController.retryMany(dispatch.events)
                   }
     } yield ()
   }.catchAll(errorHub.publish(_).unit)
@@ -67,67 +68,6 @@ final class WebhookServer private (
       eventRepo.setEventStatus(dispatch.head.key, newStatus)
     else
       eventRepo.setEventStatusMany(dispatch.keys, newStatus)
-
-  /**
-   * Loads the persisted retry states and resumes them.
-   */
-//  private def loadRetries(loadedState: PersistentRetries): IO[WebhookError, Unit] =
-//    for {
-//      retryMap <- ZIO.foreach(loadedState.retryStates) {
-//                    case (id, persistedState) =>
-//                      resumeRetrying(WebhookId(id), persistedState).map((WebhookId(id), _))
-//                  }
-//      _        <- retries.set(Retries(retryMap))
-//      _        <- ZIO.foreach_(retryMap) { case (webhookId, _) => newRetries.offer(webhookId) }
-//    } yield ()
-//
-//  /**
-//   * Recovers an event by adding it to a retry queue, or starting retry dispatch for a webhook if
-//   * retries for it haven't started yet.
-//   */
-//  private def recoverEvent(event: WebhookEvent): UIO[Unit] =
-//    for {
-//      retryQueue <- retries.modify { state =>
-//                      state.map.get(event.key.webhookId) match {
-//                        // we're continuing retries for this webhook
-//                        case Some(retryState) =>
-//                          UIO((Some(retryState.retryQueue), state))
-//                        // no retry state was loaded for this webhook, make a new one
-//                        case None             =>
-//                          RetryState.make(clock, config.retry).map { retryState =>
-//                            (Some(retryState.retryQueue), state.updateRetryState(event.key.webhookId, retryState))
-//                          }
-//                      }
-//                    }
-//      _          <- ZIO.foreach_(retryQueue)(_.offer(event))
-//    } yield ()
-//
-//  /**
-//   * Resumes retries for a webhook given a persisted retry state loaded on startup.
-//   */
-//  private def resumeRetrying(
-//    webhookId: WebhookId,
-//    persistedState: PersistentRetries.RetryState
-//  ): IO[WebhookError, RetryState] =
-//    for {
-//      loadedState  <- Queue.bounded[WebhookEvent](config.retry.capacity).map { retryQueue =>
-//                        RetryState(
-//                          clock,
-//                          config.retry.exponentialBase,
-//                          config.retry.exponentialPower,
-//                          config.retry.maxBackoff,
-//                          retryQueue,
-//                          persistedState.activeSinceTime,
-//                          persistedState.failureCount,
-//                          isActive = false,
-//                          lastRetryTime = persistedState.lastRetryTime,
-//                          backoff = persistedState.backoff,
-//                          persistedState.timeLeft,
-//                          timerKillSwitch = None
-//                        )
-//                      }
-//      resumedRetry <- loadedState.activateWithTimeout(markWebhookUnavailable(webhookId))
-//    } yield resumedRetry
 
   /**
    * Starts the webhook server by starting the following concurrently:
@@ -150,31 +90,26 @@ final class WebhookServer private (
 
   /**
    * Starts the recovery of events with status [[WebhookEventStatus.Delivering]] for webhooks with
-   * at-least-once delivery semantics. Loads [[WebhookServer.Retries]] then enqueues events into the
+   * at-least-once delivery semantics. Loads the state of a [[RetryController]] then enqueues events into the
    * retry queue for its webhook.
    *
    * This ensures retries are persistent with respect to server restarts.
    */
-  private def startEventRecovery: UIO[Any] =
-//    for {
-//      _ <- stateRepo.getState.flatMap(
-//             ZIO
-//               .foreach_(_)(jsonState =>
-//                 ZIO
-//                   .fromEither(jsonState.fromJson[PersistentRetries])
-//                   .mapError(message => InvalidStateError(jsonState, message))
-//                   .flatMap(loadRetries)
-//               )
-//               .catchAll(errorHub.publish)
-//           )
-//      _ <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal).foreach { event =>
-//             (for {
-//               webhook <- webhooksProxy.getWebhookById(event.key.webhookId)
-//               _       <- recoverEvent(event).when(webhook.isEnabled)
-//             } yield ()).catchAll(errorHub.publish)
-//           }
-//    } yield ()
-    ZIO.unit.fork *> startupLatch.countDown
+  private def startEventRecovery: UIO[Any] = {
+    for {
+      _ <- stateRepo.getState.flatMap(
+             ZIO
+               .foreach_(_)(jsonState =>
+                 ZIO
+                   .fromEither(jsonState.fromJson[PersistentRetries])
+                   .mapError(message => InvalidStateError(jsonState, message))
+                   .flatMap(retryController.loadRetries)
+               )
+               .catchAll(errorHub.publish)
+           )
+      _ <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal).foreach(retryController.retry).fork
+    } yield ()
+  } *> startupLatch.countDown
 
   /**
    * Starts server subscription to new [[WebhookEvent]]s. Counts down on the `startupLatch`,
@@ -213,7 +148,7 @@ final class WebhookServer private (
       isRetrying <- retryController.isActive(webhookId)
       webhook    <- webhooksProxy.getWebhookById(webhookId)
       _          <- (if (isRetrying)
-                       retryController.retry(NonEmptySet.single(event))
+                       retryController.retryMany(NonEmptySet.single(event))
                      else
                        deliverEvent(batchDispatcher, event, webhook)).when(webhook.isEnabled)
     } yield ()
@@ -245,10 +180,10 @@ final class WebhookServer private (
    */
   def shutdown: UIO[Any] =
     for {
-      _ <- shutdownSignal.succeed(())
-      _ <- shutdownLatch.await
-//      persistentState <- retries.get.flatMap(state => clock.instant.map(state.toPersistentServerState))
-//      _               <- stateRepo.setState(persistentState.toJson)
+      _               <- shutdownSignal.succeed(())
+      _               <- shutdownLatch.await
+      persistentState <- clock.instant.flatMap(retryController.persistRetries)
+      _               <- stateRepo.setState(persistentState.toJson)
     } yield ()
 
   /**

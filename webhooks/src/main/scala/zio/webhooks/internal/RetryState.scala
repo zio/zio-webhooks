@@ -4,7 +4,7 @@ import zio._
 import zio.duration._
 import zio.webhooks.WebhookServerConfig
 
-import java.time.Instant
+import java.time.{ Instant, Duration => JDuration }
 
 /**
  * Represents the current state of the retry logic for a [[RetryDispatcher]].
@@ -20,6 +20,12 @@ private[webhooks] final case class RetryState(
 ) {
 
   /**
+   * Kills the current timeout timer, marking this retry state inactive.
+   */
+  def deactivate: UIO[RetryState] =
+    ZIO.foreach_(timerKillSwitch)(_.succeed(())).as(copy(isActive = false, timerKillSwitch = None))
+
+  /**
    * Progresses retrying to the next exponential backoff.
    */
   def increaseBackoff(timestamp: Instant, retryConfig: WebhookServerConfig.Retry): RetryState = {
@@ -33,12 +39,18 @@ private[webhooks] final case class RetryState(
     )
   }
 
+  /**
+   * Resets backoff to the initial state.
+   */
   def resetBackoff(timestamp: Instant): RetryState =
     copy(failureCount = 0, lastRetryTime = timestamp, backoff = None)
 
   /**
-   * Kills the current timer, marking this retry inactive.
+   * Suspends this retry by replacing the backoff with the time left until its backoff completes.
    */
-  def deactivate: UIO[RetryState] =
-    ZIO.foreach_(timerKillSwitch)(_.succeed(())).as(copy(isActive = false, timerKillSwitch = None))
+  def suspend(now: Instant): RetryState =
+    copy(
+      backoff = backoff.map(_.minus(JDuration.between(now, lastRetryTime))),
+      timeoutDuration = timeoutDuration.minus(Duration.fromInterval(activeSinceTime, now))
+    )
 }
