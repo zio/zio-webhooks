@@ -47,7 +47,7 @@ private[webhooks] final case class RetryController(
     suspendRetries(timestamp).map(map =>
       PersistentRetries(map.map {
         case (webhookId, retryState) =>
-          val persistentRetry = PersistentRetries.RetryState(
+          val persistentRetry = PersistentRetries.PersistentRetryState(
             activeSinceTime = retryState.activeSinceTime,
             backoff = retryState.backoff,
             failureCount = retryState.failureCount,
@@ -63,7 +63,7 @@ private[webhooks] final case class RetryController(
    */
   private def loadRetry(
     webhookId: WebhookId,
-    loadedState: PersistentRetries.RetryState
+    loadedState: PersistentRetries.PersistentRetryState
   ): IO[WebhookError, (RetryDispatcher, RetryState)] =
     Queue.bounded[WebhookEvent](config.retry.capacity).map { retryQueue =>
       (

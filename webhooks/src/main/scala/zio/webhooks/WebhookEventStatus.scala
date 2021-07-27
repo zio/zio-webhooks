@@ -21,6 +21,7 @@ sealed trait WebhookEventStatus extends Product with Serializable {
 }
 
 object WebhookEventStatus {
+  // TODO: document meanings
   case object New        extends WebhookEventStatus
   case object Delivering extends WebhookEventStatus
   case object Delivered  extends WebhookEventStatus

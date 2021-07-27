@@ -1,23 +1,23 @@
 package zio.webhooks.internal
 
 import zio.json._
-import zio.webhooks.internal.PersistentRetries.RetryState
+import zio.webhooks.internal.PersistentRetries.PersistentRetryState
 
 import java.time.{ Duration, Instant }
 
 /**
- * A persistent version of [[zio.webhooks.WebhookServer.Retries]] saved on server shutdown and loaded on server
- * restart.
+ * A persistent version of the [[zio.webhooks.internal.RetryState]] saved on server shutdown and
+ * loaded on server restart.
  */
-private[webhooks] final case class PersistentRetries(retryStates: Map[Long, RetryState])
+private[webhooks] final case class PersistentRetries(retryStates: Map[Long, PersistentRetryState])
 
 private[webhooks] object PersistentRetries {
   val empty: PersistentRetries = PersistentRetries(Map.empty)
 
   /**
-   * Persistent version of [[zio.webhooks.WebhookServer.RetryState]].
+   * Persistent version of [[zio.webhooks.internal.RetryState]].
    */
-  final case class RetryState(
+  final case class PersistentRetryState(
     activeSinceTime: Instant,
     backoff: Option[Duration],
     failureCount: Int,
@@ -25,9 +25,9 @@ private[webhooks] object PersistentRetries {
     timeLeft: Duration
   )
 
-  object RetryState {
-    implicit val decoder: JsonDecoder[RetryState] = DeriveJsonDecoder.gen
-    implicit val encoder: JsonEncoder[RetryState] = DeriveJsonEncoder.gen
+  object PersistentRetryState {
+    implicit val decoder: JsonDecoder[PersistentRetryState] = DeriveJsonDecoder.gen
+    implicit val encoder: JsonEncoder[PersistentRetryState] = DeriveJsonEncoder.gen
   }
 
   implicit val decoder: JsonDecoder[PersistentRetries] = DeriveJsonDecoder.gen
