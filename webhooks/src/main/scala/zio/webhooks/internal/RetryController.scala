@@ -1,0 +1,74 @@
+package zio.webhooks.internal
+
+import zio._
+import zio.prelude.NonEmptySet
+import zio.stream.UStream
+import zio.webhooks._
+
+/**
+ * The [[RetryController]] provides the entry point for retrying webhook events.
+ */
+private[webhooks] final case class RetryController(
+  private val clock: zio.clock.Clock.Service,
+  private val config: WebhookServerConfig,
+  private val errorHub: Hub[WebhookError],
+  private val eventRepo: WebhookEventRepo,
+  private val httpClient: WebhookHttpClient,
+  private val inputQueue: Queue[WebhookEvent],
+  private val retryDispatchers: RefM[Map[WebhookId, RetryDispatcher]],
+  private val retryStates: RefM[Map[WebhookId, RetryState]],
+  private val shutdownLatch: CountDownLatch,
+  private val shutdownSignal: Promise[Nothing, Unit],
+  private val webhooksProxy: WebhooksProxy
+) {
+  def isActive(webhookId: WebhookId): UIO[Boolean] =
+    retryStates.get.map(_.get(webhookId).exists(_.isActive))
+
+  def retry(events: NonEmptySet[WebhookEvent]): UIO[Any] =
+    inputQueue.offerAll(events)
+
+  def start: UIO[Unit] =
+    mergeShutdown(UStream.fromQueue(inputQueue), shutdownSignal).foreach { event =>
+      val webhookId = event.key.webhookId
+      for {
+        retryQueue <- retryDispatchers.modify { map =>
+                        map.get(webhookId) match {
+                          case Some(dispatcher) =>
+                            UIO((dispatcher.retryQueue, map))
+                          case None             =>
+                            for {
+                              retryQueue     <- Queue.bounded[WebhookEvent](config.retry.capacity)
+                              now            <- clock.instant
+                              retryDispatcher = RetryDispatcher(
+                                                  clock,
+                                                  config,
+                                                  errorHub,
+                                                  eventRepo,
+                                                  httpClient,
+                                                  retryStates,
+                                                  retryQueue,
+                                                  shutdownSignal,
+                                                  webhookId,
+                                                  webhooksProxy
+                                                )
+                              _              <- retryStates.update(states =>
+                                                  UIO(
+                                                    states + (webhookId -> RetryState(
+                                                      activeSinceTime = now,
+                                                      backoff = None,
+                                                      failureCount = 0,
+                                                      isActive = false,
+                                                      lastRetryTime = now,
+                                                      timeoutDuration = config.retry.timeout,
+                                                      timerKillSwitch = None
+                                                    ))
+                                                  )
+                                                )
+                              _              <- retryDispatcher.start.fork
+                            } yield (retryQueue, map + (webhookId -> retryDispatcher))
+                        }
+                      }
+        _          <- retryQueue.offer(event)
+      } yield ()
+    } *> shutdownLatch.countDown
+}

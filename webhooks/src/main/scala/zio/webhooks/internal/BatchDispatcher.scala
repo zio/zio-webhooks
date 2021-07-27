@@ -65,7 +65,7 @@ private[webhooks] object BatchDispatcher {
   ): UIO[BatchDispatcher] =
     for {
       batchQueue <- RefM.make(Map.empty[BatchKey, Queue[WebhookEvent]])
-      inputQueue <- Queue.unbounded[WebhookEvent]
+      inputQueue <- Queue.bounded[WebhookEvent](1)
       dispatcher  = new BatchDispatcher(
                       capacity,
                       batchQueue,
