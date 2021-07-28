@@ -50,7 +50,7 @@ object ManualServerExample extends App {
       _      <- httpEndpointServer.start(port, httpApp).fork
       _      <- TestWebhookRepo.setWebhook(webhook)
       _      <- events
-                  .schedule(Schedule.fixed(50.micros))
+                  .schedule(Schedule.spaced(50.micros).jittered)
                   .foreach(TestWebhookEventRepo.createEvent)
                   .ensuring((server.shutdown *> putStrLn("Shutdown successful")).orDie)
     } yield ()

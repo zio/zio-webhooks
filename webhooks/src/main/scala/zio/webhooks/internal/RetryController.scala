@@ -92,57 +92,59 @@ private[webhooks] final case class RetryController(
       })
     )
 
-  def retry(event: WebhookEvent): UIO[Any] =
+  def enqueueRetry(event: WebhookEvent): UIO[Any] =
     inputQueue.offer(event)
 
-  def retryMany(events: NonEmptySet[WebhookEvent]): UIO[Any] =
+  def enqueueRetryMany(events: NonEmptySet[WebhookEvent]): UIO[Any] =
     inputQueue.offerAll(events)
 
-  def start: UIO[Unit] =
-    inputQueue.poll *> startupLatch.countDown *> mergeShutdown(UStream.fromQueue(inputQueue), shutdownSignal).foreach {
-      event =>
-        val webhookId = event.key.webhookId
-        for {
-          retryQueue <- retryDispatchers.modify { map =>
-                          map.get(webhookId) match {
-                            case Some(dispatcher) =>
-                              UIO((dispatcher.retryQueue, map))
-                            case None             =>
-                              for {
-                                retryQueue     <- Queue.bounded[WebhookEvent](config.retry.capacity)
-                                now            <- clock.instant
-                                retryDispatcher = RetryDispatcher(
-                                                    clock,
-                                                    config,
-                                                    errorHub,
-                                                    eventRepo,
-                                                    httpClient,
-                                                    retryStates,
-                                                    retryQueue,
-                                                    shutdownSignal,
-                                                    webhookId,
-                                                    webhooksProxy
+  def start: UIO[Any] = {
+    val handleRetryEvents = mergeShutdown(UStream.fromQueue(inputQueue), shutdownSignal).foreach { event =>
+      val webhookId = event.key.webhookId
+      for {
+        retryQueue <- retryDispatchers.modify { map =>
+                        map.get(webhookId) match {
+                          case Some(dispatcher) =>
+                            UIO((dispatcher.retryQueue, map))
+                          case None             =>
+                            for {
+                              retryQueue     <- Queue.bounded[WebhookEvent](config.retry.capacity)
+                              now            <- clock.instant
+                              retryDispatcher = RetryDispatcher(
+                                                  clock,
+                                                  config,
+                                                  errorHub,
+                                                  eventRepo,
+                                                  httpClient,
+                                                  retryStates,
+                                                  retryQueue,
+                                                  shutdownSignal,
+                                                  webhookId,
+                                                  webhooksProxy
+                                                )
+                              _              <- retryStates.update(states =>
+                                                  UIO(
+                                                    states + (webhookId -> RetryState(
+                                                      activeSinceTime = now,
+                                                      backoff = None,
+                                                      failureCount = 0,
+                                                      isActive = false,
+                                                      lastRetryTime = now,
+                                                      timeoutDuration = config.retry.timeout,
+                                                      timerKillSwitch = None
+                                                    ))
                                                   )
-                                _              <- retryStates.update(states =>
-                                                    UIO(
-                                                      states + (webhookId -> RetryState(
-                                                        activeSinceTime = now,
-                                                        backoff = None,
-                                                        failureCount = 0,
-                                                        isActive = false,
-                                                        lastRetryTime = now,
-                                                        timeoutDuration = config.retry.timeout,
-                                                        timerKillSwitch = None
-                                                      ))
-                                                    )
-                                                  )
-                                _              <- retryDispatcher.start
-                              } yield (retryQueue, map + (webhookId -> retryDispatcher))
-                          }
+                                                )
+                              _              <- retryDispatcher.start
+                            } yield (retryQueue, map + (webhookId -> retryDispatcher))
                         }
-          _          <- retryQueue.offer(event)
-        } yield ()
-    }.fork *> shutdownLatch.countDown
+                      }
+        isShutDown <- shutdownSignal.isDone
+        _          <- retryQueue.offer(event).race(shutdownSignal.await).unless(isShutDown)
+      } yield ()
+    } *> shutdownLatch.countDown
+    inputQueue.poll *> startupLatch.countDown *> handleRetryEvents.fork
+  }
 
   private def suspendRetries(timestamp: Instant): UIO[Map[WebhookId, RetryState]] =
     retryStates.get.map(_.map { case (id, retryState) => (id, retryState.suspend(timestamp)) })

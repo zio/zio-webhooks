@@ -29,13 +29,13 @@ object EventRecoveryExample extends App {
           tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]")
           response <- ZIO
                         .foreach(payload) { payload =>
-                          if (n < 0)
+                          if (n < 70)
                             for {
                               newSize <- payloads.modify { set =>
                                            val newSet = set + payload
                                            (newSet.size, newSet)
                                          }
-                              line     = s"$tsString: $payload Response: OK, payloads delivered: $newSize"
+                              line     = s"$tsString: $payload Response: OK, events delivered: $newSize"
                               _       <- putStrLn(line)
                             } yield Response.status(Status.OK)
                           else

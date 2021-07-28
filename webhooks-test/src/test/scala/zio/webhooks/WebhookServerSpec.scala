@@ -792,7 +792,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
                   f         <- requests.take.fork
-                  _         <- WebhookServer.start.debug("restarted")
+                  _         <- WebhookServer.start
                   _         <- f.join
                 } yield assertCompletes
             }
