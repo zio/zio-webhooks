@@ -11,7 +11,7 @@ Microlibrary for reliable and persistent webhook delivery.
 # Getting Started
 
 There are two ways to start a webhook server: as part of the managed construction of its live layer
-`WebhookServer.live`, or manually by calling `WebhookServer.create`. See [examples](#example-programs) for a list of code
+`WebhookServer.live`, or manually by calling `WebhookServer.start`. See [examples](#example-programs) for a list of code
 examples. The managed approach is recommended as it guarantees the server shuts down gracefully. Make sure to
 call `shutdown` on a server created manually. Either way, the server requires the following dependencies in its environment:
 

@@ -3,10 +3,9 @@ import zio.webhooks.WebhookEventStatus._
 
 /**
  * A [[WebhookEventStatus]] denotes the lifecycle of a [[WebhookEvent]]. Upon creation, an event is
- * `New`. On [[WebhookServer]] startup, events that are loaded, reloaded, or being retried are
- * marked `Delivering`. Once the server gets back a success from the webhook URL, the event is
- * marked `Delivered`. If after 7 days our webhook fails to delivery any events, we mark all events
- * under that webhook `Failed`.
+ * `New`. On [[WebhookServer]] startup, events that are being delivered or retried are marked
+ * `Delivering`. Once the dispatcher gets back a 200 success from the endpoint, the event is marked
+ * `Delivered`. If retries for a webhook times out, we mark all events under that webhook `Failed`.
  */
 sealed trait WebhookEventStatus extends Product with Serializable {
   final def isDone: Boolean = !isPending

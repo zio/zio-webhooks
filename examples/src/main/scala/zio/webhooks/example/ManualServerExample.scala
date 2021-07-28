@@ -45,9 +45,8 @@ object ManualServerExample extends App {
   // the example finishes.
   private def program =
     for {
-      server <- WebhookServer.create
+      server <- WebhookServer.start
       _      <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _      <- server.start
       _      <- httpEndpointServer.start(port, httpApp).fork
       _      <- TestWebhookRepo.setWebhook(webhook)
       _      <- events

@@ -156,6 +156,7 @@ private[webhooks] final case class RetryDispatcher(
       _               <- handleEvent
                            .catchAll(errorHub.publish(_))
                            .repeatUntilM(_ => shutdownSignal.isDone)
+                           .fork
                            .unless(isShutdown)
                            .provideLayer(ZLayer.succeed(clock))
     } yield ()

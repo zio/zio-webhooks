@@ -7,9 +7,9 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
+import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
  * An example of a webhook server performing event recovery on restart for a webhook with
@@ -20,24 +20,31 @@ import zio.webhooks.testkit._
 object EventRecoveryExample extends App {
 
   // server answers with 200 70% of the time, 404 the other
-  private lazy val httpApp = HttpApp.collectM {
-    case request @ Method.POST -> Root / "endpoint" =>
-      val payload = request.getBodyAsString
-      for {
-        n        <- random.nextIntBounded(100)
-        tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response <- ZIO
-                      .foreach(payload) { payload =>
-                        if (n < 70)
-                          putStrLn(tsString + payload + " Response: OK") *>
-                            UIO(Response.status(Status.OK))
-                        else
-                          putStrLn(tsString + payload + " Response: NOT_FOUND") *>
-                            UIO(Response.status(Status.NOT_FOUND))
-                      }
-                      .orDie
-      } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
-  }
+  private def httpApp(payloads: Ref[Set[String]]) =
+    HttpApp.collectM {
+      case request @ Method.POST -> Root / "endpoint" =>
+        val payload = request.getBodyAsString
+        for {
+          n        <- random.nextIntBounded(100)
+          tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]")
+          response <- ZIO
+                        .foreach(payload) { payload =>
+                          if (n < 0)
+                            for {
+                              newSize <- payloads.modify { set =>
+                                           val newSet = set + payload
+                                           (newSet.size, newSet)
+                                         }
+                              line     = s"$tsString: $payload Response: OK, payloads delivered: $newSize"
+                              _       <- putStrLn(line)
+                            } yield Response.status(Status.OK)
+                          else
+                            putStrLn(s"$tsString: $payload Response: NOT_FOUND") *>
+                              UIO(Response.status(Status.NOT_FOUND))
+                        }
+                        .orDie
+        } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
+    }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
@@ -59,17 +66,16 @@ object EventRecoveryExample extends App {
 
   private def program =
     for {
-      webhookServer <- WebhookServer.create
+      webhookServer <- WebhookServer.start
       _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _             <- webhookServer.start
-      _             <- httpEndpointServer.start(port, httpApp).fork
+      payloads      <- Ref.make(Set.empty[String])
+      _             <- httpEndpointServer.start(port, httpApp(payloads)).fork
       _             <- TestWebhookRepo.setWebhook(webhook)
       _             <- events.take(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- webhookServer.shutdown
       _             <- putStrLn("Shutdown successful")
-      webhookServer <- WebhookServer.create
+      webhookServer <- WebhookServer.start
       _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _             <- webhookServer.start
       _             <- putStrLn("Restart successful")
       _             <- events.drop(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- clock.sleep(Duration.Infinity)
