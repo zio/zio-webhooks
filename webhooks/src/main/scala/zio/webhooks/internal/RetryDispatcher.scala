@@ -124,7 +124,7 @@ private[webhooks] final case class RetryDispatcher(
                                       val retryState = map(webhookId)
                                       retryState.backoff.map(retryQueue.take.delay(_)).getOrElse(retryQueue.take)
                                     }
-                           event <- shutdownSignal.await.raceEither(take).map(_.toOption)
+                           event <- shutdownSignal.await.disconnect.raceEither(take.disconnect).map(_.toOption)
                            _     <- ZIO.foreach_(event) { event =>
                                       val webhookId = event.key.webhookId
                                       for {

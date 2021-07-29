@@ -23,7 +23,7 @@ import java.io.IOException
  * A `live` server layer is provided in the companion object for convenience and proper resource
  * management, ensuring [[shutdown]] is called by the finalizer.
  */
-final class WebhookServer private (
+final case class WebhookServer private (
   private val clock: Clock.Service,
   private val config: WebhookServerConfig,
   private val eventRepo: WebhookEventRepo,
@@ -81,8 +81,8 @@ final class WebhookServer private (
    */
   def start: UIO[Any] =
     for {
-      _ <- startEventRecovery
       _ <- startRetryMonitoring
+      _ <- startEventRecovery
       _ <- startNewEventSubscription
       _ <- startupLatch.await
     } yield ()
@@ -106,6 +106,7 @@ final class WebhookServer private (
                )
                .catchAll(errorHub.publish)
            )
+      _ <- stateRepo.clearState
       _ <- (mergeShutdown(eventRepo.recoverEvents, shutdownSignal).foreach(retryController.enqueueRetry) *>
                shutdownLatch.countDown).fork
     } yield ()
@@ -147,7 +148,7 @@ final class WebhookServer private (
       isShutDown         <- shutdownSignal.isDone
       attemptRetryEnqueue = retryController.enqueueRetry(event).race(shutdownSignal.await)
       attemptDelivery     = eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering) *>
-                              (if (isRetrying)
+                              (if (isRetrying && webhook.deliveryMode.semantics == AtLeastOnce)
                                  attemptRetryEnqueue.unless(isShutDown)
                                else
                                  deliverEvent(batchDispatcher, event, webhook))
@@ -230,7 +231,7 @@ object WebhookServer {
                             startupLatch,
                             webhooks
                           )
-    } yield new WebhookServer(
+    } yield WebhookServer(
       clock,
       config,
       eventRepo,

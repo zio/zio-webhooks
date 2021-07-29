@@ -187,6 +187,28 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ) { (errors, _) =>
               assertM(errors.take)(equalTo(expectedError))
             }
+          },
+          testM("do not retry events") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+
+            val event = WebhookEvent(
+              WebhookEventKey(WebhookEventId(0), WebhookId(0)),
+              WebhookEventStatus.New,
+              "test event payload",
+              plaintextContentHeaders
+            )
+
+            webhooksTestScenario(
+              initialStubResponses = UStream.repeat(Left(None)),
+              webhooks = List(webhook),
+              events = List(event),
+              ScenarioInterest.Requests
+            ) { (requests, _) =>
+              for {
+                _             <- requests.take
+                secondRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
+              } yield assert(secondRequest)(isNone)
+            }
           }
         ),
         suite("webhooks with at-least-once delivery")(
@@ -776,7 +798,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             val event   = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
               WebhookEventStatus.New,
-              "event content",
+              "recovered event",
               plaintextContentHeaders
             )
 
@@ -791,12 +813,11 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2)
                   _         <- server.shutdown
-                  f         <- requests.take.fork
                   _         <- WebhookServer.start
-                  _         <- f.join
+                  _         <- requests.take.fork
                 } yield assertCompletes
             }
-          } @@ timeout(1.second) @@ ignore, // TODO: debug race condition in this test
+          },
           testM("resumes timeout duration for retries") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val event   = WebhookEvent(
@@ -824,8 +845,15 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _          <- requests.take
                 } yield assert(lastStatus)(isSome(isSubtype[WebhookStatus.Unavailable](anything)))
             }
+          },
+          testM("clears persisted state after loading") {
+            for {
+              _              <- WebhookServer.start.flatMap(_.shutdown)
+              persistedState <- ZIO.serviceWith[WebhookStateRepo](_.getState)
+              _              <- WebhookServer.start
+              _              <- ZIO.serviceWith[WebhookStateRepo](_.getState).repeatUntil(_.isEmpty)
+            } yield assert(persistedState)(isSome(anything))
           }
-          // TODO: test continues retrying for multiple webhooks
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
     ) @@ timeout(10.seconds)

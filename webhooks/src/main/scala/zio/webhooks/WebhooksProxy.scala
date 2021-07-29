@@ -13,7 +13,7 @@ import zio.webhooks.WebhooksProxy.UpdateMode.PollingFunction
  * Mediates access to [[Webhook]]s, caching webhooks in memory while keeping them updated by polling
  * for some interval or with a subscription.
  */
-final class WebhooksProxy private (
+final case class WebhooksProxy private (
   private val cache: Ref[Map[WebhookId, Webhook]],
   private val webhookRepo: WebhookRepo,
   private val updateMode: UpdateMode
@@ -87,7 +87,7 @@ object WebhooksProxy {
   private def start(webhookRepo: WebhookRepo, updateMode: UpdateMode): URIO[Clock, WebhooksProxy] =
     for {
       cache <- Ref.make(Map.empty[WebhookId, Webhook])
-      proxy  = new WebhooksProxy(cache, webhookRepo, updateMode)
+      proxy  = WebhooksProxy(cache, webhookRepo, updateMode)
       _     <- proxy.start.fork
     } yield proxy
 

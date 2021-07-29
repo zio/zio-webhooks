@@ -11,6 +11,11 @@ import zio._
 trait WebhookStateRepo {
 
   /**
+   * Clears the encoded `String` state value.
+   */
+  def clearState: UIO[Unit]
+
+  /**
    * Retrieves the encoded `String` state value.
    */
   def getState: UIO[Option[String]]
@@ -23,6 +28,9 @@ trait WebhookStateRepo {
 
 object WebhookStateRepo {
   // accessors
+  def clearState: URIO[Has[WebhookStateRepo], Unit] =
+    ZIO.serviceWith[WebhookStateRepo](_.clearState)
+
   def getState: URIO[Has[WebhookStateRepo], Option[String]] =
     ZIO.serviceWith[WebhookStateRepo](_.getState)
 
