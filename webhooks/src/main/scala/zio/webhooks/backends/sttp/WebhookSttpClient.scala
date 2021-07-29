@@ -1,7 +1,7 @@
 package zio.webhooks.backends.sttp
 
-import _root_.sttp.client._
 import _root_.sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend
+import _root_.sttp.client._
 import sttp.model.Uri
 import zio._
 import zio.webhooks.WebhookError.BadWebhookUrlError
@@ -26,7 +26,10 @@ final case class WebhookSttpClient(sttpClient: SttpClient, permits: Semaphore) e
         response   <- sttpClient
                         .send(sttpRequest)
                         .map(response => WebhookHttpResponse(response.code.code))
-                        .refineToOrDie[SttpClientException]
+                        .refineOrDie {
+                          case e: SttpClientException   => e
+                          case e: IllegalStateException => e // capture request errors made after shutting down
+                        }
                         .mapError(e => Right(new IOException(e.getMessage)))
       } yield response
     }

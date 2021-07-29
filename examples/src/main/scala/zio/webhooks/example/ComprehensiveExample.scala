@@ -10,6 +10,7 @@ import zio.random.Random
 import zio.stream.UStream
 import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
+import zio.webhooks.example.RestartingWebhookServer.startServer
 import zio.webhooks.testkit._
 
 import java.io.IOException
@@ -19,33 +20,14 @@ import java.io.IOException
  * operation of a webhook server.
  */
 object ComprehensiveExample extends App {
-  // JSON webhook event stream
-  private lazy val nEvents = UStream
-    .iterate(0L)(_ + 1)
-    .zip(UStream.repeatEffect(random.nextIntBounded(webhookCount)))
-    .map {
-      case (i, webhookId) =>
-        WebhookEvent(
-          WebhookEventKey(WebhookEventId(i), WebhookId(webhookId.toLong)),
-          WebhookEventStatus.New,
-          s"""{"event":$i}""",
-          Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-        )
-    }
-
-  private lazy val port = 8080
 
   private def program =
     for {
-      _ <- EndpointBehavior.run.fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _ <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
-      _ <- nEvents.schedule(Schedule.spaced(16.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- RestartingWebhookServer.start.fork
+      _ <- RandomEndpointBehavior.run.fork
+      _ <- clock.sleep(Duration.Infinity)
     } yield ()
 
-  /**
-   * The webhook server is started as part of the layer construction. See [[WebhookServer.live]].
-   */
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
       .injectCustom(
@@ -56,66 +38,29 @@ object ComprehensiveExample extends App {
         WebhookSttpClient.live,
         WebhookServerConfig.default,
         WebhookServerConfig.dispatchConcurrency,
-        WebhookServer.live,
         WebhooksProxy.live
       )
       .exitCode
-
-  private lazy val webhooks = (0 until 250).map { i =>
-    Webhook(
-      id = WebhookId(i.toLong),
-      url = s"http://0.0.0.0:$port/endpoint/$i",
-      label = s"test webhook $i",
-      WebhookStatus.Enabled,
-      WebhookDeliveryMode.SingleAtLeastOnce
-    )
-  } ++ (250 until 500).map { i =>
-    Webhook(
-      id = WebhookId(i.toLong),
-      url = s"http://0.0.0.0:$port/endpoint/$i",
-      label = s"test webhook $i",
-      WebhookStatus.Enabled,
-      WebhookDeliveryMode.SingleAtMostOnce
-    )
-  } ++ (500 until 750).map { i =>
-    Webhook(
-      id = WebhookId(i.toLong),
-      url = s"http://0.0.0.0:$port/endpoint/$i",
-      label = s"test webhook $i",
-      WebhookStatus.Enabled,
-      WebhookDeliveryMode.BatchedAtLeastOnce
-    )
-  } ++ (750 until 1000).map { i =>
-    Webhook(
-      id = WebhookId(i.toLong),
-      url = s"http://0.0.0.0:$port/endpoint/$i",
-      label = s"test webhook $i",
-      WebhookStatus.Enabled,
-      WebhookDeliveryMode.BatchedAtMostOnce
-    )
-  }
-
-  private lazy val webhookCount = 1000
 }
 
-sealed trait EndpointBehavior extends Product with Serializable { self =>
-  import EndpointBehavior._
+sealed trait RandomEndpointBehavior extends Product with Serializable { self =>
+  import RandomEndpointBehavior._
 
   def start: ZIO[ZEnv, Throwable, Any] =
     self match {
-      case EndpointBehavior.Down   =>
+      case RandomEndpointBehavior.Down   =>
         ZIO.unit
-      case EndpointBehavior.Flaky  =>
+      case RandomEndpointBehavior.Flaky  =>
         httpEndpointServer.start(port, flakyBehavior)
-      case EndpointBehavior.Normal =>
+      case RandomEndpointBehavior.Normal =>
         httpEndpointServer.start(port, normalBehavior)
     }
 }
 
-object EndpointBehavior {
-  case object Down   extends EndpointBehavior
-  case object Flaky  extends EndpointBehavior
-  case object Normal extends EndpointBehavior
+object RandomEndpointBehavior {
+  case object Down   extends RandomEndpointBehavior
+  case object Flaky  extends RandomEndpointBehavior
+  case object Normal extends RandomEndpointBehavior
 
   val flakyBehavior = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" / id =>
@@ -160,27 +105,125 @@ object EndpointBehavior {
 
   private lazy val port = 8080
 
-  val randomBehavior: URIO[Random, EndpointBehavior] =
+  val randomBehavior: URIO[Random, RandomEndpointBehavior] =
     random.nextIntBounded(3).map {
       case 0 => Normal
       case 1 => Flaky
-      case 2 => Down
-      case _ => ??? // impossible with nextIntBounded(3)
+      case _ => Down
     }
 
-  def run: ZIO[zio.ZEnv, IOException, Unit] =
+  def run: ZIO[ZEnv, IOException, Unit] =
     UStream.repeatEffect(randomBehavior).foreach { behavior =>
       for {
         _ <- putStrLn(s"Endpoint server behavior: $behavior")
-        f <- behavior.start.fork
+        f <- behavior.start.fork.delay(2.seconds)
         _ <- f.interrupt.delay(1.minute)
       } yield ()
     }
 }
 
-sealed trait ServerBehavior extends Product with Serializable
-object ServerBehavior {
-  case object Failure extends ServerBehavior
-  case object Normal  extends ServerBehavior
-  case object Restart extends ServerBehavior
+sealed trait RestartingWebhookServer extends Product with Serializable { self =>
+  def run(ref: Ref[Fiber.Runtime[Nothing, WebhookServer]]) =
+    self match {
+      case RestartingWebhookServer.Restart =>
+        for {
+          fiber  <- ref.get
+          server <- fiber.join
+          _      <- server.shutdown
+          fiber  <- startServer.fork
+          _      <- ref.set(fiber)
+        } yield ()
+      case RestartingWebhookServer.Failure =>
+        for {
+          fiber <- ref.get
+          _     <- fiber.interrupt // kill server fiber tree
+          fiber <- startServer.fork
+          _     <- ref.set(fiber)
+        } yield ()
+    }
+}
+
+object RestartingWebhookServer {
+  case object Failure extends RestartingWebhookServer
+  case object Restart extends RestartingWebhookServer
+
+  // JSON webhook event stream
+  private lazy val events = UStream
+    .iterate(0L)(_ + 1)
+    .zip(UStream.repeatEffect(random.nextIntBounded(webhookCount)))
+    .map {
+      case (i, webhookId) =>
+        WebhookEvent(
+          WebhookEventKey(WebhookEventId(i), WebhookId(webhookId.toLong)),
+          WebhookEventStatus.New,
+          s"""{"event":$i}""",
+          Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+        )
+    }
+
+  private lazy val port = 8080
+
+  private lazy val randomRestart: URIO[Random, Option[RestartingWebhookServer]] =
+    random.nextIntBounded(3).map {
+      case 0 => Some(Restart)
+      case 1 => Some(Failure)
+      case _ => None
+    }
+
+  def start =
+    for {
+      _     <- putStrLn(s"Starting webhook server")
+      fiber <- startServer.fork
+      ref   <- Ref.make(fiber)
+      _     <- UStream.repeatEffect(randomRestart).schedule(Schedule.spaced(10.seconds)).foreach { behavior =>
+                 putStrLn(s"Webhook server restart: $behavior") *>
+                   ZIO.foreach_(behavior)(_.run(ref)).delay(2.second)
+               }
+    } yield ()
+
+  private def startServer =
+    for {
+      server <- WebhookServer.start
+      _      <- server.subscribeToErrors
+                  .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                  .fork
+      _      <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
+      _      <- events.schedule(Schedule.spaced(12.micros)).foreach(TestWebhookEventRepo.createEvent)
+    } yield server
+
+  private lazy val webhooks = (0 until 250).map { i =>
+    Webhook(
+      id = WebhookId(i.toLong),
+      url = s"http://0.0.0.0:$port/endpoint/$i",
+      label = s"test webhook $i",
+      WebhookStatus.Enabled,
+      WebhookDeliveryMode.SingleAtLeastOnce
+    )
+  } ++ (250 until 500).map { i =>
+    Webhook(
+      id = WebhookId(i.toLong),
+      url = s"http://0.0.0.0:$port/endpoint/$i",
+      label = s"test webhook $i",
+      WebhookStatus.Enabled,
+      WebhookDeliveryMode.SingleAtMostOnce
+    )
+  } ++ (500 until 750).map { i =>
+    Webhook(
+      id = WebhookId(i.toLong),
+      url = s"http://0.0.0.0:$port/endpoint/$i",
+      label = s"test webhook $i",
+      WebhookStatus.Enabled,
+      WebhookDeliveryMode.BatchedAtLeastOnce
+    )
+  } ++ (750 until 1000).map { i =>
+    Webhook(
+      id = WebhookId(i.toLong),
+      url = s"http://0.0.0.0:$port/endpoint/$i",
+      label = s"test webhook $i",
+      WebhookStatus.Enabled,
+      WebhookDeliveryMode.BatchedAtMostOnce
+    )
+  }
+
+  private lazy val webhookCount = 1000
 }
