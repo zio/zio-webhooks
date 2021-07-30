@@ -13,9 +13,10 @@ import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
  * An example of a webhook server performing event recovery on restart for a webhook with
- * at-least-once delivery semantics. Half of `n` events are published, followed by the other half of
- * `n` events on restart. Events that haven't been marked delivered prior to shutdown are retried on
- * restart. All `n` events are eventually delivered.
+ * at-least-once delivery semantics. A third of `n` events are published, followed by the second
+ * third of `n` events on restart, and the last third on a second restart. Events that haven't been
+ * marked delivered prior to shutdown are retried on restart. All `n` events are eventually
+ * delivered.
  */
 object EventRecoveryExample extends App {
 
