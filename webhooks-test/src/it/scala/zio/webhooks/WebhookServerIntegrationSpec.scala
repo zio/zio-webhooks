@@ -249,7 +249,7 @@ object RandomEndpointBehavior {
                case Down  =>
                  f.interrupt.delay(2.seconds)
                case Flaky =>
-                 f.interrupt.delay(20.seconds)
+                 f.interrupt.delay(10.seconds)
              }
       } yield ()
     }
