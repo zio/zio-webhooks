@@ -856,7 +856,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(10.seconds)
+    ) @@ timeout(20.seconds)
 }
 
 object WebhookServerSpecUtil {
