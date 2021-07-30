@@ -204,7 +204,7 @@ object RandomEndpointBehavior {
                              val singlePayload = body.fromJson[Int].map(Left(_))
                              val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                              val payload       = singlePayload.orElseThat(batchPayload).toOption
-                             if (n < 60)
+                             if (n < 80)
                                ZIO
                                  .foreach_(payload) {
                                    case Left(i)   =>
@@ -238,17 +238,19 @@ object RandomEndpointBehavior {
   }
 
   val randomBehavior: URIO[Random, RandomEndpointBehavior] =
-    random.nextBoolean.map {
-      case true  => Flaky
-      case false => Down
-    }
+    random.nextIntBounded(100).map(n => if (n < 80) Flaky else Down)
 
   def run(delivered: SubscriptionRef[Set[Int]]) =
     UStream.repeatEffect(randomBehavior).foreach { behavior =>
       for {
         _ <- putStrLn(s"Endpoint server behavior: $behavior")
         f <- behavior.start(delivered).fork
-        _ <- f.interrupt.delay(10.seconds)
+        _ <- behavior match {
+               case Down  =>
+                 f.interrupt.delay(2.seconds)
+               case Flaky =>
+                 f.interrupt.delay(20.seconds)
+             }
       } yield ()
     }
 }
