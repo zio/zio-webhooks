@@ -121,25 +121,23 @@ object WebhookServerIntegrationSpecUtil {
   def reliableEndpoint(delivered: SubscriptionRef[Set[Int]]) =
     HttpApp.collectM {
       case request @ Method.POST -> Root / "endpoint" / (id @ _) =>
-        val response =
-          for {
-            randomDelay <- random.nextIntBounded(200).map(_.millis)
-            response    <- ZIO
-                             .foreach_(request.getBodyAsString) { body =>
-                               val singlePayload = body.fromJson[Int].map(Left(_))
-                               val batchPayload  = body.fromJson[List[Int]].map(Right(_))
-                               val payload       = singlePayload.orElseThat(batchPayload).toOption
-                               ZIO.foreach_(payload) {
-                                 case Left(i)   =>
-                                   delivered.ref.update(set => UIO(set + i))
-                                 case Right(is) =>
-                                   delivered.ref.update(set => UIO(set ++ is))
-                               }
+        for {
+          randomDelay <- random.nextIntBounded(200).map(_.millis)
+          response    <- ZIO
+                           .foreach_(request.getBodyAsString) { body =>
+                             val singlePayload = body.fromJson[Int].map(Left(_))
+                             val batchPayload  = body.fromJson[List[Int]].map(Right(_))
+                             val payload       = singlePayload.orElseThat(batchPayload).toOption
+                             ZIO.foreach_(payload) {
+                               case Left(i)   =>
+                                 delivered.ref.update(set => UIO(set + i))
+                               case Right(is) =>
+                                 delivered.ref.update(set => UIO(set ++ is))
                              }
-                             .as(Response.status(Status.OK))
-                             .delay(randomDelay) // simulate network/server latency
-          } yield response
-        response.uninterruptible
+                           }
+                           .as(Response.status(Status.OK))
+                           .delay(randomDelay) // simulate network/server latency
+        } yield response
     }
 
   lazy val testWebhooks: IndexedSeq[Webhook] = (0 until 250).map { i =>
@@ -227,18 +225,16 @@ object RandomEndpointBehavior {
 
   val normalBehavior = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" / id =>
-      val response =
-        for {
-          randomDelay <- random.nextIntBounded(200).map(_.millis)
-          response    <- ZIO
-                           .foreach(request.getBodyAsString) { str =>
-                             putStrLn(s"""SERVER RECEIVED PAYLOAD: webhook: $id $str OK""")
-                           }
-                           .as(Response.status(Status.OK))
-                           .orDie
-                           .delay(randomDelay)
-        } yield response
-      response.uninterruptible
+      for {
+        randomDelay <- random.nextIntBounded(200).map(_.millis)
+        response    <- ZIO
+                         .foreach(request.getBodyAsString) { str =>
+                           putStrLn(s"""SERVER RECEIVED PAYLOAD: webhook: $id $str OK""")
+                         }
+                         .as(Response.status(Status.OK))
+                         .orDie
+                         .delay(randomDelay)
+      } yield response
   }
 
   val randomBehavior: URIO[Random, RandomEndpointBehavior] =
@@ -252,7 +248,7 @@ object RandomEndpointBehavior {
       for {
         _ <- putStrLn(s"Endpoint server behavior: $behavior")
         f <- behavior.start(delivered).fork
-        _ <- f.interrupt.delay(3.seconds)
+        _ <- f.interrupt.delay(10.seconds)
       } yield ()
     }
 }
