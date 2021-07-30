@@ -71,13 +71,18 @@ object EventRecoveryExample extends App {
       payloads      <- Ref.make(Set.empty[String])
       _             <- httpEndpointServer.start(port, httpApp(payloads)).fork
       _             <- TestWebhookRepo.setWebhook(webhook)
-      _             <- events.take(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- events.take(n / 3).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- webhookServer.shutdown
       _             <- putStrLn("Shutdown successful")
       webhookServer <- WebhookServer.start
       _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _             <- putStrLn("Restart successful")
-      _             <- events.drop(n / 2).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- events.drop(n / 3).take(n / 3).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- webhookServer.shutdown
+      webhookServer <- WebhookServer.start
+      _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _             <- putStrLn("Restart successful")
+      _             <- events.drop(2 * n / 3).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
       _             <- clock.sleep(Duration.Infinity)
     } yield ()
 
