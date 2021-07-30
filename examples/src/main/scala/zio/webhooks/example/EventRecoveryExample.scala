@@ -13,10 +13,10 @@ import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
  * An example of a webhook server performing event recovery on restart for a webhook with
- * at-least-once delivery semantics. A third of `n` events are published, followed by the second
- * third of `n` events on restart, and the last third on a second restart. Events that haven't been
- * marked delivered prior to shutdown are retried on restart. All `n` events are eventually
- * delivered.
+ * at-least-once delivery semantics and a flaky endpoint. A third of `n` events are published,
+ * followed by the second third of `n` events on restart, and the last third on a second restart.
+ * Events that haven't been marked delivered prior to shutdown are retried on restart. All `n`
+ * events are eventually delivered.
  */
 object EventRecoveryExample extends App {
 
@@ -68,22 +68,38 @@ object EventRecoveryExample extends App {
   private def program =
     for {
       webhookServer <- WebhookServer.start
-      _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _             <- webhookServer.subscribeToErrors
+                         .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                         .fork
       payloads      <- Ref.make(Set.empty[String])
       _             <- httpEndpointServer.start(port, httpApp(payloads)).fork
       _             <- TestWebhookRepo.setWebhook(webhook)
-      _             <- events.take(n / 3).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- events
+                         .take(n / 3)
+                         .schedule(Schedule.spaced(50.micros))
+                         .foreach(TestWebhookEventRepo.createEvent)
       _             <- webhookServer.shutdown
       _             <- putStrLn("Shutdown successful")
       webhookServer <- WebhookServer.start
-      _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _             <- webhookServer.subscribeToErrors
+                         .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                         .fork
       _             <- putStrLn("Restart successful")
-      _             <- events.drop(n / 3).take(n / 3).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- events
+                         .drop(n / 3)
+                         .take(n / 3)
+                         .schedule(Schedule.spaced(50.micros))
+                         .foreach(TestWebhookEventRepo.createEvent)
       _             <- webhookServer.shutdown
       webhookServer <- WebhookServer.start
-      _             <- webhookServer.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _             <- webhookServer.subscribeToErrors
+                         .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                         .fork
       _             <- putStrLn("Restart successful")
-      _             <- events.drop(2 * n / 3).schedule(Schedule.spaced(50.micros)).foreach(TestWebhookEventRepo.createEvent)
+      _             <- events
+                         .drop(2 * n / 3)
+                         .schedule(Schedule.spaced(50.micros))
+                         .foreach(TestWebhookEventRepo.createEvent)
       _             <- clock.sleep(Duration.Infinity)
     } yield ()
 
@@ -96,7 +112,6 @@ object EventRecoveryExample extends App {
         TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.default,
-        WebhookServerConfig.dispatchConcurrency,
         WebhooksProxy.live
       )
       .exitCode

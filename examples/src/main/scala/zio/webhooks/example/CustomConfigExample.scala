@@ -23,7 +23,7 @@ object CustomConfigExample extends App {
     ZLayer.succeed(
       WebhookServerConfig(
         errorSlidingCapacity = 64,
-        maxDispatchConcurrency = 512,
+        maxRequestsInFlight = 512,
         WebhookServerConfig.Retry(
           capacity = 1024,
           exponentialBase = 100.millis,
@@ -91,7 +91,6 @@ object CustomConfigExample extends App {
         TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         customConfig,
-        customConfig.map(config => Has(config.get.maxDispatchConcurrency)),
         WebhookServer.live,
         WebhooksProxy.live
       )

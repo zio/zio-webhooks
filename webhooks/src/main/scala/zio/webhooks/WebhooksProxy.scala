@@ -72,7 +72,7 @@ final case class WebhooksProxy private (
           case WebhookUpdate.WebhookRemoved(webhookId) =>
             cache.update(_ - webhookId)
           case WebhookUpdate.WebhookChanged(webhook)   =>
-            // we only update if the webhook is relevant i.e., getWebhook was called to get it before
+            // we only update if the webhook is relevant, i.e. getWebhook was called to get it before
             cache.update(_.updateWith(webhook.id)(_.map(_ => webhook)))
         }
     }

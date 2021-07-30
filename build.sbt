@@ -70,6 +70,7 @@ lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
     libraryDependencies ++= Seq(
       "dev.zio"              %% "zio-test"     % zioVersion      % "it,test",
       "dev.zio"              %% "zio-test-sbt" % zioVersion      % "it,test",
+      "dev.zio"              %% "zio-json"     % zioJson         % "it",
       "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "it,test",
       "io.d11"               %% "zhttp"        % zioHttpVersion  % "it"
     ),

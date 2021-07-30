@@ -70,7 +70,6 @@ object BasicExample extends App {
         TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.default,
-        WebhookServerConfig.dispatchConcurrency,
         WebhookServer.live,
         WebhooksProxy.live
       )

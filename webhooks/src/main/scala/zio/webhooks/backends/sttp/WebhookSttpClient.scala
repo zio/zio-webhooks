@@ -40,10 +40,10 @@ object WebhookSttpClient {
   /**
    * A layer built with an STTP ZIO backend with the default settings
    */
-  val live: RLayer[Has[Int], Has[WebhookHttpClient]] = {
+  val live: RLayer[Has[WebhookServerConfig], Has[WebhookHttpClient]] = {
     for {
       sttpBackend <- AsyncHttpClientZioBackend.managed()
-      capacity    <- ZManaged.service[Int]
+      capacity    <- ZManaged.service[WebhookServerConfig].map(_.maxRequestsInFlight)
       permits     <- Semaphore.make(capacity.toLong).toManaged_
     } yield WebhookSttpClient(sttpBackend, permits)
   }.toLayer

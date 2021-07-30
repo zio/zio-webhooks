@@ -37,7 +37,6 @@ object ComprehensiveExample extends App {
         TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.default,
-        WebhookServerConfig.dispatchConcurrency,
         WebhooksProxy.live
       )
       .exitCode
