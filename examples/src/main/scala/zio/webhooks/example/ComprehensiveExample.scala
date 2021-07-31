@@ -10,7 +10,7 @@ import zio.random.Random
 import zio.stream.UStream
 import zio.webhooks._
 import zio.webhooks.backends.sttp.WebhookSttpClient
-import zio.webhooks.example.RestartingWebhookServer.startServer
+import zio.webhooks.example.RestartingWebhookServer.testWebhooks
 import zio.webhooks.testkit._
 
 import java.io.IOException
@@ -23,6 +23,7 @@ object ComprehensiveExample extends App {
 
   private def program =
     for {
+      _ <- ZIO.foreach_(testWebhooks)(TestWebhookRepo.setWebhook)
       _ <- RestartingWebhookServer.start.fork
       _ <- RandomEndpointBehavior.run.fork
       _ <- clock.sleep(Duration.Infinity)
@@ -121,30 +122,7 @@ object RandomEndpointBehavior {
     }
 }
 
-sealed trait RestartingWebhookServer extends Product with Serializable { self =>
-  def run(ref: Ref[Fiber.Runtime[Nothing, WebhookServer]]) =
-    self match {
-      case RestartingWebhookServer.Restart =>
-        for {
-          fiber  <- ref.get
-          server <- fiber.join
-          _      <- server.shutdown
-          fiber  <- startServer.fork
-          _      <- ref.set(fiber)
-        } yield ()
-      case RestartingWebhookServer.Failure =>
-        for {
-          fiber <- ref.get
-          _     <- fiber.interrupt // kill server fiber tree
-          fiber <- startServer.fork
-          _     <- ref.set(fiber)
-        } yield ()
-    }
-}
-
 object RestartingWebhookServer {
-  case object Failure extends RestartingWebhookServer
-  case object Restart extends RestartingWebhookServer
 
   // JSON webhook event stream
   private lazy val events = UStream
@@ -162,35 +140,32 @@ object RestartingWebhookServer {
 
   private lazy val port = 8080
 
-  private lazy val randomRestart: URIO[Random, Option[RestartingWebhookServer]] =
-    random.nextIntBounded(3).map {
-      case 0 => Some(Restart)
-      case 1 => Some(Failure)
-      case _ => None
-    }
-
   def start =
-    for {
-      _     <- putStrLn(s"Starting webhook server")
-      fiber <- startServer.fork
-      ref   <- Ref.make(fiber)
-      _     <- UStream.repeatEffect(randomRestart).schedule(Schedule.spaced(10.seconds)).foreach { behavior =>
-                 putStrLn(s"Webhook server restart: $behavior") *>
-                   ZIO.foreach_(behavior)(_.run(ref)).delay(2.second)
-               }
-    } yield ()
+    runServerThenShutdown.forever
 
-  private def startServer =
+  private def runServerThenShutdown =
     for {
-      server <- WebhookServer.start
-      _      <- server.subscribeToErrors
-                  .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
-                  .fork
-      _      <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
-      _      <- events.schedule(Schedule.spaced(12.micros)).foreach(TestWebhookEventRepo.createEvent)
+      server        <- WebhookServer.start
+      _             <- putStrLn("Server started")
+      _             <- server.subscribeToErrors
+                         .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                         .fork
+      stopStreaming <- Promise.make[Nothing, Unit]
+      _             <- TestWebhookEventRepo.enqueueExisting
+      _             <- events
+                         .schedule(Schedule.spaced(20.micros))
+                         .map(Some(_))
+                         .mergeTerminateRight(UStream.fromEffect(stopStreaming.await.as(None)))
+                         .collectSome
+                         .foreach(TestWebhookEventRepo.createEvent)
+                         .fork
+      duration      <- random.nextIntBetween(3000, 10000).map(_.millis)
+      _             <- server.shutdown.delay(duration)
+      _             <- putStrLn("Server shut down")
+      _             <- stopStreaming.succeed(())
     } yield server
 
-  private lazy val webhooks = (0 until 250).map { i =>
+  lazy val testWebhooks = (0 until 250).map { i =>
     Webhook(
       id = WebhookId(i.toLong),
       url = s"http://0.0.0.0:$port/endpoint/$i",

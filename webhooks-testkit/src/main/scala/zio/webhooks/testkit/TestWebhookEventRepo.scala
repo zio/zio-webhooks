@@ -9,6 +9,8 @@ import zio.webhooks._
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
 
+  def enqueueExisting: UIO[Unit]
+
   def subscribeToEvents: UManaged[Dequeue[WebhookEvent]]
 }
 
@@ -18,6 +20,9 @@ object TestWebhookEventRepo {
 
   def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.createEvent(event))
+
+  def enqueueExisting: URIO[Has[TestWebhookEventRepo], Unit] =
+    ZIO.serviceWith(_.enqueueExisting)
 
   def subscribeToEvents: URManaged[Has[TestWebhookEventRepo], Dequeue[WebhookEvent]] =
     ZManaged.service[TestWebhookEventRepo].flatMap(_.subscribeToEvents)
@@ -42,6 +47,9 @@ final private case class TestWebhookEventRepoImpl(
   def createEvent(event: WebhookEvent): UIO[Unit] =
     ref.update(_.updated(event.key, event)) <* hub.publish(event)
 
+  def enqueueExisting: UIO[Unit] =
+    ref.get.flatMap(map => ZIO.foreach_(map.values)(hub.publish))
+
   def recoverEvents: UStream[WebhookEvent] =
     UStream.fromIterableM(ref.get.map(_.values.filter(_.isDelivering)))
 
@@ -64,9 +72,7 @@ final private case class TestWebhookEventRepoImpl(
                           (None, map)
                         case Some(event) =>
                           val updatedEvent = event.copy(status = status)
-                          // remove event when done to save memory for long-running tests
-                          val updatedMap   = if (updatedEvent.isDone) map - key else map.updated(key, updatedEvent)
-                          (Some(updatedEvent), updatedMap)
+                          (Some(updatedEvent), map.updated(key, updatedEvent))
                       }
                     }
       _          <- maybeEvent match {
