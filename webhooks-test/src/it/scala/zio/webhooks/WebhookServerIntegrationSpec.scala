@@ -46,14 +46,13 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
             _                <- reliableEndpoint.interrupt
             _                <- server.shutdown
             // start restarting server and endpoint with random behavior
-            eventQueue       <- Queue.bounded[WebhookEvent](1)
-            _                <- RestartingWebhookServer.start(eventQueue).fork
+            _                <- RestartingWebhookServer.start.fork
             _                <- RandomEndpointBehavior.run(delivered).fork
             // send events for webhooks with at-least-once semantics
             _                <- singleAtLeastOnceEvents(n)
-                                  .schedule(Schedule.spaced(10.micros))
-                                  .run(ZSink.fromQueue(eventQueue))
-            _                <- batchedAtLeastOnceEvents(n).run(ZSink.fromQueue(eventQueue))
+                                  .schedule(Schedule.spaced(25.micros))
+                                  .foreach(TestWebhookEventRepo.createEvent)
+            _                <- batchedAtLeastOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
             // wait to get second half
             _                <- delivered.changes.filter(_.size == n).runHead
           } yield assertCompletes
@@ -213,7 +212,7 @@ object RandomEndpointBehavior {
                              val singlePayload = body.fromJson[Int].map(Left(_))
                              val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                              val payload       = singlePayload.orElseThat(batchPayload).toOption
-                             if (n < 80)
+                             if (n < 90)
                                ZIO
                                  .foreach_(payload) {
                                    case Left(i)   =>
@@ -256,7 +255,7 @@ object RandomEndpointBehavior {
         f <- behavior.start(delivered).fork
         _ <- behavior match {
                case Down  =>
-                 f.interrupt.delay(5.seconds)
+                 f.interrupt.delay(2.seconds)
                case Flaky =>
                  f.interrupt.delay(10.seconds)
              }
@@ -268,28 +267,20 @@ object RestartingWebhookServer {
 
   import zio.console.putStrLnErr
 
-  def start(eventQueue: Queue[WebhookEvent]) =
-    runServerThenShutdown(eventQueue).forever
+  def start =
+    runServerThenShutdown.forever
 
-  private def runServerThenShutdown(eventQueue: Queue[WebhookEvent]) =
+  private def runServerThenShutdown =
     for {
-      server        <- WebhookServer.start
-      _             <- putStrLn("Server started")
-      _             <- server.subscribeToErrors
-                         .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
-                         .fork
-      stopStreaming <- Promise.make[Nothing, Unit]
-      _             <- TestWebhookEventRepo.enqueueExisting
-      _             <- UStream
-                         .fromQueue(eventQueue)
-                         .map(Some(_))
-                         .mergeTerminateRight(UStream.fromEffect(stopStreaming.await.as(None)))
-                         .collectSome
-                         .foreach(TestWebhookEventRepo.createEvent)
-                         .fork
-      duration      <- random.nextIntBetween(3000, 10000).map(_.millis)
-      _             <- server.shutdown.delay(duration)
-      _             <- putStrLn("Server shut down")
-      _             <- stopStreaming.succeed(())
+      _        <- putStrLn("Server starting")
+      server   <- WebhookServer.start
+      _        <- putStrLn("Server started")
+      _        <- server.subscribeToErrors
+                    .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                    .fork
+      _        <- TestWebhookEventRepo.enqueueNew
+      duration <- random.nextIntBetween(5000, 7000).map(_.millis)
+      _        <- server.shutdown.delay(duration)
+      _        <- putStrLn("Server shut down")
     } yield server
 }

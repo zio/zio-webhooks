@@ -151,7 +151,7 @@ object RestartingWebhookServer {
                          .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
                          .fork
       stopStreaming <- Promise.make[Nothing, Unit]
-      _             <- TestWebhookEventRepo.enqueueExisting
+      _             <- TestWebhookEventRepo.enqueueNew
       _             <- events
                          .schedule(Schedule.spaced(20.micros))
                          .map(Some(_))
