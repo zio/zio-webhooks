@@ -361,7 +361,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             } yield testResult
           }
         ),
-        // TODO: sync webhook change tests on some other update to fix flakiness
+        // TODO: sync webhook change tests on some other update to replace live sleeps
         suite("on webhook changes")(
           testM("changing a webhook's URL eventually changes the next request URL") {
             val firstUrl  = "first url"
@@ -401,12 +401,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _               <- TestWebhookEventRepo.createEvent(firstEvent)
                   actualFirstUrl  <- requests.take.map(_.url)
                   _               <- TestWebhookRepo.setWebhook(webhook.copy(url = secondUrl))
-                  _               <- clock.sleep(150.millis).provideLayer(Clock.live)
+                  _               <- clock.sleep(250.millis).provideLayer(Clock.live)
                   _               <- TestWebhookEventRepo.createEvent(secondEvent)
                   actualSecondUrl <- requests.take.map(_.url)
                 } yield assertTrue(actualFirstUrl == firstUrl && actualSecondUrl == secondUrl)
             }
-          } @@ timeout(500.millis),
+          } @@ timeout(1.second),
           testM("toggling a webhook's status toggles event delivery") {
             val webhook =
               Webhook(
@@ -513,21 +513,21 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _           <- TestWebhookRepo.setWebhook(
                                    webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtLeastOnce)
                                  )
-                  _           <- clock.sleep(250.millis).provideLayer(Clock.live)
+                  _           <- clock.sleep(400.millis).provideLayer(Clock.live)
                   _           <- TestWebhookEventRepo.createEvent(secondEvent)
                   // retries until event is delivered
                   _           <- requests.takeN(3) race TestClock.adjust(10.millis).forever
                   _           <- TestWebhookRepo.setWebhook(
                                    webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtMostOnce)
                                  )
-                  _           <- clock.sleep(250.millis).provideLayer(Clock.live)
+                  _           <- clock.sleep(400.millis).provideLayer(Clock.live)
                   _           <- TestWebhookEventRepo.createEvent(thirdEvent)
                   _           <- requests.take
                   // shouldn't retry as we've changed webhook delivery semantics to at-most-once
-                  lastRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
+                  lastRequest <- requests.take.timeout(200.millis).provideLayer(Clock.live)
                 } yield assert(lastRequest)(isNone)
             }
-          } @@ timeout(1.second) @@ ignore, // TODO: fix buggy test
+          } @@ timeout(2.seconds),
           testM("disabling a webhook with at-least-once delivery semantics halts retries") {
             val webhook =
               Webhook(
@@ -559,7 +559,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 _          <- waitForHalt race TestClock.adjust(10.millis).forever
               } yield assertCompletes
             }
-          } @@ timeout(500.millis),
+          } @@ timeout(2.seconds),
           testM("removing a webhook for an event causes a missing webhook error to be published") {
             val webhook =
               Webhook(
@@ -599,7 +599,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               } yield assertTrue(error == MissingWebhookError(webhook.id))
             }
           } @@ timeout(500.millis)
-        ) @@ flaky
+        )
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
         testM("batches events queued up since last request") {

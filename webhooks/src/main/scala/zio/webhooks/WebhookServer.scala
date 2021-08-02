@@ -121,7 +121,6 @@ final case class WebhookServer private (
       for {
         // signal that the server is ready to accept new webhook events
         _               <- eventDequeue.poll *> startupLatch.countDown
-        isShutdown      <- shutdownSignal.isDone
         deliverFunc      = (dispatch: WebhookDispatch, _: Queue[WebhookEvent]) => deliver(dispatch)
         batchDispatcher <- ZIO.foreach(config.batchingCapacity)(
                              BatchDispatcher
@@ -132,6 +131,7 @@ final case class WebhookServer private (
                              event <- (shutdownSignal.await raceEither eventDequeue.take).map(_.toOption)
                              _     <- ZIO.foreach_(event)(handleNewEvent(batchDispatcher, _))
                            } yield ()
+        isShutdown      <- shutdownSignal.isDone
         _               <- handleEvent
                              .catchAll(errorHub.publish)
                              .repeatUntilM(_ => shutdownSignal.isDone)
