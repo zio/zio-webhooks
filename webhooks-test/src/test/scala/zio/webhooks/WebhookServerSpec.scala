@@ -406,7 +406,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   actualSecondUrl <- requests.take.map(_.url)
                 } yield assertTrue(actualFirstUrl == firstUrl && actualSecondUrl == secondUrl)
             }
-          } @@ timeout(1.second),
+          } @@ timeout(2.seconds),
           testM("toggling a webhook's status toggles event delivery") {
             val webhook =
               Webhook(
@@ -598,7 +598,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 error <- errors.take
               } yield assertTrue(error == MissingWebhookError(webhook.id))
             }
-          } @@ timeout(500.millis)
+          } @@ timeout(2.seconds)
         )
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
