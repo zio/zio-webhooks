@@ -461,7 +461,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   isSome(isSubtype[WebhookEvent](anything))
                 )
             }
-          } @@ timeout(1.second),
+          } @@ timeout(2.seconds),
           testM("toggling a webhook's delivery semantics toggles whether retries are attempted") {
             val webhook =
               Webhook(
