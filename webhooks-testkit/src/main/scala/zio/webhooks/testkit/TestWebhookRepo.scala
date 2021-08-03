@@ -34,7 +34,7 @@ object TestWebhookRepo {
   val test: ULayer[Has[TestWebhookRepo] with Has[WebhookRepo]] = {
     for {
       ref <- Ref.make(Map.empty[WebhookId, Webhook])
-      hub <- Hub.unbounded[WebhookUpdate]
+      hub <- Hub.bounded[WebhookUpdate](256)
       impl = TestWebhookRepoImpl(ref, hub)
     } yield Has.allOf[TestWebhookRepo, WebhookRepo](impl, impl)
   }.toLayerMany

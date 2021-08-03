@@ -1,7 +1,7 @@
 package zio.webhooks.backends.sttp
 
-import _root_.sttp.client._
 import _root_.sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend
+import _root_.sttp.client._
 import sttp.model.Uri
 import zio._
 import zio.webhooks.WebhookError.BadWebhookUrlError
@@ -14,23 +14,37 @@ import java.io.IOException
  * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] using sttp's ZIO backend, i.e.
  * [[sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend]].
  */
-final case class WebhookSttpClient(sttpClient: SttpClient) extends WebhookHttpClient {
+final case class WebhookSttpClient(sttpClient: SttpClient, permits: Semaphore) extends WebhookHttpClient {
 
   def post(webhookRequest: WebhookHttpRequest): IO[HttpPostError, WebhookHttpResponse] =
-    for {
-      url        <- ZIO
-                      .fromEither(Uri.parse(webhookRequest.url))
-                      .mapError(msg => Left(BadWebhookUrlError(webhookRequest.url, msg)))
-      sttpRequest = basicRequest.post(url).body(webhookRequest.content).headers(webhookRequest.headers.toMap)
-      response   <- sttpClient
-                      .send(sttpRequest)
-                      .map(response => WebhookHttpResponse(response.code.code))
-                      .refineToOrDie[IOException]
-                      .mapError(Right(_))
-    } yield response
+    permits.withPermit {
+      for {
+        url        <- ZIO
+                        .fromEither(Uri.parse(webhookRequest.url))
+                        .mapError(msg => Left(BadWebhookUrlError(webhookRequest.url, msg)))
+        sttpRequest = basicRequest.post(url).body(webhookRequest.content).headers(webhookRequest.headers.toMap)
+        response   <- sttpClient
+                        .send(sttpRequest)
+                        .map(response => WebhookHttpResponse(response.code.code))
+                        .refineOrDie {
+                          case e: SttpClientException   => e
+                          case e: IllegalStateException => e // capture request errors made after shutting down
+                        }
+                        .mapError(e => Right(new IOException(e.getMessage)))
+      } yield response
+    }
 }
 
 object WebhookSttpClient {
-  val live: TaskLayer[Has[WebhookHttpClient]] =
-    AsyncHttpClientZioBackend.managed().map(WebhookSttpClient(_)).toLayer
+
+  /**
+   * A layer built with an STTP ZIO backend with the default settings
+   */
+  val live: RLayer[Has[WebhookServerConfig], Has[WebhookHttpClient]] = {
+    for {
+      sttpBackend <- AsyncHttpClientZioBackend.managed()
+      capacity    <- ZManaged.service[WebhookServerConfig].map(_.maxRequestsInFlight)
+      permits     <- Semaphore.make(capacity.toLong).toManaged_
+    } yield WebhookSttpClient(sttpBackend, permits)
+  }.toLayer
 }

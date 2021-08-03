@@ -7,9 +7,9 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
+import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
  * An example of manually starting and shutting down the webhook server manually. Other than that,
@@ -27,10 +27,8 @@ object ManualServerExample extends App {
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
 
-  private lazy val n = 5000
-
   // JSON webhook event stream
-  private lazy val nEvents = UStream
+  private lazy val events = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -40,7 +38,6 @@ object ManualServerExample extends App {
         Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
       )
     }
-    .take(n.toLong)
 
   private lazy val port = 8080
 
@@ -48,13 +45,12 @@ object ManualServerExample extends App {
   // the example finishes.
   private def program =
     for {
-      server <- WebhookServer.create
+      server <- WebhookServer.start
       _      <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _      <- server.start
       _      <- httpEndpointServer.start(port, httpApp).fork
       _      <- TestWebhookRepo.setWebhook(webhook)
-      _      <- nEvents
-                  .schedule(Schedule.fixed(10.millis))
+      _      <- events
+                  .schedule(Schedule.spaced(50.micros).jittered)
                   .foreach(TestWebhookEventRepo.createEvent)
                   .ensuring((server.shutdown *> putStrLn("Shutdown successful")).orDie)
     } yield ()

@@ -15,7 +15,7 @@ private[webhooks] final class BatchDispatcher private (
   private val webhooks: WebhooksProxy
 ) {
 
-  private def doBatching(batchQueue: Queue[WebhookEvent], latch: Promise[Nothing, Unit]): UIO[Nothing] = {
+  private def deliverBatches(batchQueue: Queue[WebhookEvent], latch: Promise[Nothing, Unit]): UIO[Nothing] = {
     val deliverBatch = for {
       batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
       webhookId = batch.head.key.webhookId
@@ -47,7 +47,7 @@ private[webhooks] final class BatchDispatcher private (
                             }
                           }
             latch      <- Promise.make[Nothing, Unit]
-            _          <- doBatching(batchQueue, latch).fork
+            _          <- deliverBatches(batchQueue, latch).fork
             _          <- latch.await
             _          <- events.run(ZSink.fromQueue(batchQueue))
           } yield ()

@@ -8,9 +8,9 @@ import zio.duration._
 import zio.magic._
 import zio.stream._
 import zio.webhooks.WebhookError._
-import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
+import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
  * An example of how to shut down the server on the first error encountered.
@@ -54,7 +54,7 @@ object ShutdownOnFirstError extends App {
       errorFiber <- WebhookServer.getErrors.use(_.take.flip).fork
       httpFiber  <- httpEndpointServer.start(port, httpApp).fork
       _          <- TestWebhookRepo.setWebhook(webhook)
-      _          <- events.schedule(Schedule.fixed(100.millis)).foreach(TestWebhookEventRepo.createEvent).fork
+      _          <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
       _          <- errorFiber.join.onExit(_ => WebhookServer.shutdown.orDie *> httpFiber.interrupt)
     } yield ()
   }.catchAll {

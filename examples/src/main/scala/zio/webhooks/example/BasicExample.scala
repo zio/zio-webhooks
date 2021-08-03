@@ -7,9 +7,9 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
+import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
  * Runs a webhook server and a zio-http server to which webhook events are delivered. The webhook
@@ -24,18 +24,20 @@ object BasicExample extends App {
   // reliable endpoint
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
-      ZIO
-        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-        .as(Response.status(Status.OK))
+      for {
+        randomDelay <- random.nextIntBounded(300).map(_.millis)
+        response    <- ZIO
+                         .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+                         .as(Response.status(Status.OK))
+                         .delay(randomDelay) // random delay to simulate latency
+      } yield response
   }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
 
-  private lazy val n = 5000
-
   // JSON webhook event stream
-  private lazy val nEvents = UStream
+  private lazy val events = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -45,7 +47,6 @@ object BasicExample extends App {
         Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
       )
     }
-    .take(n.toLong)
 
   private lazy val port = 8080
 
@@ -54,7 +55,7 @@ object BasicExample extends App {
       _ <- httpEndpointServer.start(port, httpApp).fork
       _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.setWebhook(webhook)
-      _ <- nEvents.schedule(Schedule.fixed(10.milli)).foreach(TestWebhookEventRepo.createEvent)
+      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
   /**
