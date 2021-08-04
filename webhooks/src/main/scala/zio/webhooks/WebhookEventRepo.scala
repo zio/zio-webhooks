@@ -11,7 +11,8 @@ import zio.webhooks.WebhookError._
 trait WebhookEventRepo {
 
   /**
-   * Used by the server to recover events for webhooks with at-least-once delivery semantics.
+   * Used by the server to recover events for webhooks with at-least-once delivery semantics with
+   * state `Delivering`.
    */
   def recoverEvents: UStream[WebhookEvent]
 
