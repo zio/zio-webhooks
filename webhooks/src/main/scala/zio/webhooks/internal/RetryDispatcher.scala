@@ -6,7 +6,7 @@ import zio.prelude.NonEmptySet
 import zio.webhooks._
 
 /**
- * A [[RetryDispatcher]] represents retry delivery logic for a single webhook.
+ * A [[RetryDispatcher]] performs retry delivery for a single webhook.
  */
 private[webhooks] final case class RetryDispatcher(
   private val clock: Clock.Service,
