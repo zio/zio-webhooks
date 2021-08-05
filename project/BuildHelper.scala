@@ -4,9 +4,9 @@ import sbtbuildinfo._
 import BuildInfoKeys._
 
 object BuildHelper {
-  private val Scala212        = "2.12.12" // 2.12 & 2.13 versions are
-  private val Scala213        = "2.13.3"  // for silencer compatibility
-  private val SilencerVersion = "1.7.1"
+  private val Scala212        = "2.12.14"
+  private val Scala213        = "2.13.6"
+  private val SilencerVersion = "1.7.5"
 
   private val stdOptions = Seq(
     "-encoding",
