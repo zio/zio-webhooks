@@ -551,7 +551,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 _          <- waitForHalt race TestClock.adjust(10.millis).forever
               } yield assertCompletes
             }
-          } @@ timeout(2.seconds),
+          },
           testM("removing a webhook for an event causes a missing webhook error to be published") {
             val webhook =
               Webhook(
