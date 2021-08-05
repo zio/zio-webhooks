@@ -7,7 +7,7 @@ import zio.json._
 import zio.magic._
 import zio.stream._
 import zio.test.Assertion._
-import zio.test.TestAspect._
+import zio.test.TestAspect.{ failing, flaky, ignore, timeout }
 import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
@@ -467,7 +467,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assertCompletes
             }
           },
-          testM("toggling a webhook's delivery semantics toggles whether retries are attempted") {
+          testM("setting a webhook's delivery semantics to at-least-once enables retries") {
             val webhook =
               Webhook(
                 WebhookId(0),
@@ -484,55 +484,42 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               plaintextContentHeaders
             )
 
-            val secondEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(1), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 1",
-              plaintextContentHeaders
-            )
-
-            val thirdEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(2), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 2",
-              plaintextContentHeaders
-            )
+            val nextEvents = UStream
+              .iterate(0L)(_ + 1)
+              .map { eventId =>
+                WebhookEvent(
+                  WebhookEventKey(WebhookEventId(eventId), webhook.id),
+                  WebhookEventStatus.New,
+                  s"event payload $eventId",
+                  plaintextContentHeaders
+                )
+              }
+              .drop(1)
+              .schedule(Schedule.spaced(1.milli))
+              .provideLayer(Clock.live)
 
             webhooksTestScenario(
-              initialStubResponses = UStream[StubResponse](
-                Left(None),
-                Left(None),
-                Left(None),
-                Right(WebhookHttpResponse(200)),
-                Left(None),
-                Left(None)
-              ),
+              initialStubResponses = UStream.repeat(Left(None)),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Requests
             ) {
               (requests, _) =>
                 for {
-                  _           <- TestWebhookEventRepo.createEvent(firstEvent)
-                  _           <- requests.take
-                  _           <- TestWebhookRepo.setWebhook(
-                                   webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtLeastOnce)
-                                 )
-                  _           <- clock.sleep(400.millis).provideLayer(Clock.live)
-                  _           <- TestWebhookEventRepo.createEvent(secondEvent)
-                  // retries until event is delivered
-                  _           <- requests.takeN(3) race TestClock.adjust(10.millis).forever
-                  _           <- TestWebhookRepo.setWebhook(
-                                   webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtMostOnce)
-                                 )
-                  _           <- clock.sleep(400.millis).provideLayer(Clock.live)
-                  _           <- TestWebhookEventRepo.createEvent(thirdEvent)
-                  _           <- requests.take
-                  // shouldn't retry as we've changed webhook delivery semantics to at-most-once
-                  lastRequest <- requests.take.timeout(200.millis).provideLayer(Clock.live)
-                } yield assert(lastRequest)(isNone)
+                  _   <- TestWebhookEventRepo.createEvent(firstEvent)
+                  ref <- Ref.make(Set.empty[WebhookHttpRequest])
+                  _   <- requests.take.flatMap(req => ref.modify(attempted => (attempted(req), attempted + req)))
+                  _   <- TestWebhookRepo.setWebhook(
+                           webhook.copy(deliveryMode = WebhookDeliveryMode.SingleAtLeastOnce)
+                         )
+                  _   <- nextEvents.foreach(TestWebhookEventRepo.createEvent).fork
+                  _   <- requests.take
+                           .flatMap(req => ref.modify(attempted => (attempted(req), attempted + req)))
+                           .repeatUntil(identity)
+                  _   <- ref.set(Set.empty)
+                } yield assertCompletes
             }
-          } @@ timeout(2.seconds),
+          },
           testM("disabling a webhook with at-least-once delivery semantics halts retries") {
             val webhook =
               Webhook(
@@ -603,7 +590,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 error <- errors.take
               } yield assertTrue(error == MissingWebhookError(webhook.id))
             }
-          } @@ timeout(2.seconds)
+          } @@ timeout(2.seconds) @@ ignore // TODO: kill server on Missing*Errors
         )
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
@@ -861,7 +848,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(2.minutes)
+    ) @@ timeout(10.seconds)
 }
 
 object WebhookServerSpecUtil {
