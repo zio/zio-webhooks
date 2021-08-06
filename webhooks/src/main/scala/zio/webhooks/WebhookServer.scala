@@ -59,6 +59,37 @@ final case class WebhookServer private (
     } yield ()
   }.catchAll(errorHub.publish(_).unit)
 
+  private def deliverEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent, webhook: Webhook): UIO[Any] =
+    (batchDispatcher, webhook.batching) match {
+      case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>
+        batchDispatcher.enqueueEvent(event)
+      case _                                                        =>
+        deliver(
+          WebhookDispatch(
+            webhook.id,
+            webhook.url,
+            webhook.deliveryMode.semantics,
+            NonEmptySet.single(event)
+          )
+        ).fork
+    }
+
+  private def handleNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): IO[WebhookError, Unit] = {
+    val webhookId = event.key.webhookId
+    for {
+      isRetrying         <- retryController.isActive(webhookId)
+      webhook            <- webhooksProxy.getWebhookById(webhookId)
+      isShutDown         <- shutdownSignal.isDone
+      attemptRetryEnqueue = retryController.enqueueRetry(event).race(shutdownSignal.await)
+      attemptDelivery     = eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering) *>
+                              (if (isRetrying && webhook.deliveryMode.semantics == AtLeastOnce)
+                                 attemptRetryEnqueue.unless(isShutDown)
+                               else
+                                 deliverEvent(batchDispatcher, event, webhook))
+      _                  <- attemptDelivery.when(webhook.isEnabled)
+    } yield ()
+  }
+
   /**
    * Sets the new event status of all the events in a dispatch.
    */
@@ -139,37 +170,6 @@ final case class WebhookServer private (
         _               <- shutdownLatch.countDown
       } yield ()
     }.fork
-
-  private def handleNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): IO[WebhookError, Unit] = {
-    val webhookId = event.key.webhookId
-    for {
-      isRetrying         <- retryController.isActive(webhookId)
-      webhook            <- webhooksProxy.getWebhookById(webhookId)
-      isShutDown         <- shutdownSignal.isDone
-      attemptRetryEnqueue = retryController.enqueueRetry(event).race(shutdownSignal.await)
-      attemptDelivery     = eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering) *>
-                              (if (isRetrying && webhook.deliveryMode.semantics == AtLeastOnce)
-                                 attemptRetryEnqueue.unless(isShutDown)
-                               else
-                                 deliverEvent(batchDispatcher, event, webhook))
-      _                  <- attemptDelivery.when(webhook.isEnabled)
-    } yield ()
-  }
-
-  private def deliverEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent, webhook: Webhook): UIO[Any] =
-    (batchDispatcher, webhook.batching) match {
-      case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>
-        batchDispatcher.enqueueEvent(event)
-      case _                                                        =>
-        deliver(
-          WebhookDispatch(
-            webhook.id,
-            webhook.url,
-            webhook.deliveryMode.semantics,
-            NonEmptySet.single(event)
-          )
-        ).fork
-    }
 
   /**
    * Listens for new retries and starts retrying delivers to a webhook.

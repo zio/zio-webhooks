@@ -9,6 +9,8 @@ import zio.webhooks._
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
 
+  def dumpEventIds: UIO[Set[(Long, WebhookEventStatus)]]
+
   def enqueueNew: UIO[Unit]
 
   def subscribeToEvents: UManaged[Dequeue[WebhookEvent]]
@@ -20,6 +22,9 @@ object TestWebhookEventRepo {
 
   def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.createEvent(event))
+
+  def dumpEventIds: URIO[Has[TestWebhookEventRepo], Set[(Long, WebhookEventStatus)]] =
+    ZIO.serviceWith(_.dumpEventIds)
 
   def enqueueNew: URIO[Has[TestWebhookEventRepo], Unit] =
     ZIO.serviceWith(_.enqueueNew)
@@ -47,7 +52,10 @@ final private case class TestWebhookEventRepoImpl(
   def createEvent(event: WebhookEvent): UIO[Unit] =
     ref.update(_.updated(event.key, event)) <* hub.publish(event)
 
-  def enqueueNew: UIO[Unit] =
+  def dumpEventIds: UIO[Set[(Long, WebhookEventStatus)]] =
+    ref.get.map(_.map { case (key, ev) => (key.eventId.value, ev.status) }.toSet)
+
+  def enqueueNew: UIO[Unit]                              =
     ref.get.flatMap(map => ZIO.foreach_(map.values.filter(_.isNew))(hub.publish))
 
   def recoverEvents: UStream[WebhookEvent] =

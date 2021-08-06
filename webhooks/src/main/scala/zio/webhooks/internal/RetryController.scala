@@ -51,41 +51,42 @@ private[webhooks] final case class RetryController(
     webhookId: WebhookId,
     loadedState: PersistentRetries.PersistentRetryState
   ): IO[WebhookError, (RetryDispatcher, RetryState)] =
-    Queue.bounded[WebhookEvent](config.retry.capacity).map { retryQueue =>
-      (
-        RetryDispatcher(
-          clock,
-          config,
-          errorHub,
-          eventRepo,
-          httpClient,
-          retryStates,
-          retryQueue,
-          shutdownSignal,
-          webhookId,
-          webhooksProxy
-        ),
-        RetryState(
-          loadedState.activeSinceTime,
-          loadedState.backoff,
-          loadedState.failureCount,
-          isActive = false,
-          loadedState.lastRetryTime,
-          loadedState.timeLeft,
-          timerKillSwitch = None
-        )
-      )
-    }
+    for {
+      now <- clock.instant
+      foo <- Queue.bounded[WebhookEvent](config.retry.capacity).map { retryQueue =>
+               (
+                 RetryDispatcher(
+                   clock,
+                   config,
+                   errorHub,
+                   eventRepo,
+                   httpClient,
+                   retryStates,
+                   retryQueue,
+                   shutdownSignal,
+                   webhookId,
+                   webhooksProxy
+                 ),
+                 RetryState(
+                   now,
+                   loadedState.backoff,
+                   loadedState.failureCount,
+                   isActive = false,
+                   now,
+                   loadedState.timeLeft,
+                   timerKillSwitch = None
+                 )
+               )
+             }
+    } yield foo
 
   def persistRetries(timestamp: Instant): UIO[PersistentRetries] =
     suspendRetries(timestamp).map(map =>
       PersistentRetries(map.map {
         case (webhookId, retryState) =>
           val persistentRetry = PersistentRetries.PersistentRetryState(
-            activeSinceTime = retryState.activeSinceTime,
             backoff = retryState.backoff,
             failureCount = retryState.failureCount,
-            lastRetryTime = retryState.lastRetryTime,
             timeLeft = retryState.timeoutDuration
           )
           (webhookId.value, persistentRetry)

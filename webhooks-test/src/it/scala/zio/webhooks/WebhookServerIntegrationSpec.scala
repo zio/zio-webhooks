@@ -11,6 +11,7 @@ import zio.magic._
 import zio.random.Random
 import zio.stream._
 import zio.test._
+import zio.test.TestAspect.timeout
 import zio.webhooks.WebhookServerIntegrationSpecUtil._
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
@@ -21,43 +22,58 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
       testM("all events are delivered eventually") {
         val n = 10000L // number of events
 
-        {
-          for {
-            _                <- ZIO.foreach_(testWebhooks)(TestWebhookRepo.setWebhook)
-            delivered        <- SubscriptionRef.make(Set.empty[Int])
-            _                <- delivered.changes.collect {
-                                  case set if set.size % 100 == 0 || set.size / n.toDouble >= 0.99 =>
-                                    set.size.toString
-                                }
-                                  .foreach(size => putStrLn(s"delivered so far: $size").orDie)
-                                  .fork
-            server           <- WebhookServer.start
-            reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
-            // create events for webhooks with single delivery, at-most-once semantics
-            _                <- singleAtMostOnceEvents(n)
-                                  // pace events so we don't overwhelm the endpoint
-                                  .schedule(Schedule.spaced(25.micros))
-                                  .foreach(TestWebhookEventRepo.createEvent)
-            // create events for webhooks with batched delivery, at-most-once semantics
-            // no need to pace events as batching minimizes requests sent
-            _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
-            // wait to get half
-            _                <- delivered.changes.filter(_.size == n / 2).runHead
-            _                <- reliableEndpoint.interrupt
-            _                <- server.shutdown
-            // start restarting server and endpoint with random behavior
-            _                <- RestartingWebhookServer.start.fork
-            _                <- RandomEndpointBehavior.run(delivered).fork
-            // send events for webhooks with at-least-once semantics
-            _                <- singleAtLeastOnceEvents(n)
-                                  .schedule(Schedule.spaced(25.micros))
-                                  .foreach(TestWebhookEventRepo.createEvent)
-            _                <- batchedAtLeastOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
-            // wait to get second half
-            _                <- delivered.changes.filter(_.size == n).runHead
-          } yield assertCompletes
-        }.provideSomeLayer[IntegrationEnv](Clock.live ++ console.Console.live ++ random.Random.live)
-      }
+        (for {
+          delivered <- SubscriptionRef.make(Set.empty[Int])
+          test       = for {
+                         _                <- ZIO.foreach_(testWebhooks)(TestWebhookRepo.setWebhook)
+                         _                <- delivered.changes.collect {
+                                               case set if set.size % 100 == 0 || set.size / n.toDouble >= 0.99 =>
+                                                 set.size.toString
+                                             }
+                                               .foreach(size => putStrLn(s"delivered so far: $size").orDie)
+                                               .fork
+                         server           <- WebhookServer.start
+                         reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
+                         // create events for webhooks with single delivery, at-most-once semantics
+                         _                <- singleAtMostOnceEvents(n)
+                                               // pace events so we don't overwhelm the endpoint
+                                               .schedule(Schedule.spaced(25.micros))
+                                               .foreach(TestWebhookEventRepo.createEvent)
+                         // create events for webhooks with batched delivery, at-most-once semantics
+                         // no need to pace events as batching minimizes requests sent
+                         _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                         // wait to get half
+                         _                <- delivered.changes.filter(_.size == n / 2).runHead
+                         _                <- reliableEndpoint.interrupt
+                         _                <- server.shutdown
+                         // start restarting server and endpoint with random behavior
+                         _                <- RestartingWebhookServer.start.fork
+                         _                <- RandomEndpointBehavior.run(delivered).fork
+                         // send events for webhooks with at-least-once semantics
+                         _                <- singleAtLeastOnceEvents(n)
+                                               .schedule(Schedule.spaced(25.micros))
+                                               .foreach(TestWebhookEventRepo.createEvent)
+                         _                <- batchedAtLeastOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                         // wait to get second half
+                         _                <- delivered.changes.filter(_.size == n).runHead
+                       } yield ()
+          // dump repo and events not delivered on timeout
+          _         <- test.ensuring(
+                         for {
+                           deliveredSize <- delivered.ref.get.map(_.size)
+                           _             <- TestWebhookEventRepo.dumpEventIds
+                                              .map(_.toList.sortBy(_._1))
+                                              .debug("all IDs in repo")
+                                              .when(deliveredSize < n)
+                           _             <- delivered.ref.get
+                                              .map(delivered => ((0 until n.toInt).toSet diff delivered).toList.sorted)
+                                              .debug("not delivered")
+                                              .when(deliveredSize < n)
+                         } yield ()
+                       )
+        } yield assertCompletes)
+          .provideSomeLayer[IntegrationEnv](Clock.live ++ console.Console.live ++ random.Random.live)
+      } @@ timeout(2.minutes)
     }.injectCustom(integrationEnv)
 }
 
