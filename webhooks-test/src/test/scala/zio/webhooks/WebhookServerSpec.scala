@@ -960,7 +960,7 @@ object WebhookServerSpecUtil {
     with Has[WebhookHttpClient]
     with Clock
 
-  // TODO: keep an eye on the duplication here
+  // keep an eye on the duplication here
   def webhooksTestScenario[A](
     stubResponses: WebhookHttpRequest => StubResponses,
     webhooks: Iterable[Webhook],

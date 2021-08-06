@@ -3,7 +3,7 @@ package zio.webhooks.internal
 import zio.json._
 import zio.webhooks.internal.PersistentRetries.PersistentRetryState
 
-import java.time.{ Duration, Instant }
+import java.time.Duration
 
 /**
  * A persistent version of the [[zio.webhooks.internal.RetryState]] saved on server shutdown and
@@ -18,10 +18,8 @@ private[webhooks] object PersistentRetries {
    * Persistent version of [[zio.webhooks.internal.RetryState]].
    */
   final case class PersistentRetryState(
-    activeSinceTime: Instant,
     backoff: Option[Duration],
     failureCount: Int,
-    lastRetryTime: Instant,
     timeLeft: Duration
   )
 
