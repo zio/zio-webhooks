@@ -73,7 +73,7 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
                        )
         } yield assertCompletes)
           .provideSomeLayer[IntegrationEnv](Clock.live ++ console.Console.live ++ random.Random.live)
-      } @@ timeout(2.minutes)
+      } @@ timeout(3.minutes)
     }.injectCustom(integrationEnv)
 }
 

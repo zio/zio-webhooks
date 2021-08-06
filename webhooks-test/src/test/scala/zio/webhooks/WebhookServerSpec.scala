@@ -846,9 +846,10 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               _              <- ZIO.serviceWith[WebhookStateRepo](_.getState).repeatUntil(_.isEmpty)
             } yield assert(persistedState)(isSome(anything))
           }
+          // TODO: write unit tests for persistent retry backoff when needed
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(10.seconds)
+    ) @@ timeout(20.seconds)
 }
 
 object WebhookServerSpecUtil {
