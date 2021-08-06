@@ -79,6 +79,17 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
 
 object WebhookServerIntegrationSpecUtil {
 
+  // limit max backoff to 1 second so tests don't take too long
+  def customConfig =
+    WebhookServerConfig.default.map { hasConfig =>
+      val config = hasConfig.get
+      config.copy(
+        retry = config.retry.copy(
+          maxBackoff = 1.second
+        )
+      )
+    }
+
   // backport for 2.12
   implicit class EitherOps[A, B](either: Either[A, B]) {
 
@@ -228,7 +239,7 @@ object RandomEndpointBehavior {
                              val singlePayload = body.fromJson[Int].map(Left(_))
                              val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                              val payload       = singlePayload.orElseThat(batchPayload).toOption
-                             if (n < 90)
+                             if (n < 60)
                                ZIO
                                  .foreach_(payload) {
                                    case Left(i)   =>
@@ -295,7 +306,7 @@ object RestartingWebhookServer {
                     .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
                     .fork
       _        <- TestWebhookEventRepo.enqueueNew
-      duration <- random.nextIntBetween(5000, 7000).map(_.millis)
+      duration <- random.nextIntBetween(3000, 5000).map(_.millis)
       _        <- server.shutdown.delay(duration)
       _        <- putStrLn("Server shut down")
     } yield server

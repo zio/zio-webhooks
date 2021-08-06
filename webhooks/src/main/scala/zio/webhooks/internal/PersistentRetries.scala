@@ -17,11 +17,7 @@ private[webhooks] object PersistentRetries {
   /**
    * Persistent version of [[zio.webhooks.internal.RetryState]].
    */
-  final case class PersistentRetryState(
-    backoff: Option[Duration],
-    failureCount: Int,
-    timeLeft: Duration
-  )
+  final case class PersistentRetryState(timeLeft: Duration)
 
   object PersistentRetryState {
     implicit val decoder: JsonDecoder[PersistentRetryState] = DeriveJsonDecoder.gen
