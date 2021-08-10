@@ -804,7 +804,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           // TODO: write unit tests for persistent retry backoff when needed
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(5.seconds)
+    ) @@ timeout(20.seconds)
 }
 
 object WebhookServerSpecUtil {
