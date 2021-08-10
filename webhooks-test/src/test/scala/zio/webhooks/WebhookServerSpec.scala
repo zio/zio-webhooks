@@ -7,7 +7,7 @@ import zio.json._
 import zio.magic._
 import zio.stream._
 import zio.test.Assertion._
-import zio.test.TestAspect.{ failing, flaky, ignore, timeout }
+import zio.test.TestAspect.{ failing, flaky, timeout }
 import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
@@ -143,23 +143,17 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               )(hasSize(equalTo(n)))
             }
           },
-          testM("missing webhook errors are published") {
+          testM("server dies when webhooks are missing") {
             val idRange               = 401L to 404L
             val missingWebhookIds     = idRange.map(WebhookId(_))
             val eventsMissingWebhooks = missingWebhookIds.flatMap(id => createPlaintextEvents(1)(id))
-
-            val expectedErrorCount = missingWebhookIds.size
 
             webhooksTestScenario(
               initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
               webhooks = List.empty,
               events = eventsMissingWebhooks,
               ScenarioInterest.Errors
-            ) { (errors, _) =>
-              assertM(errors.takeBetween(expectedErrorCount, expectedErrorCount + 1))(
-                hasSameElements(idRange.map(id => MissingWebhookError(WebhookId(id))))
-              )
-            }
+            )((_, _) => assertCompletesM)
           },
           testM("bad webhook URL errors are published") {
             val webhookWithBadUrl = Webhook(
@@ -267,7 +261,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ) { (webhooks, _) =>
               for {
                 status  <- webhooks.take.map(_.status)
-                status2 <- webhooks.take.map(_.status) race TestClock.adjust(7.days).forever
+                status2 <- (webhooks.take.map(_.status) race TestClock.adjust(7.days).forever)
               } yield assert(status)(isSome(equalTo(WebhookStatus.Enabled))) &&
                 assert(status2)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
@@ -551,46 +545,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 _          <- waitForHalt race TestClock.adjust(10.millis).forever
               } yield assertCompletes
             }
-          },
-          testM("removing a webhook for an event causes a missing webhook error to be published") {
-            val webhook =
-              Webhook(
-                WebhookId(0),
-                "test url",
-                "test webhook",
-                WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
-              )
-
-            val firstEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 0",
-              plaintextContentHeaders
-            )
-
-            val secondEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(1), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 1",
-              plaintextContentHeaders
-            )
-
-            webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
-              webhooks = List(webhook),
-              events = List.empty,
-              ScenarioInterest.Errors
-            ) { (errors, _) =>
-              for {
-                _     <- TestWebhookEventRepo.createEvent(firstEvent)
-                _     <- clock.sleep(150.millis).provideLayer(Clock.live)
-                _     <- TestWebhookRepo.removeWebhook(webhook.id)
-                _     <- TestWebhookEventRepo.createEvent(secondEvent)
-                error <- errors.take
-              } yield assertTrue(error == MissingWebhookError(webhook.id))
-            }
-          } @@ timeout(2.seconds) @@ ignore // TODO: kill server on Missing*Errors
+          }
         )
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
@@ -849,7 +804,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           // TODO: write unit tests for persistent retry backoff when needed
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(20.seconds)
+    ) @@ timeout(5.seconds)
 }
 
 object WebhookServerSpecUtil {

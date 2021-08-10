@@ -60,9 +60,6 @@ object ShutdownOnFirstError extends App {
   }.catchAll {
     case BadWebhookUrlError(url, message) => putStrLnErr(s"""Bad url "$url", reason: $message """)
     case InvalidStateError(_, message)    => putStrLnErr(s"Invalid state: $message")
-    case MissingWebhookError(id)          => putStrLnErr(s"Missing webhook: $id")
-    case MissingEventError(key)           => putStrLnErr(s"Missing event: $key")
-    case MissingEventsError(keys)         => putStrLnErr(s"Missing events: $keys")
   }
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

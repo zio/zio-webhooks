@@ -43,7 +43,7 @@ final case class WebhookServer private (
    * at-least-once webhooks are enqueued for retrying, while dispatches to at-most-once webhooks are
    * marked failed.
    */
-  private def deliver(dispatch: WebhookDispatch): UIO[Unit] = {
+  private def deliver(dispatch: WebhookDispatch): UIO[Unit] =
     for {
       response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).either
       _        <- (dispatch.deliverySemantics, response) match {
@@ -57,7 +57,6 @@ final case class WebhookServer private (
                       retryController.enqueueRetryMany(dispatch.events)
                   }
     } yield ()
-  }.catchAll(errorHub.publish(_).unit)
 
   private def deliverEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent, webhook: Webhook): UIO[Any] =
     (batchDispatcher, webhook.batching) match {
@@ -74,7 +73,7 @@ final case class WebhookServer private (
         ).fork
     }
 
-  private def handleNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): IO[WebhookError, Unit] = {
+  private def handleNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): UIO[Unit] = {
     val webhookId = event.key.webhookId
     for {
       isRetrying         <- retryController.isActive(webhookId)
@@ -93,7 +92,7 @@ final case class WebhookServer private (
   /**
    * Sets the new event status of all the events in a dispatch.
    */
-  private def markDispatch(dispatch: WebhookDispatch, newStatus: WebhookEventStatus): IO[WebhookError, Unit] =
+  private def markDispatch(dispatch: WebhookDispatch, newStatus: WebhookEventStatus): UIO[Unit] =
     if (dispatch.size == 1)
       eventRepo.setEventStatus(dispatch.head.key, newStatus)
     else
@@ -102,20 +101,20 @@ final case class WebhookServer private (
   /**
    * Starts the webhook server by starting the following concurrently:
    *
-   *   - new webhook event subscription
-   *   - event recovery for webhooks with at-least-once delivery semantics
    *   - dispatch retry monitoring
-   *   - webhook polling or update subscription
+   *   - event recovery for webhooks with at-least-once delivery semantics
+   *   - new webhook event subscription
    *
    * The server waits for event recovery and new event subscription to get ready, signalling that
    * the server is ready to accept events.
    */
   def start: UIO[Any] =
     for {
-      _ <- startRetryMonitoring
-      _ <- startEventRecovery
-      _ <- startNewEventSubscription
-      _ <- startupLatch.await
+      f1 <- startRetryMonitoring
+      f2 <- startEventRecovery
+      f3 <- startNewEventSubscription
+      _  <- ZIO.raceAll(f1.await, List(f2.await, f3.await)).fork
+      _  <- startupLatch.await
     } yield ()
 
   /**
@@ -125,8 +124,9 @@ final case class WebhookServer private (
    *
    * This ensures retries are persistent with respect to server restarts.
    */
-  private def startEventRecovery: UIO[Any] = {
+  private def startEventRecovery: UIO[Fiber.Runtime[Nothing, Unit]] = {
     for {
+      // FIXME: getState then clearState should be one atomic operation
       _ <- stateRepo.getState.flatMap(
              ZIO
                .foreach_(_)(jsonState =>
@@ -138,16 +138,18 @@ final case class WebhookServer private (
                .catchAll(errorHub.publish)
            )
       _ <- stateRepo.clearState
-      _ <- (mergeShutdown(eventRepo.recoverEvents, shutdownSignal).foreach(retryController.enqueueRetry) *>
-               shutdownLatch.countDown).fork
-    } yield ()
-  } *> startupLatch.countDown
+      f <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal)
+             .foreach(retryController.enqueueRetry)
+             .ensuring(shutdownLatch.countDown)
+             .fork
+    } yield f
+  } <* startupLatch.countDown
 
   /**
    * Starts server subscription to new [[WebhookEvent]]s. Counts down on the `startupLatch`,
    * signalling that it's ready to accept new events.
    */
-  private def startNewEventSubscription: UIO[Any] =
+  private def startNewEventSubscription: UIO[Fiber.Runtime[Nothing, Unit]] =
     eventRepo.subscribeToNewEvents.use { eventDequeue =>
       for {
         // signal that the server is ready to accept new webhook events
@@ -155,7 +157,7 @@ final case class WebhookServer private (
         deliverFunc      = (dispatch: WebhookDispatch, _: Queue[WebhookEvent]) => deliver(dispatch)
         batchDispatcher <- ZIO.foreach(config.batchingCapacity)(
                              BatchDispatcher
-                               .create(_, deliverFunc, errorHub, shutdownSignal, webhooksProxy)
+                               .create(_, deliverFunc, shutdownSignal, webhooksProxy)
                                .tap(_.start.fork)
                            )
         handleEvent      = for {
@@ -164,18 +166,17 @@ final case class WebhookServer private (
                            } yield ()
         isShutdown      <- shutdownSignal.isDone
         _               <- handleEvent
-                             .catchAll(errorHub.publish)
                              .repeatUntilM(_ => shutdownSignal.isDone)
                              .unless(isShutdown)
-        _               <- shutdownLatch.countDown
+                             .ensuring(shutdownLatch.countDown)
       } yield ()
     }.fork
 
   /**
    * Listens for new retries and starts retrying delivers to a webhook.
    */
-  private def startRetryMonitoring: UIO[Any] =
-    retryController.start
+  private def startRetryMonitoring: UIO[Fiber.Runtime[Nothing, Any]] =
+    retryController.start.ensuring(shutdownLatch.countDown).fork
 
   /**
    * Waits until all work in progress is finished, persists retries, then shuts down.

@@ -115,7 +115,7 @@ private[webhooks] final case class RetryDispatcher(
     for {
       batchDispatcher <- ZIO.foreach(config.batchingCapacity)(
                            BatchDispatcher
-                             .create(_, deliverFunc, errorHub, shutdownSignal, webhooksProxy)
+                             .create(_, deliverFunc, shutdownSignal, webhooksProxy)
                              .tap(_.start.fork)
                          )
       handleEvent      = for {
@@ -154,7 +154,6 @@ private[webhooks] final case class RetryDispatcher(
                          } yield ()
       isShutdown      <- shutdownSignal.isDone
       _               <- handleEvent
-                           .catchAll(errorHub.publish(_))
                            .repeatUntilM(_ => shutdownSignal.isDone)
                            .fork
                            .unless(isShutdown)

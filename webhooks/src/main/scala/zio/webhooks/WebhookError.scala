@@ -1,7 +1,5 @@
 package zio.webhooks
 
-import zio.prelude.NonEmptySet
-
 /**
  * Represents errors that can be raised during the operation of a webhook server.
  */
@@ -19,19 +17,4 @@ object WebhookError {
    * `message`.
    */
   final case class InvalidStateError(rawState: String, message: String) extends WebhookError
-
-  /**
-   * A [[MissingWebhookError]] occurs when a webhook expected to exist is missing.
-   */
-  final case class MissingWebhookError(id: WebhookId) extends WebhookError
-
-  /**
-   * A [[MissingEventError]] occurs when a single webhook event expected to exist is missing.
-   */
-  final case class MissingEventError(key: WebhookEventKey) extends WebhookError
-
-  /**
-   * A [[MissingEventsError]] occurs when multiple events expected to exist are missing.
-   */
-  final case class MissingEventsError(keys: NonEmptySet[WebhookEventKey]) extends WebhookError
 }
