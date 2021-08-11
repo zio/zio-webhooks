@@ -127,7 +127,7 @@ final case class WebhookServer private (
    */
   private def startEventRecovery: UIO[Any] = {
     for {
-      _ <- stateRepo.getState.flatMap(
+      _ <- stateRepo.loadState.flatMap(
              ZIO
                .foreach_(_)(jsonState =>
                  ZIO
@@ -137,7 +137,6 @@ final case class WebhookServer private (
                )
                .catchAll(errorHub.publish)
            )
-      _ <- stateRepo.clearState
       _ <- (mergeShutdown(eventRepo.recoverEvents, shutdownSignal).foreach(retryController.enqueueRetry) *>
                shutdownLatch.countDown).fork
     } yield ()

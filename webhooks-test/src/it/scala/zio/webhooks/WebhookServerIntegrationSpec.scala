@@ -13,6 +13,7 @@ import zio.stream._
 import zio.test._
 import zio.test.TestAspect.timeout
 import zio.webhooks.WebhookServerIntegrationSpecUtil._
+import zio.webhooks.backends.InMemoryWebhookStateRepo
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -73,7 +74,7 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
                        )
         } yield assertCompletes)
           .provideSomeLayer[IntegrationEnv](Clock.live ++ console.Console.live ++ random.Random.live)
-      } @@ timeout(2.minutes)
+      } @@ timeout(3.minutes)
     }.injectCustom(integrationEnv)
 }
 
@@ -141,10 +142,10 @@ object WebhookServerIntegrationSpecUtil {
   lazy val integrationEnv: URLayer[Clock, IntegrationEnv] =
     ZLayer
       .wireSome[Clock, IntegrationEnv](
+        InMemoryWebhookStateRepo.live,
         TestWebhookEventRepo.test,
         TestWebhookRepo.subscriptionUpdateMode,
         TestWebhookRepo.test,
-        TestWebhookStateRepo.test,
         WebhookServerConfig.default,
         WebhookSttpClient.live,
         WebhooksProxy.live
