@@ -9,6 +9,7 @@ import zio.magic._
 import zio.random.Random
 import zio.stream.UStream
 import zio.webhooks._
+import zio.webhooks.backends.InMemoryWebhookStateRepo
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.example.RestartingWebhookServer.testWebhooks
 import zio.webhooks.testkit._
@@ -32,9 +33,9 @@ object ComprehensiveExample extends App {
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
       .injectCustom(
+        InMemoryWebhookStateRepo.live,
         TestWebhookEventRepo.test,
         TestWebhookRepo.test,
-        TestWebhookStateRepo.test,
         TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,
         WebhookServerConfig.default,

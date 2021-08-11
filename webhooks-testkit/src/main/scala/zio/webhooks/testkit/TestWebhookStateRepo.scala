@@ -5,9 +5,7 @@ import zio.webhooks.WebhookStateRepo
 
 final case class TestWebhookStateRepo(ref: Ref[Option[String]]) extends WebhookStateRepo {
 
-  def clearState: UIO[Unit] = ref.set(None)
-
-  def getState: UIO[Option[String]] = ref.get
+  def loadState: UIO[Option[String]] = ref.modify((_, None))
 
   def setState(state: String): UIO[Unit] = ref.set(Some(state))
 }

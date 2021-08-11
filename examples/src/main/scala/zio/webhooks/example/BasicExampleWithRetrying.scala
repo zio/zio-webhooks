@@ -7,6 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
+import zio.webhooks.backends.InMemoryWebhookStateRepo
 import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
@@ -69,8 +70,8 @@ object BasicExampleWithRetrying extends App {
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
       .injectCustom(
+        InMemoryWebhookStateRepo.live,
         TestWebhookRepo.test,
-        TestWebhookStateRepo.test,
         TestWebhookEventRepo.test,
         TestWebhookRepo.subscriptionUpdateMode,
         WebhookSttpClient.live,

@@ -773,7 +773,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2) // wait for 2 requests to come through
                   _         <- server.shutdown
-                  saveState <- WebhookStateRepo.getState
+                  saveState <- WebhookStateRepo.loadState
                                  .repeatUntil(_.isDefined)
                                  .map {
                                    _.map(_.fromJson[PersistentRetries])
@@ -841,14 +841,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           testM("clears persisted state after loading") {
             for {
               _              <- WebhookServer.start.flatMap(_.shutdown)
-              persistedState <- ZIO.serviceWith[WebhookStateRepo](_.getState)
+              persistedState <- ZIO.serviceWith[WebhookStateRepo](_.loadState)
               _              <- WebhookServer.start
-              _              <- ZIO.serviceWith[WebhookStateRepo](_.getState).repeatUntil(_.isEmpty)
+              _              <- ZIO.serviceWith[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
             } yield assert(persistedState)(isSome(anything))
           }
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(10.seconds)
+    ) @@ timeout(20.seconds)
 }
 
 object WebhookServerSpecUtil {
