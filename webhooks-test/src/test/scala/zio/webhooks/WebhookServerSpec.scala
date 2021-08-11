@@ -13,6 +13,7 @@ import zio.test.environment._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.WebhookUpdate.WebhookChanged
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.internal.PersistentRetries
 import zio.webhooks.testkit.TestWebhookHttpClient._
 import zio.webhooks.testkit._
@@ -889,15 +890,17 @@ object WebhookServerSpecUtil {
     with Has[TestWebhookHttpClient]
     with Has[WebhookHttpClient]
     with Has[WebhooksProxy]
+    with Has[SerializePayload]
 
   lazy val mockEnv: ZLayer[Clock with Has[WebhookServerConfig], Nothing, MockEnv] =
     ZLayer
       .fromSomeMagic[Clock with Has[WebhookServerConfig], MockEnv](
-        TestWebhookRepo.test,
+        InMemoryWebhookStateRepo.live,
+        JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
-        TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
         TestWebhookRepo.subscriptionUpdateMode,
+        TestWebhookRepo.test,
         WebhooksProxy.live
       )
 
@@ -945,11 +948,12 @@ object WebhookServerSpecUtil {
   lazy val specEnv: URLayer[Clock with Has[WebhookServerConfig], SpecEnv] =
     ZLayer
       .fromSomeMagic[Clock with Has[WebhookServerConfig], SpecEnv](
-        TestWebhookRepo.test,
+        InMemoryWebhookStateRepo.live,
+        JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
-        TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
         TestWebhookRepo.subscriptionUpdateMode,
+        TestWebhookRepo.test,
         WebhookServer.live,
         WebhooksProxy.live
       )

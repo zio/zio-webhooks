@@ -5,35 +5,28 @@ import zio.prelude.NonEmptySet
 import zio.webhooks._
 
 /**
- * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]] containing a batch of one or
- * more [[WebhookEvent]]s.
+ * A [[WebhookDispatch]] represents a unit of delivery to a [[Webhook]] containing a payload of one
+ * or more [[WebhookEvent]]s.
  *
  * The server, when creating these dispatches, guarantees that all webhook events in this dispatch
- * will have the same [[WebhookEventContentType]].
+ * will have the same content type.
  */
 private[webhooks] final case class WebhookDispatch(
   webhookId: WebhookId,
   url: String,
   deliverySemantics: WebhookDeliverySemantics,
-  events: NonEmptySet[WebhookEvent]
+  payload: WebhookPayload
 ) {
-  lazy val contentType: Option[WebhookEventContentType] =
-    events.head.headers.find(_._1.toLowerCase == "content-type") match {
-      case Some((_, contentTypeValue)) =>
-        contentTypeValue match {
-          case "text/plain"       =>
-            Some(WebhookEventContentType.PlainText)
-          case "application/json" =>
-            Some(WebhookEventContentType.Json)
-          case _                  =>
-            None
-        }
-      case None                        =>
-        None
+  lazy val contentType: Option[String] =
+    headers.find(_._1.toLowerCase == "content-type").map(_._2)
+
+  lazy val events: NonEmptySet[WebhookEvent] =
+    payload match {
+      case WebhookPayload.Single(event)   =>
+        NonEmptySet.single(event)
+      case WebhookPayload.Batched(events) =>
+        events
     }
 
-  lazy val head: WebhookEvent                 = events.head
-  lazy val headers: Chunk[(String, String)]   = events.head.headers
-  lazy val keys: NonEmptySet[WebhookEventKey] = NonEmptySet.fromSet(events.head.key, events.tail.map(_.key))
-  lazy val size: Int                          = events.size
+  lazy val headers: Chunk[(String, String)] = payload.headers
 }

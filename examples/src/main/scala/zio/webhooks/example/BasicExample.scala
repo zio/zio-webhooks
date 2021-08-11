@@ -7,7 +7,7 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream.UStream
-import zio.webhooks.backends.InMemoryWebhookStateRepo
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
@@ -66,6 +66,7 @@ object BasicExample extends App {
     program
       .injectCustom(
         InMemoryWebhookStateRepo.live,
+        JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
         TestWebhookRepo.test,
         TestWebhookRepo.subscriptionUpdateMode,
