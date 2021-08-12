@@ -2,7 +2,6 @@ package zio.webhooks.internal
 
 import zio._
 import zio.clock.Clock
-import zio.prelude.NonEmptySet
 import zio.webhooks._
 
 /**
@@ -16,6 +15,7 @@ private[webhooks] final case class RetryDispatcher(
   private val httpClient: WebhookHttpClient,
   private val retryStates: RefM[Map[WebhookId, RetryState]],
   retryQueue: Queue[WebhookEvent],
+  private val serializePayload: SerializePayload,
   private val shutdownSignal: Promise[Nothing, Unit],
   private val webhookId: WebhookId,
   private val webhooksProxy: WebhooksProxy
@@ -43,10 +43,12 @@ private[webhooks] final case class RetryDispatcher(
     }
 
   private def markDispatch(dispatch: WebhookDispatch, newStatus: WebhookEventStatus): IO[WebhookError, Unit] =
-    if (dispatch.size == 1)
-      eventRepo.setEventStatus(dispatch.head.key, newStatus)
-    else
-      eventRepo.setEventStatusMany(dispatch.keys, newStatus)
+    dispatch.payload match {
+      case WebhookPayload.Single(event)      =>
+        eventRepo.setEventStatus(event.key, newStatus)
+      case batch @ WebhookPayload.Batched(_) =>
+        eventRepo.setEventStatusMany(batch.keys, newStatus)
+    }
 
   /**
    * Marks a webhook unavailable, marking all its events failed.
@@ -69,8 +71,10 @@ private[webhooks] final case class RetryDispatcher(
    * for retries when the endpoint begins to return `200` status codes.
    */
   private def retryEvents(dispatch: WebhookDispatch, batchQueue: Option[Queue[WebhookEvent]]): UIO[Unit] = {
+    val request =
+      WebhookHttpRequest(dispatch.url, serializePayload(dispatch.payload, dispatch.contentType), dispatch.headers)
     for {
-      response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).either
+      response <- httpClient.post(request).either
       _        <- response match {
                     case Left(Left(badWebhookUrlError))  =>
                       errorHub.publish(badWebhookUrlError)
@@ -138,7 +142,7 @@ private[webhooks] final case class RetryDispatcher(
                                                              webhook.id,
                                                              webhook.url,
                                                              webhook.deliveryMode.semantics,
-                                                             NonEmptySet.single(event)
+                                                             WebhookPayload.Single(event)
                                                            )
                                                            retryEvents(dispatch, None)
                                                        }

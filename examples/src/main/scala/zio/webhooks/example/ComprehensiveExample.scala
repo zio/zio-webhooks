@@ -9,7 +9,7 @@ import zio.magic._
 import zio.random.Random
 import zio.stream.UStream
 import zio.webhooks._
-import zio.webhooks.backends.InMemoryWebhookStateRepo
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.example.RestartingWebhookServer.testWebhooks
 import zio.webhooks.testkit._
@@ -34,6 +34,7 @@ object ComprehensiveExample extends App {
     program
       .injectCustom(
         InMemoryWebhookStateRepo.live,
+        JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
         TestWebhookRepo.test,
         TestWebhookRepo.subscriptionUpdateMode,

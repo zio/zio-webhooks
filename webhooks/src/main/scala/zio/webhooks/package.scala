@@ -31,4 +31,10 @@ package object webhooks {
       .map(Left(_))
       .mergeTerminateRight(UStream.fromEffect(shutdownSignal.await.map(Right(_))))
       .collectLeft
+
+  /**
+   * [[SerializePayload]] is a function that takes a [[WebhookPayload]] and a MIME type of
+   * `Option[String]` and serializes it into a `String`.
+   */
+  type SerializePayload = (WebhookPayload, Option[String]) => String
 }

@@ -20,7 +20,12 @@ private[webhooks] final class BatchDispatcher private (
       batch    <- batchQueue.take.zipWith(batchQueue.takeAll)(NonEmptySet.fromIterable(_, _))
       webhookId = batch.head.key.webhookId
       webhook  <- webhooks.getWebhookById(webhookId)
-      dispatch  = WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, batch)
+      dispatch  = WebhookDispatch(
+                    webhook.id,
+                    webhook.url,
+                    webhook.deliveryMode.semantics,
+                    WebhookPayload.Batched(batch)
+                  )
       _        <- deliver(dispatch, batchQueue).when(webhook.isEnabled)
     } yield ()
     batchQueue.poll *> latch.succeed(()) *> deliverBatch.catchAll(errorHub.publish(_)).forever

@@ -3,7 +3,6 @@ package zio.webhooks
 import zio._
 import zio.clock.Clock
 import zio.json._
-import zio.prelude.NonEmptySet
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
 import zio.webhooks.internal._
@@ -31,6 +30,7 @@ final case class WebhookServer private (
   private val stateRepo: WebhookStateRepo,
   private val errorHub: Hub[WebhookError],
   private val retryController: RetryController,
+  private val serializePayload: SerializePayload,
   private val startupLatch: CountDownLatch,
   private val shutdownLatch: CountDownLatch,
   private val shutdownSignal: Promise[Nothing, Unit],
@@ -44,8 +44,10 @@ final case class WebhookServer private (
    * marked failed.
    */
   private def deliver(dispatch: WebhookDispatch): UIO[Unit] = {
+    val request =
+      WebhookHttpRequest(dispatch.url, serializePayload(dispatch.payload, dispatch.contentType), dispatch.headers)
     for {
-      response <- httpClient.post(WebhookHttpRequest.fromDispatch(dispatch)).either
+      response <- httpClient.post(request).either
       _        <- (dispatch.deliverySemantics, response) match {
                     case (_, Left(Left(badWebhookUrlError)))  =>
                       errorHub.publish(badWebhookUrlError)
@@ -54,7 +56,12 @@ final case class WebhookServer private (
                     case (AtMostOnce, _)                      =>
                       markDispatch(dispatch, WebhookEventStatus.Failed)
                     case (AtLeastOnce, _)                     =>
-                      retryController.enqueueRetryMany(dispatch.events)
+                      dispatch.payload match {
+                        case WebhookPayload.Single(event)   =>
+                          retryController.enqueueRetry(event)
+                        case WebhookPayload.Batched(events) =>
+                          retryController.enqueueRetryMany(events)
+                      }
                   }
     } yield ()
   }.catchAll(errorHub.publish(_).unit)
@@ -69,7 +76,7 @@ final case class WebhookServer private (
             webhook.id,
             webhook.url,
             webhook.deliveryMode.semantics,
-            NonEmptySet.single(event)
+            WebhookPayload.Single(event)
           )
         ).fork
     }
@@ -94,10 +101,12 @@ final case class WebhookServer private (
    * Sets the new event status of all the events in a dispatch.
    */
   private def markDispatch(dispatch: WebhookDispatch, newStatus: WebhookEventStatus): IO[WebhookError, Unit] =
-    if (dispatch.size == 1)
-      eventRepo.setEventStatus(dispatch.head.key, newStatus)
-    else
-      eventRepo.setEventStatusMany(dispatch.keys, newStatus)
+    dispatch.payload match {
+      case WebhookPayload.Single(event)      =>
+        eventRepo.setEventStatus(event.key, newStatus)
+      case batch @ WebhookPayload.Batched(_) =>
+        eventRepo.setEventStatusMany(batch.keys, newStatus)
+    }
 
   /**
    * Starts the webhook server by starting the following concurrently:
@@ -206,8 +215,9 @@ object WebhookServer {
       config           <- ZIO.service[WebhookServerConfig]
       eventRepo        <- ZIO.service[WebhookEventRepo]
       httpClient       <- ZIO.service[WebhookHttpClient]
+      serializePayload <- ZIO.service[SerializePayload]
       webhookState     <- ZIO.service[WebhookStateRepo]
-      webhooks         <- ZIO.service[WebhooksProxy]
+      webhooksProxy    <- ZIO.service[WebhooksProxy]
       errorHub         <- Hub.sliding[WebhookError](config.errorSlidingCapacity)
       retryDispatchers <- RefM.make(Map.empty[WebhookId, RetryDispatcher])
       retryInputQueue  <- Queue.bounded[WebhookEvent](1)
@@ -225,10 +235,11 @@ object WebhookServer {
                             retryInputQueue,
                             retryDispatchers,
                             retryStates,
+                            serializePayload,
                             shutdownLatch,
                             shutdownSignal,
                             startupLatch,
-                            webhooks
+                            webhooksProxy
                           )
     } yield WebhookServer(
       clock,
@@ -238,13 +249,15 @@ object WebhookServer {
       webhookState,
       errorHub,
       retries,
+      serializePayload,
       startupLatch,
       shutdownLatch,
       shutdownSignal,
-      webhooks
+      webhooksProxy
     )
 
-  type Env = Has[WebhooksProxy]
+  type Env = Has[SerializePayload]
+    with Has[WebhooksProxy]
     with Has[WebhookStateRepo]
     with Has[WebhookEventRepo]
     with Has[WebhookHttpClient]

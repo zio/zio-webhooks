@@ -13,15 +13,16 @@ Microlibrary for reliable and persistent webhook delivery.
 There are two ways to start a webhook server: as part of the managed construction of its live layer
 `WebhookServer.live`, or manually by calling `WebhookServer.start`. See [examples](#example-programs) for a list of code
 examples. The managed approach is recommended as it guarantees the server shuts down gracefully. Make sure to
-call `shutdown` on a server created manually. Either way, the server requires the following dependencies in its environment:
+call `shutdown` on a server created manually. Either way, users will have to implement the following dependencies that are part of `WebhookServer`'s environment:
 
 * [`WebhookRepo`](/webhooks/src/main/scala/zio/webhooks/WebhookRepo.scala) - to get webhooks and update webhook status;
 * [`WebhookEventRepo`](/webhooks/src/main/scala/zio/webhooks/WebhookEventRepo.scala) - to subscribe to events and
   update event status;
 * [`WebhookHttpClient`](/webhooks/src/main/scala/zio/webhooks/WebhookHttpClient.scala) - to deliver events via HTTP POST
-  ([WebhookSttpClient](/webhooks/src/main/scala/zio/webhooks/backends/sttp/WebhookSttpClient.scala) is provided); and
+  ([WebhookSttpClient](/webhooks/src/main/scala/zio/webhooks/backends/sttp/WebhookSttpClient.scala) is provided and ready to use);
 * [`WebhookServerConfig`](/webhooks/src/main/scala/zio/webhooks/WebhookServerConfig.scala) - to specify settings for
-  error hub capacity, retrying, and batching.
+  error hub capacity, retrying, and batching; and
+* `SerializePayload` - for specifying custom serialization of single and batched event payloads of some content type.
 
 # Example Programs
 
