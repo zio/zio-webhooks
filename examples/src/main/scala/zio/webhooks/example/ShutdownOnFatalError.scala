@@ -7,16 +7,16 @@ import zio.console._
 import zio.duration._
 import zio.magic._
 import zio.stream._
-import zio.webhooks.WebhookError._
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
- * An example of how to shut down the server on the first error encountered.
+ * An example of how the server shuts down when encountering a fatal error: in this case a missing
+ * webhook.
  */
-object ShutdownOnFirstError extends App {
+object ShutdownOnFatalError extends App {
 
   private val goodEvents = UStream
     .iterate(0L)(_ + 1)
@@ -50,18 +50,14 @@ object ShutdownOnFirstError extends App {
 
   private lazy val port = 8080
 
-  private def program = {
+  private def program =
     for {
-      errorFiber <- WebhookServer.getErrors.use(_.take.flip).fork
-      httpFiber  <- httpEndpointServer.start(port, httpApp).fork
+      errorFiber <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).runHead).fork
       _          <- TestWebhookRepo.setWebhook(webhook)
-      _          <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
-      _          <- errorFiber.join.onExit(_ => WebhookServer.shutdown.orDie *> httpFiber.interrupt)
+      eventFiber <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
+      httpFiber  <- httpEndpointServer.start(port, httpApp).fork
+      _          <- errorFiber.join.onExit(_ => (eventFiber zip httpFiber).interrupt)
     } yield ()
-  }.catchAll {
-    case BadWebhookUrlError(url, message) => putStrLnErr(s"""Bad url "$url", reason: $message """)
-    case InvalidStateError(_, message)    => putStrLnErr(s"Invalid state: $message")
-  }
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program

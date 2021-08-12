@@ -123,7 +123,15 @@ final case class WebhookServer private (
       f1 <- startRetryMonitoring
       f2 <- startEventRecovery
       f3 <- startNewEventSubscription
-      _  <- ZIO.raceAll(f1.await, List(f2.await, f3.await)).fork
+      _  <- ZIO
+              .raceAll(f1.await, List(f2.await, f3.await))
+              .flatMap {
+                case Exit.Success(_)     =>
+                  ZIO.unit
+                case Exit.Failure(cause) =>
+                  errorHub.publish(FatalError(cause))
+              }
+              .fork
       _  <- startupLatch.await
     } yield ()
 

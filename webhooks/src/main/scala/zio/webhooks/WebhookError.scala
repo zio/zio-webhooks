@@ -1,5 +1,7 @@
 package zio.webhooks
 
+import zio.Cause
+
 /**
  * Represents errors that can be raised during the operation of a webhook server.
  */
@@ -11,6 +13,12 @@ object WebhookError {
    * parsed into a URL. The parsing failure is included as a message.
    */
   final case class BadWebhookUrlError(badUrl: String, message: String) extends WebhookError
+
+  /**
+   * A [[FatalError]] is raised when a [[WebhookServer]] dies due to a fatal error like a missing
+   * webhook or a missing event.
+   */
+  final case class FatalError(cause: Cause[Nothing]) extends WebhookError
 
   /**
    * An [[InvalidStateError]] occurs when decoding `rawState` during event recovery fails with a

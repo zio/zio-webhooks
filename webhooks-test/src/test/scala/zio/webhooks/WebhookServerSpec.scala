@@ -144,7 +144,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               )(hasSize(equalTo(n)))
             }
           },
-          testM("server dies when webhooks are missing") {
+          testM("server dies with a fatal error when webhooks are missing") {
             val idRange               = 401L to 404L
             val missingWebhookIds     = idRange.map(WebhookId(_))
             val eventsMissingWebhooks = missingWebhookIds.flatMap(id => createPlaintextEvents(1)(id))
@@ -154,7 +154,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               webhooks = List.empty,
               events = eventsMissingWebhooks,
               ScenarioInterest.Errors
-            )((_, _) => assertCompletesM)
+            )((errors, _) => assertM(errors.take)(isSubtype[FatalError](anything)))
           },
           testM("bad webhook URL errors are published") {
             val webhookWithBadUrl = Webhook(
