@@ -52,11 +52,13 @@ object ShutdownOnFatalError extends App {
 
   private def program =
     for {
-      errorFiber <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).runHead).fork
+      errorFiber <- WebhookServer.getErrors.use(UStream.fromQueue(_).runHead).fork
       _          <- TestWebhookRepo.setWebhook(webhook)
       eventFiber <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
       httpFiber  <- httpEndpointServer.start(port, httpApp).fork
-      _          <- errorFiber.join.onExit(_ => (eventFiber zip httpFiber).interrupt)
+      _          <- errorFiber.join
+                      .flatMap(error => putStrLnErr(error.toString))
+                      .onExit(_ => (eventFiber zip httpFiber).interrupt)
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

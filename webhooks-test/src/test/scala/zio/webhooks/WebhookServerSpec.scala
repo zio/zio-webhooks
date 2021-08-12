@@ -7,7 +7,7 @@ import zio.json._
 import zio.magic._
 import zio.stream._
 import zio.test.Assertion._
-import zio.test.TestAspect.{ failing, flaky, timeout }
+import zio.test.TestAspect.{ failing, timeout }
 import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
@@ -622,12 +622,28 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             } yield assertTrue(batchCount <= deliveredEvents.size && deliveredEvents.size <= n)
           }
         },
-        // TODO: find sync point for this test
         testM("batches events on webhook and content-type") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
-          val jsonEvents      = createJsonEvents(4)(webhook.id)
-          val plaintextEvents = createPlaintextEvents(4)(webhook.id)
+          val jsonEvents =
+            (0 until 4).map { i =>
+              WebhookEvent(
+                WebhookEventKey(WebhookEventId(i.toLong), webhook.id),
+                WebhookEventStatus.New,
+                s"""{"event":"payload$i"}""",
+                jsonContentHeaders
+              )
+            }
+
+          val plaintextEvents =
+            (4 until 8).map { i =>
+              WebhookEvent(
+                WebhookEventKey(WebhookEventId(i.toLong), webhook.id),
+                WebhookEventStatus.New,
+                "event payload " + i,
+                plaintextContentHeaders
+              )
+            }
 
           webhooksTestScenario(
             initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
@@ -635,7 +651,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             events = jsonEvents ++ plaintextEvents,
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
-        } @@ timeout(100.millis) @@ flaky,
+        },
         testM("batched JSON event contents are always serialized into a JSON array") {
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val jsonEvents = createJsonEvents(100)(webhook.id)
