@@ -3,22 +3,17 @@ package zio.webhooks
 import zio._
 
 /**
- * A [[WebhookStateRepo]] stores encoded server state, allowing retrying to suspend and continue
- * after the server restarts.
+ * A [[WebhookStateRepo]] stores encoded server state, allowing the [[WebhookServer]] state to
+ * suspend and continue after restarting.
  *
  * For ease of integration, this state is modeled as a string.
  */
 trait WebhookStateRepo {
 
   /**
-   * Clears the encoded `String` state value.
+   * Retrieves then clears the encoded `String` state value.
    */
-  def clearState: UIO[Unit]
-
-  /**
-   * Retrieves the encoded `String` state value.
-   */
-  def getState: UIO[Option[String]]
+  def loadState: UIO[Option[String]]
 
   /**
    * Sets the encoded `String` state value.
@@ -28,12 +23,9 @@ trait WebhookStateRepo {
 
 object WebhookStateRepo {
   // accessors
-  def clearState: URIO[Has[WebhookStateRepo], Unit] =
-    ZIO.serviceWith[WebhookStateRepo](_.clearState)
+  def loadState: URIO[Has[WebhookStateRepo], Option[String]] =
+    ZIO.serviceWith[WebhookStateRepo](_.loadState)
 
-  def getState: URIO[Has[WebhookStateRepo], Option[String]] =
-    ZIO.serviceWith[WebhookStateRepo](_.getState)
-
-  def setState(state: String): URIO[Has[WebhookStateRepo], Unit] =
+  def saveState(state: String): URIO[Has[WebhookStateRepo], Unit] =
     ZIO.serviceWith[WebhookStateRepo](_.setState(state))
 }

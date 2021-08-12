@@ -20,6 +20,7 @@ private[webhooks] final case class RetryController(
   private val inputQueue: Queue[WebhookEvent],
   private val retryDispatchers: RefM[Map[WebhookId, RetryDispatcher]],
   private val retryStates: RefM[Map[WebhookId, RetryState]],
+  private val serializePayload: SerializePayload,
   private val shutdownLatch: CountDownLatch,
   private val shutdownSignal: Promise[Nothing, Unit],
   private val startupLatch: CountDownLatch,
@@ -63,6 +64,7 @@ private[webhooks] final case class RetryController(
                      httpClient,
                      retryStates,
                      retryQueue,
+                     serializePayload,
                      shutdownSignal,
                      webhookId,
                      webhooksProxy
@@ -115,6 +117,7 @@ private[webhooks] final case class RetryController(
                                                   httpClient,
                                                   retryStates,
                                                   retryQueue,
+                                                  serializePayload,
                                                   shutdownSignal,
                                                   webhookId,
                                                   webhooksProxy

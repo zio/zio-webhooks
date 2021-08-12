@@ -8,6 +8,7 @@ import zio.duration._
 import zio.magic._
 import zio.stream._
 import zio.webhooks.WebhookError._
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
@@ -65,9 +66,10 @@ object ShutdownOnFirstError extends App {
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
       .injectCustom(
+        InMemoryWebhookStateRepo.live,
+        JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
         TestWebhookRepo.test,
-        TestWebhookStateRepo.test,
         TestWebhookRepo.subscriptionUpdateMode,
         WebhookServer.live,
         WebhookServerConfig.default,

@@ -13,6 +13,7 @@ import zio.stream._
 import zio.test._
 import zio.test.TestAspect.timeout
 import zio.webhooks.WebhookServerIntegrationSpecUtil._
+import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -134,6 +135,7 @@ object WebhookServerIntegrationSpecUtil {
     with Has[WebhookHttpClient]
     with Has[WebhooksProxy]
     with Has[WebhookServerConfig]
+    with Has[SerializePayload]
 
   // alias for zio-http endpoint server
   lazy val httpEndpointServer = Server
@@ -141,10 +143,11 @@ object WebhookServerIntegrationSpecUtil {
   lazy val integrationEnv: URLayer[Clock, IntegrationEnv] =
     ZLayer
       .wireSome[Clock, IntegrationEnv](
+        InMemoryWebhookStateRepo.live,
+        JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
         TestWebhookRepo.subscriptionUpdateMode,
         TestWebhookRepo.test,
-        TestWebhookStateRepo.test,
         WebhookServerConfig.default,
         WebhookSttpClient.live,
         WebhooksProxy.live

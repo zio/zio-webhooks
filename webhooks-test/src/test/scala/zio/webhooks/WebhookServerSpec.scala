@@ -13,6 +13,7 @@ import zio.test.environment._
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.WebhookUpdate.WebhookChanged
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.internal.PersistentRetries
 import zio.webhooks.testkit.TestWebhookHttpClient._
 import zio.webhooks.testkit._
@@ -635,7 +636,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
         } @@ timeout(100.millis) @@ flaky,
-        testM("JSON event contents are batched into a JSON array") {
+        testM("batched JSON event contents are always serialized into a JSON array") {
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val jsonEvents = createJsonEvents(100)(webhook.id)
 
@@ -728,7 +729,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- TestWebhookEventRepo.createEvent(event)
                   _         <- requests.takeN(2) // wait for 2 requests to come through
                   _         <- server.shutdown
-                  saveState <- WebhookStateRepo.getState
+                  saveState <- WebhookStateRepo.loadState
                                  .repeatUntil(_.isDefined)
                                  .map {
                                    _.map(_.fromJson[PersistentRetries])
@@ -796,9 +797,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           testM("clears persisted state after loading") {
             for {
               _              <- WebhookServer.start.flatMap(_.shutdown)
-              persistedState <- ZIO.serviceWith[WebhookStateRepo](_.getState)
+              persistedState <- ZIO.serviceWith[WebhookStateRepo](_.loadState)
               _              <- WebhookServer.start
-              _              <- ZIO.serviceWith[WebhookStateRepo](_.getState).repeatUntil(_.isEmpty)
+              _              <- ZIO.serviceWith[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
             } yield assert(persistedState)(isSome(anything))
           }
           // TODO: write unit tests for persistent retry backoff when needed
@@ -835,7 +836,7 @@ object WebhookServerSpecUtil {
   val jsonContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
 
   val jsonPayloadPattern: String =
-    """(?:\{\"event\":\"payload\d+\"})|(?:\[\{\"event\":\"payload\d+\"}(?:,\{\"event\":\"payload\d+\"})*\])"""
+    """(?:\[\{\"event\":\"payload\d+\"}(?:,\{\"event\":\"payload\d+\"})*\])"""
 
   type MockEnv = Has[WebhookEventRepo]
     with Has[TestWebhookEventRepo]
@@ -845,15 +846,17 @@ object WebhookServerSpecUtil {
     with Has[TestWebhookHttpClient]
     with Has[WebhookHttpClient]
     with Has[WebhooksProxy]
+    with Has[SerializePayload]
 
   lazy val mockEnv: ZLayer[Clock with Has[WebhookServerConfig], Nothing, MockEnv] =
     ZLayer
       .fromSomeMagic[Clock with Has[WebhookServerConfig], MockEnv](
-        TestWebhookRepo.test,
+        InMemoryWebhookStateRepo.live,
+        JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
-        TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
         TestWebhookRepo.subscriptionUpdateMode,
+        TestWebhookRepo.test,
         WebhooksProxy.live
       )
 
@@ -901,11 +904,12 @@ object WebhookServerSpecUtil {
   lazy val specEnv: URLayer[Clock with Has[WebhookServerConfig], SpecEnv] =
     ZLayer
       .fromSomeMagic[Clock with Has[WebhookServerConfig], SpecEnv](
-        TestWebhookRepo.test,
+        InMemoryWebhookStateRepo.live,
+        JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
-        TestWebhookStateRepo.test,
         TestWebhookHttpClient.test,
         TestWebhookRepo.subscriptionUpdateMode,
+        TestWebhookRepo.test,
         WebhookServer.live,
         WebhooksProxy.live
       )
