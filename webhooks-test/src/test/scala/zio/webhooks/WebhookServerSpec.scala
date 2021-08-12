@@ -681,7 +681,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
         } @@ timeout(100.millis) @@ flaky,
-        testM("JSON event contents are batched into a JSON array") {
+        testM("batched JSON event contents are always serialized into a JSON array") {
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val jsonEvents = createJsonEvents(100)(webhook.id)
 
@@ -880,7 +880,7 @@ object WebhookServerSpecUtil {
   val jsonContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
 
   val jsonPayloadPattern: String =
-    """(?:\{\"event\":\"payload\d+\"})|(?:\[\{\"event\":\"payload\d+\"}(?:,\{\"event\":\"payload\d+\"})*\])"""
+    """(?:\[\{\"event\":\"payload\d+\"}(?:,\{\"event\":\"payload\d+\"})*\])"""
 
   type MockEnv = Has[WebhookEventRepo]
     with Has[TestWebhookEventRepo]
