@@ -126,10 +126,10 @@ final case class WebhookServer private (
       _  <- ZIO
               .raceAll(f1.await, List(f2.await, f3.await))
               .flatMap {
-                case Exit.Success(_)     =>
-                  ZIO.unit
-                case Exit.Failure(cause) =>
+                case Exit.Failure(cause) if cause.died =>
                   errorHub.publish(FatalError(cause))
+                case _                                 =>
+                  ZIO.unit
               }
               .fork
       _  <- startupLatch.await
