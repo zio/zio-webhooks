@@ -82,6 +82,28 @@ final class WebhookServer private (
         ).fork
     }
 
+  private def enqueueNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): UIO[Unit] = {
+    val webhookId = event.key.webhookId
+    for {
+      webhookQueue <- webhookQueues.modify { map =>
+                        map.get(webhookId) match {
+                          case Some(queue) =>
+                            UIO((queue, map))
+                          case None        =>
+                            for {
+                              queue <- Queue.dropping[WebhookEvent](config.webhookQueueCapacity)
+                              _     <- UStream
+                                         .fromQueue(queue)
+                                         .foreach(handleNewEvent(batchDispatcher, _))
+                                         .onError(fatalPromise.fail)
+                                         .fork
+                            } yield (queue, map + (webhookId -> queue))
+                        }
+                      }
+      _            <- webhookQueue.offer(event)
+    } yield ()
+  }
+
   private def handleNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): UIO[Unit] = {
     val webhookId = event.key.webhookId
     for {
@@ -176,7 +198,7 @@ final class WebhookServer private (
         deliverFunc      = (dispatch: WebhookDispatch, _: Queue[WebhookEvent]) => deliver(dispatch)
         batchDispatcher <- ZIO.foreach(config.batchingCapacity)(
                              BatchDispatcher
-                               .create(_, deliverFunc, shutdownSignal, webhooksProxy)
+                               .create(_, deliverFunc, fatalPromise, shutdownSignal, webhooksProxy)
                                .tap(_.start.fork)
                            )
         handleEvent      = for {
@@ -190,28 +212,6 @@ final class WebhookServer private (
                              .ensuring(shutdownLatch.countDown)
       } yield ()
     }.fork
-
-  private def enqueueNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): UIO[Unit] = {
-    val webhookId = event.key.webhookId
-    for {
-      webhookQueue <- webhookQueues.modify { map =>
-                        map.get(webhookId) match {
-                          case Some(queue) =>
-                            UIO((queue, map))
-                          case None        =>
-                            for {
-                              queue <- Queue.dropping[WebhookEvent](config.webhookQueueCapacity)
-                              _     <- UStream
-                                         .fromQueue(queue)
-                                         .foreach(handleNewEvent(batchDispatcher, _))
-                                         .onError(fatalPromise.fail)
-                                         .fork
-                            } yield (queue, map + (webhookId -> queue))
-                        }
-                      }
-      _            <- webhookQueue.offer(event)
-    } yield ()
-  }
 
   /**
    * Listens for new retries and starts retrying delivers to a webhook.
@@ -266,6 +266,7 @@ object WebhookServer {
                             config,
                             errorHub,
                             eventRepo,
+                            fatalPromise,
                             httpClient,
                             retryInputQueue,
                             retryDispatchers,

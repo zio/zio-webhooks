@@ -10,6 +10,7 @@ private[webhooks] final class BatchDispatcher private (
   private val batchingCapacity: Int,
   private val batchQueues: RefM[Map[BatchKey, Queue[WebhookEvent]]],
   private val deliver: (WebhookDispatch, Queue[WebhookEvent]) => UIO[Unit],
+  private val fatalPromise: Promise[Cause[Nothing], Nothing],
   private val inputQueue: Queue[WebhookEvent],
   private val shutdownSignal: Promise[Nothing, Unit],
   private val webhooks: WebhooksProxy
@@ -52,7 +53,7 @@ private[webhooks] final class BatchDispatcher private (
                             }
                           }
             latch      <- Promise.make[Nothing, Unit]
-            _          <- deliverBatches(batchQueue, latch).fork
+            _          <- deliverBatches(batchQueue, latch).onError(fatalPromise.fail).fork
             _          <- latch.await
             _          <- events.run(ZSink.fromQueue(batchQueue))
           } yield ()
@@ -64,6 +65,7 @@ private[webhooks] object BatchDispatcher {
   def create(
     capacity: Int,
     deliver: (WebhookDispatch, Queue[WebhookEvent]) => UIO[Unit],
+    fatalPromise: Promise[Cause[Nothing], Nothing],
     shutdownSignal: Promise[Nothing, Unit],
     webhooks: WebhooksProxy
   ): UIO[BatchDispatcher] =
@@ -74,6 +76,7 @@ private[webhooks] object BatchDispatcher {
                       capacity,
                       batchQueue,
                       deliver,
+                      fatalPromise,
                       inputQueue,
                       shutdownSignal,
                       webhooks
