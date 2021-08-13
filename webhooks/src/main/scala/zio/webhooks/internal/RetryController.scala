@@ -142,7 +142,7 @@ private[webhooks] final case class RetryController(
         isShutDown <- shutdownSignal.isDone
         _          <- retryQueue.offer(event).race(shutdownSignal.await).unless(isShutDown)
       } yield ()
-    }.ensuring(shutdownLatch.countDown)
+    }
     inputQueue.poll *> startupLatch.countDown *> handleRetryEvents
   }
 

@@ -3,11 +3,10 @@ package zio.webhooks
 import zio._
 import zio.clock.Clock
 import zio.json._
+import zio.stream.UStream
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
 import zio.webhooks.internal._
-
-import java.io.IOException
 
 /**
  * A [[WebhookServer]] is a stateful server that subscribes to [[WebhookEvent]]s and reliably
@@ -22,19 +21,21 @@ import java.io.IOException
  * A `live` server layer is provided in the companion object for convenience and proper resource
  * management, ensuring [[shutdown]] is called by the finalizer.
  */
-final case class WebhookServer private (
+final class WebhookServer private (
   private val clock: Clock.Service,
   private val config: WebhookServerConfig,
   private val eventRepo: WebhookEventRepo,
   private val httpClient: WebhookHttpClient,
   private val stateRepo: WebhookStateRepo,
   private val errorHub: Hub[WebhookError],
+  private val fatalPromise: Promise[Cause[Nothing], Nothing],
   private val retryController: RetryController,
   private val serializePayload: SerializePayload,
   private val startupLatch: CountDownLatch,
   private val shutdownLatch: CountDownLatch,
   private val shutdownSignal: Promise[Nothing, Unit],
-  private val webhooksProxy: WebhooksProxy
+  private val webhooksProxy: WebhooksProxy,
+  private val webhookQueues: RefM[Map[WebhookId, Queue[WebhookEvent]]]
 ) {
 
   /**
@@ -123,12 +124,13 @@ final case class WebhookServer private (
       f1 <- startRetryMonitoring
       f2 <- startEventRecovery
       f3 <- startNewEventSubscription
+      f4 <- fatalPromise.await.forkManaged
       _  <- ZIO
-              .raceAll(f1.await, List(f2.await, f3.await))
+              .raceAll(f1.await, List(f2.await, f3.await, f4.await))
               .flatMap {
-                case Exit.Failure(cause) if cause.died =>
-                  errorHub.publish(FatalError(cause))
-                case _                                 =>
+                case Exit.Failure(cause) =>
+                  errorHub.publish(FatalError(cause)).when(cause.died || cause.failed)
+                case _                   =>
                   ZIO.unit
               }
               .forkManaged
@@ -167,7 +169,7 @@ final case class WebhookServer private (
    * signalling that it's ready to accept new events.
    */
   private def startNewEventSubscription =
-    eventRepo.subscribeToNewEvents.use { eventDequeue =>
+    eventRepo.subscribeToNewEvents.mapM { eventDequeue =>
       for {
         // signal that the server is ready to accept new webhook events
         _               <- eventDequeue.poll *> startupLatch.countDown
@@ -179,7 +181,7 @@ final case class WebhookServer private (
                            )
         handleEvent      = for {
                              event <- (shutdownSignal.await raceEither eventDequeue.take).map(_.toOption)
-                             _     <- ZIO.foreach_(event)(handleNewEvent(batchDispatcher, _))
+                             _     <- ZIO.foreach_(event)(enqueueNewEvent(batchDispatcher, _))
                            } yield ()
         isShutdown      <- shutdownSignal.isDone
         _               <- handleEvent
@@ -187,7 +189,29 @@ final case class WebhookServer private (
                              .unless(isShutdown)
                              .ensuring(shutdownLatch.countDown)
       } yield ()
-    }.forkManaged
+    }.fork
+
+  private def enqueueNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): UIO[Unit] = {
+    val webhookId = event.key.webhookId
+    for {
+      webhookQueue <- webhookQueues.modify { map =>
+                        map.get(webhookId) match {
+                          case Some(queue) =>
+                            UIO((queue, map))
+                          case None        =>
+                            for {
+                              queue <- Queue.dropping[WebhookEvent](config.webhookQueueCapacity)
+                              _     <- UStream
+                                         .fromQueue(queue)
+                                         .foreach(handleNewEvent(batchDispatcher, _))
+                                         .onError(fatalPromise.fail)
+                                         .fork
+                            } yield (queue, map + (webhookId -> queue))
+                        }
+                      }
+      _            <- webhookQueue.offer(event)
+    } yield ()
+  }
 
   /**
    * Listens for new retries and starts retrying delivers to a webhook.
@@ -229,6 +253,7 @@ object WebhookServer {
       webhookState     <- ZManaged.service[WebhookStateRepo]
       webhooksProxy    <- ZManaged.service[WebhooksProxy]
       errorHub         <- Hub.sliding[WebhookError](config.errorSlidingCapacity).toManaged_
+      fatalPromise     <- Promise.makeManaged[Cause[Nothing], Nothing]
       retryDispatchers <- RefM.makeManaged(Map.empty[WebhookId, RetryDispatcher])
       retryInputQueue  <- Queue.bounded[WebhookEvent](1).toManaged_
       retryStates      <- RefM.makeManaged(Map.empty[WebhookId, RetryState])
@@ -251,19 +276,22 @@ object WebhookServer {
                             startupLatch,
                             webhooksProxy
                           )
-    } yield WebhookServer(
+      webhookQueues    <- RefM.makeManaged(Map.empty[WebhookId, Queue[WebhookEvent]])
+    } yield new WebhookServer(
       clock,
       config,
       eventRepo,
       httpClient,
       webhookState,
       errorHub,
+      fatalPromise,
       retries,
       serializePayload,
       startupLatch,
       shutdownLatch,
       shutdownSignal,
-      webhooksProxy
+      webhooksProxy,
+      webhookQueues
     )
 
   type Env = Has[SerializePayload]
@@ -282,12 +310,6 @@ object WebhookServer {
    */
   val live: URLayer[WebhookServer.Env, Has[WebhookServer]] =
     WebhookServer.start.toLayer
-
-  /**
-   * Accessor method for manually shutting down a managed server.
-   */
-  def shutdown: ZIO[Has[WebhookServer], IOException, Any] =
-    ZIO.service[WebhookServer].flatMap(_.shutdown) // serviceWith doesn't compile
 
   def start: URManaged[Env, WebhookServer] =
     for {

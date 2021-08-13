@@ -32,7 +32,8 @@ object CustomConfigExample extends App {
           maxBackoff = 2.seconds,
           timeout = 1.day
         ),
-        batchingCapacity = Some(1024)
+        batchingCapacity = Some(1024),
+        webhookQueueCapacity = 512
       )
     )
 

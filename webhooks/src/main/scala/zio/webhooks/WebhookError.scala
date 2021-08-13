@@ -18,7 +18,7 @@ object WebhookError {
    * A [[FatalError]] is raised when a [[WebhookServer]] dies due to a fatal error like a missing
    * webhook or a missing event.
    */
-  final case class FatalError(cause: Cause[Nothing]) extends WebhookError
+  final case class FatalError(cause: Cause[_]) extends WebhookError
 
   /**
    * An [[InvalidStateError]] occurs when decoding `rawState` during event recovery fails with a
