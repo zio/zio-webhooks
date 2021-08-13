@@ -118,7 +118,7 @@ final case class WebhookServer private (
    * The server waits for event recovery and new event subscription to get ready, signalling that
    * the server is ready to accept events.
    */
-  def start: UIO[Any] =
+  private def start: UManaged[Unit] =
     for {
       f1 <- startRetryMonitoring
       f2 <- startEventRecovery
@@ -131,8 +131,8 @@ final case class WebhookServer private (
                 case _                                 =>
                   ZIO.unit
               }
-              .fork
-      _  <- startupLatch.await
+              .forkManaged
+      _  <- startupLatch.await.toManaged_
     } yield ()
 
   /**
@@ -142,30 +142,31 @@ final case class WebhookServer private (
    *
    * This ensures retries are persistent with respect to server restarts.
    */
-  private def startEventRecovery: UIO[Fiber.Runtime[Nothing, Unit]] = {
-    for {
-      _ <- stateRepo.loadState.flatMap(
-             ZIO
-               .foreach_(_)(jsonState =>
-                 ZIO
-                   .fromEither(jsonState.fromJson[PersistentRetries])
-                   .mapError(message => InvalidStateError(jsonState, message))
-                   .flatMap(retryController.loadRetries)
-               )
-               .catchAll(errorHub.publish)
-           )
-      f <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal)
-             .foreach(retryController.enqueueRetry)
-             .ensuring(shutdownLatch.countDown)
-             .fork
-    } yield f
-  } <* startupLatch.countDown
+  private def startEventRecovery =
+    ({
+      for {
+        _ <- stateRepo.loadState.flatMap(
+               ZIO
+                 .foreach_(_)(jsonState =>
+                   ZIO
+                     .fromEither(jsonState.fromJson[PersistentRetries])
+                     .mapError(message => InvalidStateError(jsonState, message))
+                     .flatMap(retryController.loadRetries)
+                 )
+                 .catchAll(errorHub.publish)
+             )
+        f <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal)
+               .foreach(retryController.enqueueRetry)
+               .ensuring(shutdownLatch.countDown)
+               .fork
+      } yield f
+    } <* startupLatch.countDown).toManaged_
 
   /**
    * Starts server subscription to new [[WebhookEvent]]s. Counts down on the `startupLatch`,
    * signalling that it's ready to accept new events.
    */
-  private def startNewEventSubscription: UIO[Fiber.Runtime[Nothing, Unit]] =
+  private def startNewEventSubscription =
     eventRepo.subscribeToNewEvents.use { eventDequeue =>
       for {
         // signal that the server is ready to accept new webhook events
@@ -186,18 +187,18 @@ final case class WebhookServer private (
                              .unless(isShutdown)
                              .ensuring(shutdownLatch.countDown)
       } yield ()
-    }.fork
+    }.forkManaged
 
   /**
    * Listens for new retries and starts retrying delivers to a webhook.
    */
-  private def startRetryMonitoring: UIO[Fiber.Runtime[Nothing, Any]] =
-    retryController.start.ensuring(shutdownLatch.countDown).fork
+  private def startRetryMonitoring =
+    retryController.start.ensuring(shutdownLatch.countDown).forkManaged
 
   /**
    * Waits until all work in progress is finished, persists retries, then shuts down.
    */
-  def shutdown: UIO[Any] =
+  private def shutdown: UIO[Any] =
     for {
       _               <- shutdownSignal.succeed(())
       _               <- shutdownLatch.await
@@ -218,23 +219,23 @@ object WebhookServer {
   /**
    * Creates a server, pulling dependencies from the environment then initializing internal state.
    */
-  private def create: URIO[Env, WebhookServer] =
+  private def create: URManaged[Env, WebhookServer] =
     for {
-      clock            <- ZIO.service[Clock.Service]
-      config           <- ZIO.service[WebhookServerConfig]
-      eventRepo        <- ZIO.service[WebhookEventRepo]
-      httpClient       <- ZIO.service[WebhookHttpClient]
-      serializePayload <- ZIO.service[SerializePayload]
-      webhookState     <- ZIO.service[WebhookStateRepo]
-      webhooksProxy    <- ZIO.service[WebhooksProxy]
-      errorHub         <- Hub.sliding[WebhookError](config.errorSlidingCapacity)
-      retryDispatchers <- RefM.make(Map.empty[WebhookId, RetryDispatcher])
-      retryInputQueue  <- Queue.bounded[WebhookEvent](1)
-      retryStates      <- RefM.make(Map.empty[WebhookId, RetryState])
+      clock            <- ZManaged.service[Clock.Service]
+      config           <- ZManaged.service[WebhookServerConfig]
+      eventRepo        <- ZManaged.service[WebhookEventRepo]
+      httpClient       <- ZManaged.service[WebhookHttpClient]
+      serializePayload <- ZManaged.service[SerializePayload]
+      webhookState     <- ZManaged.service[WebhookStateRepo]
+      webhooksProxy    <- ZManaged.service[WebhooksProxy]
+      errorHub         <- Hub.sliding[WebhookError](config.errorSlidingCapacity).toManaged_
+      retryDispatchers <- RefM.makeManaged(Map.empty[WebhookId, RetryDispatcher])
+      retryInputQueue  <- Queue.bounded[WebhookEvent](1).toManaged_
+      retryStates      <- RefM.makeManaged(Map.empty[WebhookId, RetryState])
       // startup & shutdown sync points: new event sub + event recovery + retrying
-      startupLatch     <- CountDownLatch.make(3)
-      shutdownLatch    <- CountDownLatch.make(3)
-      shutdownSignal   <- Promise.make[Nothing, Unit]
+      startupLatch     <- CountDownLatch.make(3).toManaged_
+      shutdownLatch    <- CountDownLatch.make(3).toManaged_
+      shutdownSignal   <- Promise.makeManaged[Nothing, Unit]
       retries           = RetryController(
                             clock,
                             config,
@@ -279,12 +280,8 @@ object WebhookServer {
   /**
    * Creates and starts a managed server, ensuring shutdown on release.
    */
-  val live: URLayer[WebhookServer.Env, Has[WebhookServer]] = {
-    for {
-      server <- WebhookServer.start.toManaged_
-      _      <- ZManaged.finalizer(server.shutdown)
-    } yield server
-  }.toLayer
+  val live: URLayer[WebhookServer.Env, Has[WebhookServer]] =
+    WebhookServer.start.toLayer
 
   /**
    * Accessor method for manually shutting down a managed server.
@@ -292,8 +289,12 @@ object WebhookServer {
   def shutdown: ZIO[Has[WebhookServer], IOException, Any] =
     ZIO.service[WebhookServer].flatMap(_.shutdown) // serviceWith doesn't compile
 
-  def start: URIO[Env, WebhookServer] =
-    create.tap(_.start)
+  def start: URManaged[Env, WebhookServer] =
+    for {
+      server <- create
+      _      <- server.start
+      _      <- ZManaged.finalizer(server.shutdown)
+    } yield server
 
   def subscribeToErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.subscribeToErrors)

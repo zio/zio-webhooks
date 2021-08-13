@@ -695,8 +695,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(
                                  List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
                                )
-                  server    <- WebhookServer.start
-                  _         <- server.shutdown
+                  _         <- WebhookServer.start.useNow
                   _         <- TestWebhookRepo.setWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(testEvent)
                   take      <- events.take.timeout(1.second).provideLayer(Clock.live)
@@ -715,11 +714,13 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(
                                  List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
                                )
-                  server    <- WebhookServer.start
-                  _         <- TestWebhookRepo.setWebhook(webhook)
-                  _         <- TestWebhookEventRepo.createEvent(testEvents(0))
-                  event1    <- events.take.as(true)
-                  _         <- server.shutdown
+                  event1    <- WebhookServer.start.use_ {
+                                 for {
+                                   _      <- TestWebhookRepo.setWebhook(webhook)
+                                   _      <- TestWebhookEventRepo.createEvent(testEvents(0))
+                                   event1 <- events.take.as(true)
+                                 } yield event1
+                               }
                   _         <- TestWebhookEventRepo.createEvent(testEvents(1))
                   take      <- events.take.timeout(1.second).provideLayer(Clock.live)
                 } yield assertTrue(event1 && take.isEmpty)
@@ -740,11 +741,13 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[StubResponse]
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Left(None), Left(None)))
-                  server    <- WebhookServer.start
-                  _         <- TestWebhookRepo.setWebhook(webhook)
-                  _         <- TestWebhookEventRepo.createEvent(event)
-                  _         <- requests.takeN(2) // wait for 2 requests to come through
-                  _         <- server.shutdown
+                  _         <- WebhookServer.start.use_ {
+                                 for {
+                                   _ <- TestWebhookRepo.setWebhook(webhook)
+                                   _ <- TestWebhookEventRepo.createEvent(event)
+                                   _ <- requests.takeN(2) // wait for 2 requests to come through
+                                 } yield ()
+                               }
                   saveState <- WebhookStateRepo.loadState
                                  .repeatUntil(_.isDefined)
                                  .map {
@@ -772,13 +775,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[StubResponse]
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
-                  server    <- WebhookServer.start
-                  _         <- TestWebhookRepo.setWebhook(webhook)
-                  _         <- TestWebhookEventRepo.createEvent(event)
-                  _         <- requests.takeN(2)
-                  _         <- server.shutdown
-                  _         <- WebhookServer.start
-                  _         <- requests.take.fork
+                  _         <- WebhookServer.start.use_ {
+                                 for {
+                                   _ <- TestWebhookRepo.setWebhook(webhook)
+                                   _ <- TestWebhookEventRepo.createEvent(event)
+                                   _ <- requests.takeN(2)
+                                 } yield ()
+                               }
+                  _         <- WebhookServer.start.use_(requests.take.fork)
                 } yield assertCompletes
             }
           },
@@ -797,25 +801,32 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses  <- Queue.unbounded[StubResponse]
                   _          <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _          <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
-                  server     <- WebhookServer.start
-                  _          <- TestWebhookRepo.setWebhook(webhook)
-                  _          <- TestWebhookEventRepo.createEvent(event)
-                  _          <- requests.takeN(2)
-                  _          <- TestClock.adjust(3.days)
-                  _          <- server.shutdown
-                  _          <- WebhookServer.start
-                  _          <- TestClock.adjust(4.days)
-                  lastStatus <- webhooks.takeN(2).map(_.last.status)
-                  _          <- requests.take
+                  _          <- WebhookServer.start.use_ {
+                                  for {
+                                    _ <- TestWebhookRepo.setWebhook(webhook)
+                                    _ <- TestWebhookEventRepo.createEvent(event)
+                                    _ <- requests.takeN(2)
+                                    _ <- TestClock.adjust(3.days)
+                                  } yield ()
+                                }
+                  lastStatus <- WebhookServer.start.use_ {
+                                  for {
+                                    _          <- TestClock.adjust(4.days)
+                                    lastStatus <- webhooks.takeN(2).map(_.last.status)
+                                    _          <- requests.take
+                                  } yield lastStatus
+                                }
+
                 } yield assert(lastStatus)(isSome(isSubtype[WebhookStatus.Unavailable](anything)))
             }
           },
           testM("clears persisted state after loading") {
             for {
-              _              <- WebhookServer.start.flatMap(_.shutdown)
+              _              <- WebhookServer.start.useNow
               persistedState <- ZIO.serviceWith[WebhookStateRepo](_.loadState)
-              _              <- WebhookServer.start
-              _              <- ZIO.serviceWith[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
+              _              <- WebhookServer.start.use_(
+                                  ZIO.serviceWith[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
+                                )
             } yield assert(persistedState)(isSome(anything))
           }
           // TODO: write unit tests for persistent retry backoff when needed

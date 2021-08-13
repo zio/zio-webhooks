@@ -13,7 +13,7 @@ import zio.stream._
 import zio.test._
 import zio.test.TestAspect.timeout
 import zio.webhooks.WebhookServerIntegrationSpecUtil._
-import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -26,37 +26,39 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
         (for {
           delivered <- SubscriptionRef.make(Set.empty[Int])
           test       = for {
-                         _                <- ZIO.foreach_(testWebhooks)(TestWebhookRepo.setWebhook)
-                         _                <- delivered.changes.collect {
-                                               case set if set.size % 100 == 0 || set.size / n.toDouble >= 0.99 =>
-                                                 set.size.toString
-                                             }
-                                               .foreach(size => putStrLn(s"delivered so far: $size").orDie)
-                                               .fork
-                         server           <- WebhookServer.start
-                         reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
-                         // create events for webhooks with single delivery, at-most-once semantics
-                         _                <- singleAtMostOnceEvents(n)
-                                               // pace events so we don't overwhelm the endpoint
-                                               .schedule(Schedule.spaced(25.micros))
-                                               .foreach(TestWebhookEventRepo.createEvent)
-                         // create events for webhooks with batched delivery, at-most-once semantics
-                         // no need to pace events as batching minimizes requests sent
-                         _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
-                         // wait to get half
-                         _                <- delivered.changes.filter(_.size == n / 2).runHead
-                         _                <- reliableEndpoint.interrupt
-                         _                <- server.shutdown
+                         _ <- ZIO.foreach_(testWebhooks)(TestWebhookRepo.setWebhook)
+                         _ <- delivered.changes.collect {
+                                case set if set.size % 100 == 0 || set.size / n.toDouble >= 0.99 =>
+                                  set.size.toString
+                              }
+                                .foreach(size => putStrLn(s"delivered so far: $size").orDie)
+                                .fork
+                         _ <- WebhookServer.start.use_ {
+                                for {
+                                  reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
+                                  // create events for webhooks with single delivery, at-most-once semantics
+                                  _                <- singleAtMostOnceEvents(n)
+                                                        // pace events so we don't overwhelm the endpoint
+                                                        .schedule(Schedule.spaced(50.micros).jittered)
+                                                        .foreach(TestWebhookEventRepo.createEvent)
+                                  // create events for webhooks with batched delivery, at-most-once semantics
+                                  // no need to pace events as batching minimizes requests sent
+                                  _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                                  // wait to get half
+                                  _                <- delivered.changes.filter(_.size == n / 2).runHead
+                                  _                <- reliableEndpoint.interrupt
+                                } yield ()
+                              }
                          // start restarting server and endpoint with random behavior
-                         _                <- RestartingWebhookServer.start.fork
-                         _                <- RandomEndpointBehavior.run(delivered).fork
+                         _ <- RestartingWebhookServer.start.fork
+                         _ <- RandomEndpointBehavior.run(delivered).fork
                          // send events for webhooks with at-least-once semantics
-                         _                <- singleAtLeastOnceEvents(n)
-                                               .schedule(Schedule.spaced(25.micros))
-                                               .foreach(TestWebhookEventRepo.createEvent)
-                         _                <- batchedAtLeastOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                         _ <- singleAtLeastOnceEvents(n)
+                                .schedule(Schedule.spaced(25.micros))
+                                .foreach(TestWebhookEventRepo.createEvent)
+                         _ <- batchedAtLeastOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
                          // wait to get second half
-                         _                <- delivered.changes.filter(_.size == n).runHead
+                         _ <- delivered.changes.filter(_.size == n).runHead
                        } yield ()
           // dump repo and events not delivered on timeout
           _         <- test.ensuring(
@@ -284,6 +286,7 @@ object RandomEndpointBehavior {
         _ <- putStrLn(s"Endpoint server behavior: $behavior")
         f <- behavior.start(delivered).fork
         _ <- behavior match {
+
                case Down  =>
                  f.interrupt.delay(2.seconds)
                case Flaky =>
@@ -302,15 +305,18 @@ object RestartingWebhookServer {
 
   private def runServerThenShutdown =
     for {
-      _        <- putStrLn("Server starting")
-      server   <- WebhookServer.start
-      _        <- putStrLn("Server started")
-      _        <- server.subscribeToErrors
-                    .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
-                    .fork
-      _        <- TestWebhookEventRepo.enqueueNew
-      duration <- random.nextIntBetween(3000, 5000).map(_.millis)
-      _        <- server.shutdown.delay(duration)
-      _        <- putStrLn("Server shut down")
-    } yield server
+      _ <- putStrLn("Server starting")
+      _ <- WebhookServer.start.use { server =>
+             for {
+               _        <- putStrLn("Server started")
+               f        <- server.subscribeToErrors
+                             .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                             .fork
+               _        <- TestWebhookEventRepo.enqueueNew
+               duration <- random.nextIntBetween(3000, 5000).map(_.millis)
+               _        <- f.interrupt.delay(duration)
+             } yield ()
+           }
+      _ <- putStrLn("Server shut down")
+    } yield ()
 }

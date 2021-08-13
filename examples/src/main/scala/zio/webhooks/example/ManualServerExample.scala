@@ -13,8 +13,9 @@ import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
 
 /**
- * An example of manually starting and shutting down the webhook server manually. Other than that,
- * this is the same scenario as in the [[BasicExample]].
+ * An example of manually starting a server. The server is shut down as its release action,
+ * releasing its dependencies as well. Other than that, this is the same scenario as in the
+ * [[BasicExample]].
  */
 object ManualServerExample extends App {
 
@@ -45,16 +46,14 @@ object ManualServerExample extends App {
   // Server is created and shut down manually. On shutdown, all existing work is finished before
   // the example finishes.
   private def program =
-    for {
-      server <- WebhookServer.start
-      _      <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
-      _      <- httpEndpointServer.start(port, httpApp).fork
-      _      <- TestWebhookRepo.setWebhook(webhook)
-      _      <- events
-                  .schedule(Schedule.spaced(50.micros).jittered)
-                  .foreach(TestWebhookEventRepo.createEvent)
-                  .ensuring((server.shutdown *> putStrLn("Shutdown successful")).orDie)
-    } yield ()
+    WebhookServer.start.use { server =>
+      for {
+        _ <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+        _ <- httpEndpointServer.start(port, httpApp).fork
+        _ <- TestWebhookRepo.setWebhook(webhook)
+        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      } yield ()
+    } *> putStrLn("Shutdown successful").orDie
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
