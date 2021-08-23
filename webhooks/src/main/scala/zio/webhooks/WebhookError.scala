@@ -5,7 +5,18 @@ import zio.Cause
 /**
  * Represents errors that can be raised during the operation of a webhook server.
  */
-sealed trait WebhookError extends Product with Serializable
+sealed trait WebhookError extends Exception with Product with Serializable { self =>
+  override def getMessage: String =
+    self match {
+      case WebhookError.BadWebhookUrlError(badUrl, message)  =>
+        s"""A webhook URL "$badUrl" failed to parse, cause: "$message""""
+      case WebhookError.FatalError(cause)                    =>
+        s"A fatal error occurred:\n$cause"
+      case WebhookError.InvalidStateError(rawState, message) =>
+        s"""Invalid state loaded on restart:\n$rawState\nwith message:\n"$message"""
+    }
+}
+
 object WebhookError {
 
   /**

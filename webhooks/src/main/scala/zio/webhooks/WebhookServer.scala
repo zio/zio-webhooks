@@ -151,7 +151,8 @@ final class WebhookServer private (
               .raceAll(f1.await, List(f2.await, f3.await, f4.await))
               .flatMap {
                 case Exit.Failure(cause) =>
-                  errorHub.publish(FatalError(cause)).when(cause.died || cause.failed)
+                  val flatCause = cause.flatten
+                  errorHub.publish(FatalError(flatCause)).when(flatCause.died || flatCause.failed)
                 case _                   =>
                   ZIO.unit
               }
