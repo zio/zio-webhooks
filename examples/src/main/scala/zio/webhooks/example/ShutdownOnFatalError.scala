@@ -18,6 +18,15 @@ import zio.webhooks.{ WebhooksProxy, _ }
  */
 object ShutdownOnFatalError extends App {
 
+  private lazy val events = goodEvents.take(2) ++ UStream(eventWithoutWebhook) ++ goodEvents.drop(2)
+
+  private lazy val eventWithoutWebhook = WebhookEvent(
+    WebhookEventKey(WebhookEventId(-1), WebhookId(-1)),
+    WebhookEventStatus.New,
+    s"""{"payload":-1}""",
+    Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+  )
+
   private val goodEvents = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
@@ -28,15 +37,6 @@ object ShutdownOnFatalError extends App {
         Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
       )
     }
-
-  private lazy val events = goodEvents.take(2) ++ UStream(eventWithoutWebhook) ++ goodEvents.drop(2)
-
-  private lazy val eventWithoutWebhook = WebhookEvent(
-    WebhookEventKey(WebhookEventId(-1), WebhookId(-1)),
-    WebhookEventStatus.New,
-    s"""{"payload":-1}""",
-    Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-  )
 
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
