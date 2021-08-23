@@ -17,8 +17,11 @@ private[webhooks] final case class WebhookDispatch(
   deliverySemantics: WebhookDeliverySemantics,
   payload: WebhookPayload
 ) {
-  lazy val contentType: Option[String] =
-    headers.find(_._1.toLowerCase == "content-type").map(_._2)
+  lazy val contentType: Option[WebhookContentMimeType] =
+    headers.collectFirst {
+      case (headerName, header) if headerName.toLowerCase == "content-type" =>
+        WebhookContentMimeType(header)
+    }
 
   lazy val events: NonEmptySet[WebhookEvent] =
     payload match {

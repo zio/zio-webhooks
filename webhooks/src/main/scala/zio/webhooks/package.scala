@@ -33,8 +33,8 @@ package object webhooks {
       .collectLeft
 
   /**
-   * [[SerializePayload]] is a function that takes a [[WebhookPayload]] and a MIME type of
-   * `Option[String]` and serializes it into a `String`.
+   * [[SerializePayload]] is a function that takes a [[WebhookPayload]] and an optional
+   * [WebhookContentMimeType] and serializes it into a `String`.
    */
-  type SerializePayload = (WebhookPayload, Option[String]) => String
+  type SerializePayload = (WebhookPayload, Option[WebhookContentMimeType]) => String
 }
