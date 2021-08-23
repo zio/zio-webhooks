@@ -19,7 +19,7 @@ import zio.webhooks.testkit._
 
 object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
   val spec =
-    suite("WebhookServerIntegrationSpec") {
+    suite("WebhookServerIntegrationSpec")(
       testM("all events are delivered eventually") {
         val n = 10000L // number of events
 
@@ -43,7 +43,9 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
                                                         .foreach(TestWebhookEventRepo.createEvent)
                                   // create events for webhooks with batched delivery, at-most-once semantics
                                   // no need to pace events as batching minimizes requests sent
-                                  _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                                  _                <- batchedAtMostOnceEvents(n).foreach(
+                                                        TestWebhookEventRepo.createEvent
+                                                      )
                                   // wait to get half
                                   _                <- delivered.changes.filter(_.size == n / 2).runHead
                                   _                <- reliableEndpoint.interrupt
@@ -76,8 +78,11 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
                        )
         } yield assertCompletes)
           .provideSomeLayer[IntegrationEnv](Clock.live ++ console.Console.live ++ random.Random.live)
-      } @@ timeout(3.minutes)
-    }.injectCustom(integrationEnv)
+      } @@ timeout(3.minutes),
+      testM("slow subscribers don't slow down the whole server") {
+        assertCompletesM
+      }
+    ).injectCustom(integrationEnv)
 }
 
 object WebhookServerIntegrationSpecUtil {

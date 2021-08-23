@@ -72,14 +72,7 @@ final class WebhookServer private (
       case (Some(batchDispatcher), WebhookDeliveryBatching.Batched) =>
         batchDispatcher.enqueueEvent(event)
       case _                                                        =>
-        deliver(
-          WebhookDispatch(
-            webhook.id,
-            webhook.url,
-            webhook.deliveryMode.semantics,
-            WebhookPayload.Single(event)
-          )
-        ).fork
+        deliver(WebhookDispatch(webhook.id, webhook.url, webhook.deliveryMode.semantics, WebhookPayload.Single(event)))
     }
 
   private def enqueueNewEvent(batchDispatcher: Option[BatchDispatcher], event: WebhookEvent): UIO[Unit] = {
