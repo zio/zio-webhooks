@@ -2,6 +2,7 @@ package zio.webhooks
 
 import zio._
 import zio.clock.Clock
+import zio.console.Console
 import zio.json._
 import zio.stream.UStream
 import zio.webhooks.WebhookDeliverySemantics._
@@ -24,6 +25,7 @@ import zio.webhooks.internal._
 final class WebhookServer private (
   private val clock: Clock.Service,
   private val config: WebhookServerConfig,
+  private val console: Console.Service,
   private val eventRepo: WebhookEventRepo,
   private val httpClient: WebhookHttpClient,
   private val stateRepo: WebhookStateRepo,
@@ -93,7 +95,14 @@ final class WebhookServer private (
                             } yield (queue, map + (webhookId -> queue))
                         }
                       }
-      _            <- webhookQueue.offer(event)
+      accepted     <- webhookQueue.offer(event)
+      _            <- console
+                        .putStrLn(
+                          s"""Slow webhook detected with id "${webhookId.value}"""" +
+                            " and event " + event
+                        )
+                        .unless(accepted)
+                        .orDie
     } yield ()
   }
 
@@ -241,6 +250,7 @@ object WebhookServer {
     for {
       clock            <- ZManaged.service[Clock.Service]
       config           <- ZManaged.service[WebhookServerConfig]
+      console          <- ZManaged.service[Console.Service]
       eventRepo        <- ZManaged.service[WebhookEventRepo]
       httpClient       <- ZManaged.service[WebhookHttpClient]
       serializePayload <- ZManaged.service[SerializePayload]
@@ -275,6 +285,7 @@ object WebhookServer {
     } yield new WebhookServer(
       clock,
       config,
+      console,
       eventRepo,
       httpClient,
       webhookState,
@@ -296,6 +307,7 @@ object WebhookServer {
     with Has[WebhookHttpClient]
     with Has[WebhookServerConfig]
     with Clock
+    with Console
 
   def getErrors: URManaged[Has[WebhookServer], Dequeue[WebhookError]] =
     ZManaged.service[WebhookServer].flatMap(_.subscribeToErrors)

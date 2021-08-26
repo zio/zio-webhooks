@@ -112,10 +112,7 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
 
         (for {
           delivered  <- SubscriptionRef.make(Set.empty[Int])
-          _          <- delivered.changes.collect {
-                          case set /*if set.size % 100 == 0 || set.size / webhookCount.toLong.toDouble >= 0.99*/ =>
-                            set.size.toString
-                        }.foreach(size => putStrLn(s"delivered so far: $size").orDie).fork
+          _          <- delivered.changes.map(_.size).foreach(size => putStrLn(s"delivered so far: $size").orDie).fork
           _          <- httpEndpointServer.start(port, slowEndpointsExceptFirst(delivered)).fork
           _          <- ZIO.foreach_(testWebhooks)(TestWebhookRepo.setWebhook)
           testResult <- WebhookServer.start.use { server =>
@@ -236,19 +233,19 @@ object WebhookServerIntegrationSpecUtil {
     HttpApp.collectM {
       case request @ Method.POST -> Root / "endpoint" / id if id == "0" =>
         for {
-          _                <- ZIO.foreach_(request.getBodyAsString) { body =>
-                                val singlePayload = body.fromJson[Int].map(Left(_))
-                                val batchPayload  = body.fromJson[List[Int]].map(Right(_))
-                                val payload       = singlePayload.orElseThat(batchPayload).toOption
-                                ZIO
-                                  .foreach_(payload) {
-                                    case Left(i)   =>
-                                      delivered.ref.update(set => UIO(set + i))
-                                    case Right(is) =>
-                                      delivered.ref.update(set => UIO(set ++ is))
-                                  }
-                              }
-          response         <- UIO(Response.status(Status.OK))
+          _        <- ZIO.foreach_(request.getBodyAsString) { body =>
+                        val singlePayload = body.fromJson[Int].map(Left(_))
+                        val batchPayload  = body.fromJson[List[Int]].map(Right(_))
+                        val payload       = singlePayload.orElseThat(batchPayload).toOption
+                        ZIO
+                          .foreach_(payload) {
+                            case Left(i)   =>
+                              delivered.ref.update(set => UIO(set + i))
+                            case Right(is) =>
+                              delivered.ref.update(set => UIO(set ++ is))
+                          }
+                      }
+          response <- UIO(Response.status(Status.OK))
         } yield response
       case _                                                            =>
         UIO(Response.status(Status.OK)).delay(1.minute)

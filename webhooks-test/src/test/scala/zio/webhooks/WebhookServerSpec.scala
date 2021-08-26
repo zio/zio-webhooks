@@ -2,6 +2,7 @@ package zio.webhooks
 
 import zio._
 import zio.clock.Clock
+import zio.console.Console
 import zio.duration._
 import zio.json._
 import zio.magic._
@@ -204,7 +205,30 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 secondRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
               } yield assert(secondRequest)(isNone)
             }
-          }
+          },
+          testM("writes warning to console when delivering to a slow webhook, i.e. queue gets full") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+
+            for {
+              capacity   <- ZIO.service[WebhookServerConfig].map(_.webhookQueueCapacity)
+              clock      <- ZIO.environment[Clock]
+              testEvents  = createPlaintextEvents(capacity + 2)(webhook.id) // + 2 because the first one gets taken
+              testResult <- webhooksTestScenario(
+                              initialStubResponses =
+                                UStream.fromEffect(UIO.right(WebhookHttpResponse(200)).delay(1.minute)).provide(clock),
+                              webhooks = List(webhook),
+                              events = List.empty,
+                              ScenarioInterest.Events
+                            ) { (_, _) =>
+                              for {
+                                _            <- ZIO.foreach_(testEvents.dropRight(1))(TestWebhookEventRepo.createEvent)
+                                outputBefore <- TestConsole.output
+                                _            <- TestWebhookEventRepo.createEvent(testEvents.last)
+                                _            <- TestConsole.output.repeatUntil(_.nonEmpty)
+                              } yield assertTrue(outputBefore.isEmpty)
+                            }
+            } yield testResult
+          } @@ timeout(2.seconds)
         ),
         suite("webhooks with at-least-once delivery")(
           testM("immediately retries once on non-200 response") {
@@ -928,9 +952,9 @@ object WebhookServerSpecUtil {
     with Has[WebhookServer]
     with Has[WebhooksProxy]
 
-  lazy val specEnv: URLayer[Clock with Has[WebhookServerConfig], SpecEnv] =
+  lazy val specEnv: URLayer[Clock with Console with Has[WebhookServerConfig], SpecEnv] =
     ZLayer
-      .fromSomeMagic[Clock with Has[WebhookServerConfig], SpecEnv](
+      .fromSomeMagic[Clock with Console with Has[WebhookServerConfig], SpecEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -940,12 +964,6 @@ object WebhookServerSpecUtil {
         WebhookServer.live,
         WebhooksProxy.live
       )
-
-  type TestServerEnv = Has[WebhookRepo]
-    with Has[WebhookStateRepo]
-    with Has[WebhookEventRepo]
-    with Has[WebhookHttpClient]
-    with Clock
 
   // keep an eye on the duplication here
   def webhooksTestScenario[A](
@@ -971,8 +989,8 @@ object WebhookServerSpecUtil {
     events: Iterable[WebhookEvent],
     scenarioInterest: ScenarioInterest[A]
   )(
-    assertion: (Dequeue[A], Queue[StubResponse]) => URIO[SpecEnv with TestClock, TestResult]
-  ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
+    assertion: (Dequeue[A], Queue[StubResponse]) => URIO[SpecEnv with TestClock with TestConsole, TestResult]
+  ): URIO[SpecEnv with TestClock with TestConsole with Has[WebhookServer] with Clock, TestResult] =
     ScenarioInterest.dequeueFor(scenarioInterest).use { dequeue =>
       for {
         responseQueue <- Queue.bounded[StubResponse](1)
