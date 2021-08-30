@@ -1,5 +1,6 @@
 package zio.webhooks.internal
 
+//import zio.Cause.{Die, Fail}
 import zio._
 import zio.prelude.NonEmptySet
 import zio.stream._
@@ -9,7 +10,7 @@ private[webhooks] final class BatchDispatcher private (
   private val batchingCapacity: Int,
   private val batchQueues: RefM[Map[BatchKey, Queue[WebhookEvent]]],
   private val deliver: (WebhookDispatch, Queue[WebhookEvent]) => UIO[Unit],
-  private val errorHub: Hub[WebhookError],
+  private val fatalPromise: Promise[Cause[Nothing], Nothing],
   private val inputQueue: Queue[WebhookEvent],
   private val shutdownSignal: Promise[Nothing, Unit],
   private val webhooks: WebhooksProxy
@@ -28,7 +29,7 @@ private[webhooks] final class BatchDispatcher private (
                   )
       _        <- deliver(dispatch, batchQueue).when(webhook.isEnabled)
     } yield ()
-    batchQueue.poll *> latch.succeed(()) *> deliverBatch.catchAll(errorHub.publish(_)).forever
+    batchQueue.poll *> latch.succeed(()) *> deliverBatch.forever
   }
 
   def enqueueEvent(event: WebhookEvent): UIO[Unit] =
@@ -52,7 +53,7 @@ private[webhooks] final class BatchDispatcher private (
                             }
                           }
             latch      <- Promise.make[Nothing, Unit]
-            _          <- deliverBatches(batchQueue, latch).fork
+            _          <- deliverBatches(batchQueue, latch).onError(fatalPromise.fail).fork
             _          <- latch.await
             _          <- events.run(ZSink.fromQueue(batchQueue))
           } yield ()
@@ -64,7 +65,7 @@ private[webhooks] object BatchDispatcher {
   def create(
     capacity: Int,
     deliver: (WebhookDispatch, Queue[WebhookEvent]) => UIO[Unit],
-    errorHub: Hub[WebhookError],
+    fatalPromise: Promise[Cause[Nothing], Nothing],
     shutdownSignal: Promise[Nothing, Unit],
     webhooks: WebhooksProxy
   ): UIO[BatchDispatcher] =
@@ -75,7 +76,7 @@ private[webhooks] object BatchDispatcher {
                       capacity,
                       batchQueue,
                       deliver,
-                      errorHub,
+                      fatalPromise,
                       inputQueue,
                       shutdownSignal,
                       webhooks

@@ -22,6 +22,18 @@ import zio.webhooks.{ WebhooksProxy, _ }
  */
 object BasicExample extends App {
 
+  // JSON webhook event stream
+  private lazy val events = UStream
+    .iterate(0L)(_ + 1)
+    .map { i =>
+      WebhookEvent(
+        WebhookEventKey(WebhookEventId(i), webhook.id),
+        WebhookEventStatus.New,
+        s"""{"payload":$i}""",
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+      )
+    }
+
   // reliable endpoint
   private val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
@@ -36,18 +48,6 @@ object BasicExample extends App {
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
-
-  // JSON webhook event stream
-  private lazy val events = UStream
-    .iterate(0L)(_ + 1)
-    .map { i =>
-      WebhookEvent(
-        WebhookEventKey(WebhookEventId(i), webhook.id),
-        WebhookEventStatus.New,
-        s"""{"payload":$i}""",
-        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-      )
-    }
 
   private lazy val port = 8080
 

@@ -3,8 +3,9 @@ package zio.webhooks.testkit
 import zio._
 import zio.prelude.NonEmptySet
 import zio.stream.UStream
-import zio.webhooks.WebhookError._
 import zio.webhooks._
+
+import scala.util.control.NoStackTrace
 
 trait TestWebhookEventRepo {
   def createEvent(event: WebhookEvent): UIO[Unit]
@@ -61,7 +62,7 @@ final private case class TestWebhookEventRepoImpl(
   def recoverEvents: UStream[WebhookEvent] =
     UStream.fromIterableM(ref.get.map(_.values.filter(_.isDelivering)))
 
-  def setAllAsFailedByWebhookId(webhookId: WebhookId): IO[MissingEventsError, Unit] =
+  def setAllAsFailedByWebhookId(webhookId: WebhookId): UIO[Unit] =
     for {
       updatedMap <- ref.modify { map =>
                       val allFailedByWebhookId =
@@ -72,29 +73,17 @@ final private case class TestWebhookEventRepoImpl(
       _          <- hub.publishAll(updatedMap.values)
     } yield ()
 
-  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): IO[MissingEventError, Unit] =
+  def setEventStatus(key: WebhookEventKey, status: WebhookEventStatus): UIO[Unit] =
     for {
-      maybeEvent <- ref.modify { map =>
-                      map.get(key) match {
-                        case None        =>
-                          (None, map)
-                        case Some(event) =>
-                          val updatedEvent = event.copy(status = status)
-                          (Some(updatedEvent), map.updated(key, updatedEvent))
-                      }
-                    }
-      _          <- maybeEvent match {
-                      case None        =>
-                        ZIO.fail(MissingEventError(key))
-                      case Some(event) =>
-                        hub.publish(event).unit
-                    }
+      event <- ref.modify { map =>
+                 val event        = map(key)
+                 val updatedEvent = event.copy(status = status)
+                 (updatedEvent, map.updated(key, updatedEvent))
+               }
+      _     <- hub.publish(event).unit
     } yield ()
 
-  def setEventStatusMany(
-    keys: NonEmptySet[WebhookEventKey],
-    status: WebhookEventStatus
-  ): IO[MissingEventsError, Unit] =
+  def setEventStatusMany(keys: NonEmptySet[WebhookEventKey], status: WebhookEventStatus): UIO[Unit] =
     for {
       result <- ref.modify { map =>
                   val missingKeys = keys.filter(!map.contains(_))
@@ -109,7 +98,7 @@ final private case class TestWebhookEventRepoImpl(
                 }
       _      <- result match {
                   case Left(missingKeys)    =>
-                    ZIO.fail(MissingEventsError(missingKeys))
+                    throw new NoStackTrace { override def getMessage = s"Fatal error, missing keys: $missingKeys" }
                   case Right(updatedEvents) =>
                     hub.publishAll(updatedEvents)
                 }

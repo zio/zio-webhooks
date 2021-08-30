@@ -20,6 +20,18 @@ import zio.webhooks.testkit._
  */
 object BasicExampleWithRetrying extends App {
 
+  private lazy val events = UStream
+    .iterate(0L)(_ + 1)
+    .map { i =>
+      WebhookEvent(
+        WebhookEventKey(WebhookEventId(i), webhook.id),
+        WebhookEventStatus.New,
+        s"""{"payload":$i}""",
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+      )
+    }
+    .take(n)
+
   // a flaky server answers with 200 60% of the time, 404 the other
   private lazy val httpApp = HttpApp.collectM {
     case request @ Method.POST -> Root / "endpoint" =>
@@ -43,18 +55,7 @@ object BasicExampleWithRetrying extends App {
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
 
-  private lazy val n      = 2000L
-  private lazy val events = UStream
-    .iterate(0L)(_ + 1)
-    .map { i =>
-      WebhookEvent(
-        WebhookEventKey(WebhookEventId(i), webhook.id),
-        WebhookEventStatus.New,
-        s"""{"payload":$i}""",
-        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-      )
-    }
-    .take(n)
+  private lazy val n = 2000L
 
   private lazy val port = 8080
 

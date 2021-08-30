@@ -12,6 +12,7 @@ private[webhooks] final case class RetryDispatcher(
   private val config: WebhookServerConfig,
   private val errorHub: Hub[WebhookError],
   private val eventRepo: WebhookEventRepo,
+  private val fatalPromise: Promise[Cause[Nothing], Nothing],
   private val httpClient: WebhookHttpClient,
   private val retryStates: RefM[Map[WebhookId, RetryState]],
   retryQueue: Queue[WebhookEvent],
@@ -119,7 +120,7 @@ private[webhooks] final case class RetryDispatcher(
     for {
       batchDispatcher <- ZIO.foreach(config.batchingCapacity)(
                            BatchDispatcher
-                             .create(_, deliverFunc, errorHub, shutdownSignal, webhooksProxy)
+                             .create(_, deliverFunc, fatalPromise, shutdownSignal, webhooksProxy)
                              .tap(_.start.fork)
                          )
       handleEvent      = for {
@@ -158,8 +159,8 @@ private[webhooks] final case class RetryDispatcher(
                          } yield ()
       isShutdown      <- shutdownSignal.isDone
       _               <- handleEvent
-                           .catchAll(errorHub.publish(_))
                            .repeatUntilM(_ => shutdownSignal.isDone)
+                           .onError(fatalPromise.fail)
                            .fork
                            .unless(isShutdown)
                            .provideLayer(ZLayer.succeed(clock))

@@ -21,6 +21,18 @@ import zio.webhooks.{ WebhooksProxy, _ }
  */
 object EventRecoveryExample extends App {
 
+  private lazy val events = UStream
+    .iterate(0L)(_ + 1)
+    .map { i =>
+      WebhookEvent(
+        WebhookEventKey(WebhookEventId(i), webhook.id),
+        WebhookEventStatus.New,
+        s"""{"payload":$i}""",
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+      )
+    }
+    .take(n)
+
   // server answers with 200 70% of the time, 404 the other
   private def httpApp(payloads: Ref[Set[String]]) =
     HttpApp.collectM {
@@ -51,57 +63,54 @@ object EventRecoveryExample extends App {
   // just an alias for a zio-http server to disambiguate it with the webhook server
   private lazy val httpEndpointServer = Server
 
-  private lazy val n      = 3000L
-  private lazy val events = UStream
-    .iterate(0L)(_ + 1)
-    .map { i =>
-      WebhookEvent(
-        WebhookEventKey(WebhookEventId(i), webhook.id),
-        WebhookEventStatus.New,
-        s"""{"payload":$i}""",
-        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
-      )
-    }
-    .take(n)
+  private lazy val n = 3000L
 
   private lazy val port = 8080
 
   private def program =
     for {
-      webhookServer <- WebhookServer.start
-      _             <- webhookServer.subscribeToErrors
-                         .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
-                         .fork
-      payloads      <- Ref.make(Set.empty[String])
-      _             <- httpEndpointServer.start(port, httpApp(payloads)).fork
-      _             <- TestWebhookRepo.setWebhook(webhook)
-      _             <- events
-                         .take(n / 3)
-                         .schedule(Schedule.spaced(50.micros))
-                         .foreach(TestWebhookEventRepo.createEvent)
-      _             <- webhookServer.shutdown
-      _             <- putStrLn("Shutdown successful")
-      webhookServer <- WebhookServer.start
-      _             <- webhookServer.subscribeToErrors
-                         .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
-                         .fork
-      _             <- putStrLn("Restart successful")
-      _             <- events
-                         .drop(n / 3)
-                         .take(n / 3)
-                         .schedule(Schedule.spaced(50.micros))
-                         .foreach(TestWebhookEventRepo.createEvent)
-      _             <- webhookServer.shutdown
-      webhookServer <- WebhookServer.start
-      _             <- webhookServer.subscribeToErrors
-                         .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
-                         .fork
-      _             <- putStrLn("Restart successful")
-      _             <- events
-                         .drop(2 * n / 3)
-                         .schedule(Schedule.spaced(50.micros))
-                         .foreach(TestWebhookEventRepo.createEvent)
-      _             <- clock.sleep(Duration.Infinity)
+      _ <- WebhookServer.start.use { server =>
+             for {
+               _        <- server.subscribeToErrors
+                             .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                             .fork
+               payloads <- Ref.make(Set.empty[String])
+               _        <- httpEndpointServer.start(port, httpApp(payloads)).fork
+               _        <- TestWebhookRepo.setWebhook(webhook)
+               _        <- events
+                             .take(n / 3)
+                             .schedule(Schedule.spaced(50.micros))
+                             .foreach(TestWebhookEventRepo.createEvent)
+             } yield ()
+           }
+      _ <- putStrLn("Shutdown successful")
+      _ <- WebhookServer.start.use { server =>
+             for {
+               _ <- server.subscribeToErrors
+                      .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                      .fork
+               _ <- putStrLn("Restart successful")
+               _ <- events
+                      .drop(n / 3)
+                      .take(n / 3)
+                      .schedule(Schedule.spaced(50.micros))
+                      .foreach(TestWebhookEventRepo.createEvent)
+             } yield ()
+           }
+      _ <- putStrLn("Shutdown successful")
+      _ <- WebhookServer.start.use { server =>
+             for {
+               _ <- server.subscribeToErrors
+                      .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                      .fork
+               _ <- putStrLn("Restart successful")
+               _ <- events
+                      .drop(2 * n / 3)
+                      .schedule(Schedule.spaced(50.micros))
+                      .foreach(TestWebhookEventRepo.createEvent)
+               _ <- clock.sleep(Duration.Infinity)
+             } yield ()
+           }
     } yield ()
 
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =

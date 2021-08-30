@@ -2,12 +2,13 @@ package zio.webhooks
 
 import zio._
 import zio.clock.Clock
+import zio.console.Console
 import zio.duration._
 import zio.json._
 import zio.magic._
 import zio.stream._
 import zio.test.Assertion._
-import zio.test.TestAspect.{ failing, flaky, ignore, timeout }
+import zio.test.TestAspect.{ failing, timeout }
 import zio.test._
 import zio.test.environment._
 import zio.webhooks.WebhookError._
@@ -144,23 +145,17 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               )(hasSize(equalTo(n)))
             }
           },
-          testM("missing webhook errors are published") {
+          testM("server dies with a fatal error when webhooks are missing") {
             val idRange               = 401L to 404L
             val missingWebhookIds     = idRange.map(WebhookId(_))
             val eventsMissingWebhooks = missingWebhookIds.flatMap(id => createPlaintextEvents(1)(id))
-
-            val expectedErrorCount = missingWebhookIds.size
 
             webhooksTestScenario(
               initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
               webhooks = List.empty,
               events = eventsMissingWebhooks,
               ScenarioInterest.Errors
-            ) { (errors, _) =>
-              assertM(errors.takeBetween(expectedErrorCount, expectedErrorCount + 1))(
-                hasSameElements(idRange.map(id => MissingWebhookError(WebhookId(id))))
-              )
-            }
+            )((errors, _) => assertM(errors.take)(isSubtype[FatalError](anything)))
           },
           testM("bad webhook URL errors are published") {
             val webhookWithBadUrl = Webhook(
@@ -210,7 +205,30 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 secondRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
               } yield assert(secondRequest)(isNone)
             }
-          }
+          },
+          testM("writes warning to console when delivering to a slow webhook, i.e. queue gets full") {
+            val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
+
+            for {
+              capacity   <- ZIO.service[WebhookServerConfig].map(_.webhookQueueCapacity)
+              clock      <- ZIO.environment[Clock]
+              testEvents  = createPlaintextEvents(capacity + 2)(webhook.id) // + 2 because the first one gets taken
+              testResult <- webhooksTestScenario(
+                              initialStubResponses =
+                                UStream.fromEffect(UIO.right(WebhookHttpResponse(200)).delay(1.minute)).provide(clock),
+                              webhooks = List(webhook),
+                              events = List.empty,
+                              ScenarioInterest.Events
+                            ) { (_, _) =>
+                              for {
+                                _            <- ZIO.foreach_(testEvents.dropRight(1))(TestWebhookEventRepo.createEvent)
+                                outputBefore <- TestConsole.output
+                                _            <- TestWebhookEventRepo.createEvent(testEvents.last)
+                                _            <- TestConsole.output.repeatUntil(_.nonEmpty)
+                              } yield assertTrue(outputBefore.isEmpty)
+                            }
+            } yield testResult
+          } @@ timeout(2.seconds)
         ),
         suite("webhooks with at-least-once delivery")(
           testM("immediately retries once on non-200 response") {
@@ -268,7 +286,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ) { (webhooks, _) =>
               for {
                 status  <- webhooks.take.map(_.status)
-                status2 <- webhooks.take.map(_.status) race TestClock.adjust(7.days).forever
+                status2 <- (webhooks.take.map(_.status) race TestClock.adjust(7.days).forever)
               } yield assert(status)(isSome(equalTo(WebhookStatus.Enabled))) &&
                 assert(status2)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
@@ -552,46 +570,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 _          <- waitForHalt race TestClock.adjust(10.millis).forever
               } yield assertCompletes
             }
-          },
-          testM("removing a webhook for an event causes a missing webhook error to be published") {
-            val webhook =
-              Webhook(
-                WebhookId(0),
-                "test url",
-                "test webhook",
-                WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
-              )
-
-            val firstEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(0), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 0",
-              plaintextContentHeaders
-            )
-
-            val secondEvent = WebhookEvent(
-              WebhookEventKey(WebhookEventId(1), webhook.id),
-              WebhookEventStatus.New,
-              "event payload 1",
-              plaintextContentHeaders
-            )
-
-            webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
-              webhooks = List(webhook),
-              events = List.empty,
-              ScenarioInterest.Errors
-            ) { (errors, _) =>
-              for {
-                _     <- TestWebhookEventRepo.createEvent(firstEvent)
-                _     <- clock.sleep(150.millis).provideLayer(Clock.live)
-                _     <- TestWebhookRepo.removeWebhook(webhook.id)
-                _     <- TestWebhookEventRepo.createEvent(secondEvent)
-                error <- errors.take
-              } yield assertTrue(error == MissingWebhookError(webhook.id))
-            }
-          } @@ timeout(2.seconds) @@ ignore // TODO: kill server on Missing*Errors
+          }
         )
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
@@ -667,12 +646,28 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             } yield assertTrue(batchCount <= deliveredEvents.size && deliveredEvents.size <= n)
           }
         },
-        // TODO: find sync point for this test
         testM("batches events on webhook and content-type") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
-          val jsonEvents      = createJsonEvents(4)(webhook.id)
-          val plaintextEvents = createPlaintextEvents(4)(webhook.id)
+          val jsonEvents =
+            (0 until 4).map { i =>
+              WebhookEvent(
+                WebhookEventKey(WebhookEventId(i.toLong), webhook.id),
+                WebhookEventStatus.New,
+                s"""{"event":"payload$i"}""",
+                jsonContentHeaders
+              )
+            }
+
+          val plaintextEvents =
+            (4 until 8).map { i =>
+              WebhookEvent(
+                WebhookEventKey(WebhookEventId(i.toLong), webhook.id),
+                WebhookEventStatus.New,
+                "event payload " + i,
+                plaintextContentHeaders
+              )
+            }
 
           webhooksTestScenario(
             initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
@@ -680,7 +675,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             events = jsonEvents ++ plaintextEvents,
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
-        } @@ timeout(100.millis) @@ flaky,
+        },
         testM("batched JSON event contents are always serialized into a JSON array") {
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val jsonEvents = createJsonEvents(100)(webhook.id)
@@ -724,8 +719,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(
                                  List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
                                )
-                  server    <- WebhookServer.start
-                  _         <- server.shutdown
+                  _         <- WebhookServer.start.useNow
                   _         <- TestWebhookRepo.setWebhook(webhook)
                   _         <- TestWebhookEventRepo.createEvent(testEvent)
                   take      <- events.take.timeout(1.second).provideLayer(Clock.live)
@@ -744,11 +738,13 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(
                                  List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
                                )
-                  server    <- WebhookServer.start
-                  _         <- TestWebhookRepo.setWebhook(webhook)
-                  _         <- TestWebhookEventRepo.createEvent(testEvents(0))
-                  event1    <- events.take.as(true)
-                  _         <- server.shutdown
+                  event1    <- WebhookServer.start.use_ {
+                                 for {
+                                   _      <- TestWebhookRepo.setWebhook(webhook)
+                                   _      <- TestWebhookEventRepo.createEvent(testEvents(0))
+                                   event1 <- events.take.as(true)
+                                 } yield event1
+                               }
                   _         <- TestWebhookEventRepo.createEvent(testEvents(1))
                   take      <- events.take.timeout(1.second).provideLayer(Clock.live)
                 } yield assertTrue(event1 && take.isEmpty)
@@ -769,11 +765,13 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[StubResponse]
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Left(None), Left(None)))
-                  server    <- WebhookServer.start
-                  _         <- TestWebhookRepo.setWebhook(webhook)
-                  _         <- TestWebhookEventRepo.createEvent(event)
-                  _         <- requests.takeN(2) // wait for 2 requests to come through
-                  _         <- server.shutdown
+                  _         <- WebhookServer.start.use_ {
+                                 for {
+                                   _ <- TestWebhookRepo.setWebhook(webhook)
+                                   _ <- TestWebhookEventRepo.createEvent(event)
+                                   _ <- requests.takeN(2) // wait for 2 requests to come through
+                                 } yield ()
+                               }
                   saveState <- WebhookStateRepo.loadState
                                  .repeatUntil(_.isDefined)
                                  .map {
@@ -801,13 +799,14 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[StubResponse]
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
-                  server    <- WebhookServer.start
-                  _         <- TestWebhookRepo.setWebhook(webhook)
-                  _         <- TestWebhookEventRepo.createEvent(event)
-                  _         <- requests.takeN(2)
-                  _         <- server.shutdown
-                  _         <- WebhookServer.start
-                  _         <- requests.take.fork
+                  _         <- WebhookServer.start.use_ {
+                                 for {
+                                   _ <- TestWebhookRepo.setWebhook(webhook)
+                                   _ <- TestWebhookEventRepo.createEvent(event)
+                                   _ <- requests.takeN(2)
+                                 } yield ()
+                               }
+                  _         <- WebhookServer.start.use_(requests.take.fork)
                 } yield assertCompletes
             }
           },
@@ -826,27 +825,35 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses  <- Queue.unbounded[StubResponse]
                   _          <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _          <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
-                  server     <- WebhookServer.start
-                  _          <- TestWebhookRepo.setWebhook(webhook)
-                  _          <- TestWebhookEventRepo.createEvent(event)
-                  _          <- requests.takeN(2)
-                  _          <- TestClock.adjust(3.days)
-                  _          <- server.shutdown
-                  _          <- WebhookServer.start
-                  _          <- TestClock.adjust(4.days)
-                  lastStatus <- webhooks.takeN(2).map(_.last.status)
-                  _          <- requests.take
+                  _          <- WebhookServer.start.use_ {
+                                  for {
+                                    _ <- TestWebhookRepo.setWebhook(webhook)
+                                    _ <- TestWebhookEventRepo.createEvent(event)
+                                    _ <- requests.takeN(2)
+                                    _ <- TestClock.adjust(3.days)
+                                  } yield ()
+                                }
+                  lastStatus <- WebhookServer.start.use_ {
+                                  for {
+                                    _          <- TestClock.adjust(4.days)
+                                    lastStatus <- webhooks.takeN(2).map(_.last.status)
+                                    _          <- requests.take
+                                  } yield lastStatus
+                                }
+
                 } yield assert(lastStatus)(isSome(isSubtype[WebhookStatus.Unavailable](anything)))
             }
           },
           testM("clears persisted state after loading") {
             for {
-              _              <- WebhookServer.start.flatMap(_.shutdown)
+              _              <- WebhookServer.start.useNow
               persistedState <- ZIO.serviceWith[WebhookStateRepo](_.loadState)
-              _              <- WebhookServer.start
-              _              <- ZIO.serviceWith[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
+              _              <- WebhookServer.start.use_(
+                                  ZIO.serviceWith[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
+                                )
             } yield assert(persistedState)(isSome(anything))
           }
+          // TODO: write unit tests for persistent retry backoff when needed
         )
       ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
     ) @@ timeout(20.seconds)
@@ -945,9 +952,9 @@ object WebhookServerSpecUtil {
     with Has[WebhookServer]
     with Has[WebhooksProxy]
 
-  lazy val specEnv: URLayer[Clock with Has[WebhookServerConfig], SpecEnv] =
+  lazy val specEnv: URLayer[Clock with Console with Has[WebhookServerConfig], SpecEnv] =
     ZLayer
-      .fromSomeMagic[Clock with Has[WebhookServerConfig], SpecEnv](
+      .fromSomeMagic[Clock with Console with Has[WebhookServerConfig], SpecEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -957,12 +964,6 @@ object WebhookServerSpecUtil {
         WebhookServer.live,
         WebhooksProxy.live
       )
-
-  type TestServerEnv = Has[WebhookRepo]
-    with Has[WebhookStateRepo]
-    with Has[WebhookEventRepo]
-    with Has[WebhookHttpClient]
-    with Clock
 
   // keep an eye on the duplication here
   def webhooksTestScenario[A](
@@ -988,8 +989,8 @@ object WebhookServerSpecUtil {
     events: Iterable[WebhookEvent],
     scenarioInterest: ScenarioInterest[A]
   )(
-    assertion: (Dequeue[A], Queue[StubResponse]) => URIO[SpecEnv with TestClock, TestResult]
-  ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
+    assertion: (Dequeue[A], Queue[StubResponse]) => URIO[SpecEnv with TestClock with TestConsole, TestResult]
+  ): URIO[SpecEnv with TestClock with TestConsole with Has[WebhookServer] with Clock, TestResult] =
     ScenarioInterest.dequeueFor(scenarioInterest).use { dequeue =>
       for {
         responseQueue <- Queue.bounded[StubResponse](1)

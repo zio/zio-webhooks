@@ -5,7 +5,6 @@ import zio.clock.Clock
 import zio.duration.Duration
 import zio.prelude.NonEmptySet
 import zio.stream.UStream
-import zio.webhooks.WebhookError.MissingWebhookError
 import zio.webhooks.WebhooksProxy.UpdateMode
 import zio.webhooks.WebhooksProxy.UpdateMode.PollingFunction
 
@@ -21,23 +20,13 @@ final case class WebhooksProxy private (
 
   /**
    * Looks up a webhook from the server's internal webhook map by [[WebhookId]]. If missing, we look
-   * for it in the [[WebhookRepo]], raising a [[MissingWebhookError]] if we don't find one there.
-   * Adds webhooks looked up from a repo to the server's internal webhook map.
+   * it up in the [[WebhookRepo]]. Adds webhooks looked up from a repo to the server's internal
+   * webhook map.
    */
-  def getWebhookById(webhookId: WebhookId): IO[MissingWebhookError, Webhook] =
+  def getWebhookById(webhookId: WebhookId): UIO[Webhook] =
     for {
       option  <- cache.get.map(_.get(webhookId))
-      webhook <- option match {
-                   case Some(webhook) =>
-                     UIO(webhook)
-                   case None          =>
-                     for {
-                       webhook <- webhookRepo
-                                    .getWebhookById(webhookId)
-                                    .flatMap(ZIO.fromOption(_).orElseFail(MissingWebhookError(webhookId)))
-                       _       <- cache.update(_ + (webhookId -> webhook))
-                     } yield webhook
-                 }
+      webhook <- option.map(UIO(_)).getOrElse(webhookRepo.getWebhookById(webhookId))
     } yield webhook
 
   private def pollForUpdates(pollingFunction: PollingFunction): UIO[Unit] =
@@ -46,21 +35,12 @@ final case class WebhooksProxy private (
       _    <- ZIO.foreach_(keys)(pollingFunction(_).flatMap(cache.set))
     } yield ()
 
-  def setWebhookStatus(webhookId: WebhookId, status: WebhookStatus): IO[MissingWebhookError, Unit] =
+  def setWebhookStatus(webhookId: WebhookId, status: WebhookStatus): UIO[Unit] =
     for {
-      webhookExists <- cache.modify(map =>
-                         map.get(webhookId) match {
-                           case Some(webhook) =>
-                             val updatedWebhook = webhook.copy(status = status)
-                             (true, map.updated(webhookId, updatedWebhook))
-                           case None          =>
-                             (false, map)
-                         }
-                       )
-      _             <- if (webhookExists)
-                         webhookRepo.setWebhookStatus(webhookId, status)
-                       else
-                         ZIO.fail(MissingWebhookError(webhookId))
+      _ <- cache.update(map =>
+             map.get(webhookId).fold(map)(webhook => map.updated(webhookId, webhook.copy(status = status)))
+           )
+      _ <- webhookRepo.setWebhookStatus(webhookId, status)
     } yield ()
 
   private[webhooks] def start: URIO[Clock, Any] =
@@ -72,7 +52,7 @@ final case class WebhooksProxy private (
           case WebhookUpdate.WebhookRemoved(webhookId) =>
             cache.update(_ - webhookId)
           case WebhookUpdate.WebhookChanged(webhook)   =>
-            // we only update if the webhook is relevant, i.e. getWebhook was called to get it before
+            // we only update relevant webhooks, i.e. getWebhook was called to get it before
             cache.update(_.updateWith(webhook.id)(_.map(_ => webhook)))
         }
     }

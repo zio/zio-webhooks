@@ -16,6 +16,7 @@ private[webhooks] final case class RetryController(
   private val config: WebhookServerConfig,
   private val errorHub: Hub[WebhookError],
   private val eventRepo: WebhookEventRepo,
+  private val fatalPromise: Promise[Cause[Nothing], Nothing],
   private val httpClient: WebhookHttpClient,
   private val inputQueue: Queue[WebhookEvent],
   private val retryDispatchers: RefM[Map[WebhookId, RetryDispatcher]],
@@ -53,34 +54,35 @@ private[webhooks] final case class RetryController(
     loadedState: PersistentRetries.PersistentRetryState
   ): IO[WebhookError, (RetryDispatcher, RetryState)] =
     for {
-      now <- clock.instant
-      foo <- Queue.bounded[WebhookEvent](config.retry.capacity).map { retryQueue =>
-               (
-                 RetryDispatcher(
-                   clock,
-                   config,
-                   errorHub,
-                   eventRepo,
-                   httpClient,
-                   retryStates,
-                   retryQueue,
-                   serializePayload,
-                   shutdownSignal,
-                   webhookId,
-                   webhooksProxy
-                 ),
-                 RetryState(
-                   now,
-                   backoff = None,
-                   failureCount = 0,
-                   isActive = false,
-                   now,
-                   loadedState.timeLeft,
-                   timerKillSwitch = None
+      now   <- clock.instant
+      retry <- Queue.bounded[WebhookEvent](config.retry.capacity).map { retryQueue =>
+                 (
+                   RetryDispatcher(
+                     clock,
+                     config,
+                     errorHub,
+                     eventRepo,
+                     fatalPromise,
+                     httpClient,
+                     retryStates,
+                     retryQueue,
+                     serializePayload,
+                     shutdownSignal,
+                     webhookId,
+                     webhooksProxy
+                   ),
+                   RetryState(
+                     now,
+                     backoff = None,
+                     failureCount = 0,
+                     isActive = false,
+                     now,
+                     loadedState.timeLeft,
+                     timerKillSwitch = None
+                   )
                  )
-               )
-             }
-    } yield foo
+               }
+    } yield retry
 
   def persistRetries(timestamp: Instant): UIO[PersistentRetries] =
     suspendRetries(timestamp).map(map =>
@@ -114,6 +116,7 @@ private[webhooks] final case class RetryController(
                                                   config,
                                                   errorHub,
                                                   eventRepo,
+                                                  fatalPromise,
                                                   httpClient,
                                                   retryStates,
                                                   retryQueue,
@@ -142,8 +145,8 @@ private[webhooks] final case class RetryController(
         isShutDown <- shutdownSignal.isDone
         _          <- retryQueue.offer(event).race(shutdownSignal.await).unless(isShutDown)
       } yield ()
-    } *> shutdownLatch.countDown
-    inputQueue.poll *> startupLatch.countDown *> handleRetryEvents.fork
+    }
+    inputQueue.poll *> startupLatch.countDown *> handleRetryEvents
   }
 
   private def suspendRetries(timestamp: Instant): UIO[Map[WebhookId, RetryState]] =
