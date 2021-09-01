@@ -12,7 +12,7 @@ import java.io.IOException
 
 /**
  * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] using sttp's ZIO backend, i.e.
- * [[sttp.client.asynchttpclient.zio.AsyncHttpClientZioBackend]].
+ * `AsyncHttpClientZioBackend`.
  */
 final case class WebhookSttpClient(sttpClient: SttpClient, permits: Semaphore) extends WebhookHttpClient {
 

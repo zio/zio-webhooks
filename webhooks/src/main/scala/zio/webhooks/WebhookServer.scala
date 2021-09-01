@@ -13,14 +13,14 @@ import zio.webhooks.internal._
  * A [[WebhookServer]] is a stateful server that subscribes to [[WebhookEvent]]s and reliably
  * delivers them, i.e. failed dispatches are retried once, followed by retries with exponential
  * backoff. Retries are performed until some duration after which webhooks will be marked
- * [[WebhookStatus.Unavailable]] since some [[java.time.Instant]]. Dispatches are batched if and
+ * [[WebhookStatus.Unavailable]] since some `Instant`. Dispatches are batched if and
  * only if a batching capacity is configured ''and'' a webhook's delivery batching is
- * [[WebhookDeliveryBatching.Batched]]. When [[shutdown]] is called, a [[shutdownSignal]] is sent
+ * [[WebhookDeliveryBatching.Batched]]. When `shutdown` is called, a `shutdownSignal` is sent
  * which lets all dispatching work finish. Finally, the retry state is persisted, which allows
  * retries to resume after server restarts.
  *
  * A `live` server layer is provided in the companion object for convenience and proper resource
- * management, ensuring [[shutdown]] is called by the finalizer.
+ * management, ensuring `shutdown` is called by the finalizer.
  */
 final class WebhookServer private (
   private val clock: Clock.Service,

@@ -3,7 +3,7 @@ package zio.webhooks
 import zio.json._
 
 /**
- * A webhook is identified by a [[Long]].
+ * A webhook is identified by a `Long`.
  */
 final case class WebhookId(value: Long)
 
