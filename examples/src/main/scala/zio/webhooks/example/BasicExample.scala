@@ -60,7 +60,7 @@ object BasicExample extends App {
     } yield ()
 
   /**
-   * The webhook server is started as part of the layer construction. See [[WebhookServer.live]].
+   * The webhook server is started as part of the layer construction. See `WebhookServer.live`.
    */
   def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program

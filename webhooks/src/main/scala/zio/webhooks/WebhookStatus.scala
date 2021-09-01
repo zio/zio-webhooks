@@ -4,7 +4,7 @@ import java.time.Instant
 
 /**
  * A [[WebhookStatus]] describes the status of a webhook, which can be `Enabled`, `Disabled`, or
- * `Unavailable`: the last one being so since some [[java.time.Instant]]. Clients are responsible
+ * `Unavailable`: the last one being so since some `Instant`. Clients are responsible
  * for enabling and disabling webhooks as this is a read-only status as far as the webhook server is
  * concerned. The server sets a webhook unavailable when retries time out.
  */
