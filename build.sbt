@@ -36,7 +36,7 @@ val zioHttpVersion    = "1.0.0.0-RC17"
 val zioJson           = "0.1.5"
 val zioMagicVersion   = "0.3.8"
 val zioPreludeVersion = "1.0.0-RC7"
-val sttpVersion       = "2.2.9"
+val sttpVersion       = "3.3.15"
 
 lazy val root =
   project
@@ -49,13 +49,13 @@ lazy val zioWebhooks = module("zio-webhooks", "webhooks")
   .settings(buildInfoSettings("zio.webhooks"))
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio"                      %% "zio"                           % zioVersion,
-      "dev.zio"                      %% "zio-json"                      % zioJson,
-      "dev.zio"                      %% "zio-prelude"                   % zioPreludeVersion,
-      "dev.zio"                      %% "zio-streams"                   % zioVersion,
-      "dev.zio"                      %% "zio-test"                      % zioVersion,
-      "com.softwaremill.sttp.client" %% "core"                          % sttpVersion,
-      "com.softwaremill.sttp.client" %% "async-http-client-backend-zio" % sttpVersion
+      "dev.zio"                       %% "zio"                           % zioVersion,
+      "dev.zio"                       %% "zio-json"                      % zioJson,
+      "dev.zio"                       %% "zio-prelude"                   % zioPreludeVersion,
+      "dev.zio"                       %% "zio-streams"                   % zioVersion,
+      "dev.zio"                       %% "zio-test"                      % zioVersion,
+      "com.softwaremill.sttp.client3" %% "core"                          % sttpVersion,
+      "com.softwaremill.sttp.client3" %% "async-http-client-backend-zio" % sttpVersion
     )
   )
   .settings(
