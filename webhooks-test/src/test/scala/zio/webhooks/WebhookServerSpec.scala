@@ -882,7 +882,7 @@ object WebhookServerSpecUtil {
       )
     }
 
-  val jsonContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+  val jsonContentHeaders: Chunk[HttpHeader] = Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
 
   val jsonPayloadPattern: String =
     """(?:\[\{\"event\":\"payload\d+\"}(?:,\{\"event\":\"payload\d+\"})*\])"""
@@ -909,7 +909,7 @@ object WebhookServerSpecUtil {
         WebhooksProxy.live
       )
 
-  val plaintextContentHeaders: Chunk[(String, String)] = Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
+  val plaintextContentHeaders: Chunk[HttpHeader] = Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
 
   sealed trait ScenarioInterest[A]
   object ScenarioInterest {

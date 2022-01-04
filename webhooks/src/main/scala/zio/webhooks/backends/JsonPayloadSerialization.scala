@@ -1,6 +1,6 @@
 package zio.webhooks.backends
 
-import zio.{ Has, ULayer, ZLayer }
+import zio.{ Chunk, Has, ULayer, ZLayer }
 import zio.webhooks._
 
 object JsonPayloadSerialization {
@@ -11,16 +11,16 @@ object JsonPayloadSerialization {
         case Some(WebhookContentMimeType(contentType)) if contentType.toLowerCase == "application/json" =>
           webhookPayload match {
             case WebhookPayload.Single(event)   =>
-              event.content
+              (event.content, Chunk.empty)
             case WebhookPayload.Batched(events) =>
-              "[" + events.map(_.content).mkString(",") + "]"
+              ("[" + events.map(_.content).mkString(",") + "]", Chunk.empty)
           }
         case _                                                                                          =>
           webhookPayload match {
             case WebhookPayload.Single(event)   =>
-              event.content
+              (event.content, Chunk.empty)
             case WebhookPayload.Batched(events) =>
-              events.map(_.content).mkString
+              (events.map(_.content).mkString, Chunk.empty)
           }
       }
     }

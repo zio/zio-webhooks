@@ -31,5 +31,5 @@ private[webhooks] final case class WebhookDispatch(
         events
     }
 
-  lazy val headers: Chunk[(String, String)] = payload.headers
+  lazy val headers: Chunk[HttpHeader] = payload.headers
 }
