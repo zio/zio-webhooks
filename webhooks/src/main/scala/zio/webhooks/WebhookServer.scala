@@ -47,8 +47,8 @@ final class WebhookServer private (
    * marked failed.
    */
   private def deliver(dispatch: WebhookDispatch): UIO[Unit] = {
-    val request =
-      WebhookHttpRequest(dispatch.url, serializePayload(dispatch.payload, dispatch.contentType), dispatch.headers)
+    val (payload, headers) = serializePayload(dispatch.payload, dispatch.contentType)
+    val request            = WebhookHttpRequest(dispatch.url, payload, dispatch.headers ++ headers)
     for {
       response <- httpClient.post(request).either
       _        <- (dispatch.deliverySemantics, response) match {

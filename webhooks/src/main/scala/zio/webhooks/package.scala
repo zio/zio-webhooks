@@ -32,9 +32,12 @@ package object webhooks {
       .mergeTerminateRight(UStream.fromEffect(shutdownSignal.await.map(Right(_))))
       .collectLeft
 
+  type HttpHeader = (String, String)
+
   /**
    * [[SerializePayload]] is a function that takes a [[WebhookPayload]] and an optional
-   * [WebhookContentMimeType] and serializes it into a `String`.
+   * [WebhookContentMimeType] and serializes it into a pair of `String` and a chunk of [[HttpHeader]] to append
+   * to the outgoing request.
    */
-  type SerializePayload = (WebhookPayload, Option[WebhookContentMimeType]) => String
+  type SerializePayload = (WebhookPayload, Option[WebhookContentMimeType]) => (String, Chunk[HttpHeader])
 }

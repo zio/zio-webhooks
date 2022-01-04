@@ -72,8 +72,8 @@ private[webhooks] final case class RetryDispatcher(
    * for retries when the endpoint begins to return `200` status codes.
    */
   private def retryEvents(dispatch: WebhookDispatch, batchQueue: Option[Queue[WebhookEvent]]): UIO[Unit] = {
-    val request =
-      WebhookHttpRequest(dispatch.url, serializePayload(dispatch.payload, dispatch.contentType), dispatch.headers)
+    val (payload, headers) = serializePayload(dispatch.payload, dispatch.contentType)
+    val request            = WebhookHttpRequest(dispatch.url, payload, dispatch.headers ++ headers)
     for {
       response <- httpClient.post(request).either
       _        <- response match {
