@@ -9,7 +9,8 @@ final case class WebhookEvent(
   key: WebhookEventKey,
   status: WebhookEventStatus,
   content: String,
-  headers: Chunk[(String, String)]
+  headers: Chunk[HttpHeader],
+  token: Option[String]
 ) {
 
   lazy val contentType: Option[String] =

@@ -30,7 +30,8 @@ object BasicExample extends App {
         WebhookEventKey(WebhookEventId(i), webhook.id),
         WebhookEventStatus.New,
         s"""{"payload":$i}""",
-        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json")),
+        None
       )
     }
 
@@ -82,6 +83,7 @@ object BasicExample extends App {
     url = s"http://0.0.0.0:$port/endpoint",
     label = "test webhook",
     WebhookStatus.Enabled,
-    WebhookDeliveryMode.SingleAtMostOnce
+    WebhookDeliveryMode.SingleAtMostOnce,
+    None
   )
 }

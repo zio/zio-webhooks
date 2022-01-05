@@ -33,7 +33,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload",
-              jsonContentHeaders
+              jsonContentHeaders,
+              None
             )
 
             val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
@@ -52,7 +53,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload",
-              jsonContentHeaders
+              jsonContentHeaders,
+              None
             )
 
             webhooksTestScenario(
@@ -69,7 +71,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload",
-              jsonContentHeaders
+              jsonContentHeaders,
+              None
             )
 
             val expectedStatuses = List(WebhookEventStatus.Delivering, WebhookEventStatus.Delivered)
@@ -163,14 +166,16 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               url = "ne'er-do-well URL",
               label = "webhook with a bad url",
               WebhookStatus.Enabled,
-              WebhookDeliveryMode.SingleAtMostOnce
+              WebhookDeliveryMode.SingleAtMostOnce,
+              None
             )
 
             val event = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
               WebhookEventStatus.New,
               "test event payload",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             val expectedError = BadWebhookUrlError(webhookWithBadUrl.url, "'twas a ne'er do-well")
@@ -191,7 +196,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
               WebhookEventStatus.New,
               "test event payload",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             webhooksTestScenario(
@@ -356,7 +362,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 WebhookEventKey(WebhookEventId(0), webhookId),
                 WebhookEventStatus.New,
                 webhookId.value.toString,
-                Chunk(("Accept", "*/*"), ("Content-Type", "text/plain"))
+                Chunk(("Accept", "*/*"), ("Content-Type", "text/plain")),
+                None
               )
             }
 
@@ -389,14 +396,16 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 firstUrl,
                 "test webhook",
                 WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
+                WebhookDeliveryMode.SingleAtMostOnce,
+                None
               )
 
             val firstEvent = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload 0",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             val nextEvents = UStream
@@ -406,7 +415,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   WebhookEventKey(WebhookEventId(eventId), webhook.id),
                   WebhookEventStatus.New,
                   s"event payload $eventId",
-                  plaintextContentHeaders
+                  plaintextContentHeaders,
+                  None
                 )
               }
               .drop(1)
@@ -435,14 +445,16 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 "test url",
                 "test webhook",
                 WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
+                WebhookDeliveryMode.SingleAtMostOnce,
+                None
               )
 
             val firstEvent = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload 0",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             val nextEvents = UStream
@@ -452,7 +464,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   WebhookEventKey(WebhookEventId(eventId), webhook.id),
                   WebhookEventStatus.New,
                   s"event payload $eventId",
-                  plaintextContentHeaders
+                  plaintextContentHeaders,
+                  None
                 )
               }
               .drop(1)
@@ -491,14 +504,16 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 "test url",
                 "test webhook",
                 WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtMostOnce
+                WebhookDeliveryMode.SingleAtMostOnce,
+                None
               )
 
             val firstEvent = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload 0",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             val nextEvents = UStream
@@ -508,7 +523,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   WebhookEventKey(WebhookEventId(eventId), webhook.id),
                   WebhookEventStatus.New,
                   s"event payload $eventId",
-                  plaintextContentHeaders
+                  plaintextContentHeaders,
+                  None
                 )
               }
               .drop(1)
@@ -544,14 +560,16 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 "test url",
                 "test webhook",
                 WebhookStatus.Enabled,
-                WebhookDeliveryMode.SingleAtLeastOnce
+                WebhookDeliveryMode.SingleAtLeastOnce,
+                None
               )
 
             val event = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), webhook.id),
               WebhookEventStatus.New,
               "event payload 0",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             webhooksTestScenario(
@@ -653,7 +671,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 WebhookEventKey(WebhookEventId(i.toLong), webhook.id),
                 WebhookEventStatus.New,
                 s"""{"event":"payload$i"}""",
-                jsonContentHeaders
+                jsonContentHeaders,
+                None
               )
             }
 
@@ -663,7 +682,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 WebhookEventKey(WebhookEventId(i.toLong), webhook.id),
                 WebhookEventStatus.New,
                 "event payload " + i,
-                plaintextContentHeaders
+                plaintextContentHeaders,
+                None
               )
             }
 
@@ -706,7 +726,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
               WebhookEventStatus.New,
               "event payload",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             TestWebhookEventRepo.subscribeToEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
@@ -754,7 +775,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
               WebhookEventStatus.New,
               "event payload",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             TestWebhookHttpClient.getRequests.use {
@@ -788,7 +810,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
               WebhookEventStatus.New,
               "recovered event",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             TestWebhookHttpClient.getRequests.use {
@@ -814,7 +837,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
               WebhookEventStatus.New,
               "event content",
-              plaintextContentHeaders
+              plaintextContentHeaders,
+              None
             )
 
             (TestWebhookHttpClient.getRequests zip TestWebhookRepo.subscribeToWebhooks).use {
@@ -868,7 +892,8 @@ object WebhookServerSpecUtil {
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
         WebhookEventStatus.New,
         s"""{"event":"payload$i"}""",
-        jsonContentHeaders
+        jsonContentHeaders,
+        None
       )
     }
 
@@ -878,7 +903,8 @@ object WebhookServerSpecUtil {
         WebhookEventKey(WebhookEventId(i.toLong), webhookId),
         WebhookEventStatus.New,
         "event payload " + i,
-        plaintextContentHeaders
+        plaintextContentHeaders,
+        None
       )
     }
 
@@ -937,7 +963,8 @@ object WebhookServerSpecUtil {
       "http://example.org/" + id,
       "testWebhook" + id,
       status,
-      deliveryMode
+      deliveryMode,
+      None
     )
 
   type SpecEnv = Has[WebhookEventRepo]

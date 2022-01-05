@@ -13,7 +13,8 @@ final case class Webhook(
   url: String,
   label: String,
   status: WebhookStatus,
-  deliveryMode: WebhookDeliveryMode
+  deliveryMode: WebhookDeliveryMode,
+  token: Option[String]
 ) {
   val batching: WebhookDeliveryBatching = deliveryMode.batching
 

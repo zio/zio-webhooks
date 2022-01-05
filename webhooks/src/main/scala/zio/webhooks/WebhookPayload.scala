@@ -4,7 +4,7 @@ import zio.Chunk
 import zio.prelude.NonEmptySet
 
 sealed trait WebhookPayload {
-  lazy val headers: Chunk[(String, String)] =
+  lazy val headers: Chunk[HttpHeader] =
     this match {
       case WebhookPayload.Single(event)   =>
         event.headers

@@ -88,7 +88,8 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
             url = s"http://0.0.0.0:$port/endpoint/$i",
             label = s"test webhook $i",
             WebhookStatus.Enabled,
-            WebhookDeliveryMode.SingleAtMostOnce
+            WebhookDeliveryMode.SingleAtMostOnce,
+            None
           )
         }
 
@@ -103,7 +104,8 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
                     WebhookEventKey(WebhookEventId(eventId), WebhookId(webhookId)),
                     WebhookEventStatus.New,
                     eventId.toString,
-                    Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+                    Chunk(("Accept", "*/*"), ("Content-Type", "application/json")),
+                    None
                   )
                 }
                 .take(eventsPerWebhook.toLong)
@@ -162,7 +164,8 @@ object WebhookServerIntegrationSpecUtil {
             WebhookEventKey(WebhookEventId(i), WebhookId(webhookId.toLong)),
             WebhookEventStatus.New,
             i.toString, // a single number string is valid JSON
-            Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+            Chunk(("Accept", "*/*"), ("Content-Type", "application/json")),
+            None
           )
       }
 
@@ -257,7 +260,8 @@ object WebhookServerIntegrationSpecUtil {
       url = s"http://0.0.0.0:$port/endpoint/$i",
       label = s"test webhook $i",
       WebhookStatus.Enabled,
-      WebhookDeliveryMode.SingleAtMostOnce
+      WebhookDeliveryMode.SingleAtMostOnce,
+      None
     )
   } ++ (250 until 500).map { i =>
     Webhook(
@@ -265,7 +269,8 @@ object WebhookServerIntegrationSpecUtil {
       url = s"http://0.0.0.0:$port/endpoint/$i",
       label = s"test webhook $i",
       WebhookStatus.Enabled,
-      WebhookDeliveryMode.BatchedAtMostOnce
+      WebhookDeliveryMode.BatchedAtMostOnce,
+      None
     )
   } ++ (500 until 750).map { i =>
     Webhook(
@@ -273,7 +278,8 @@ object WebhookServerIntegrationSpecUtil {
       url = s"http://0.0.0.0:$port/endpoint/$i",
       label = s"test webhook $i",
       WebhookStatus.Enabled,
-      WebhookDeliveryMode.SingleAtLeastOnce
+      WebhookDeliveryMode.SingleAtLeastOnce,
+      None
     )
   } ++ (750 until 1000).map { i =>
     Webhook(
@@ -281,7 +287,8 @@ object WebhookServerIntegrationSpecUtil {
       url = s"http://0.0.0.0:$port/endpoint/$i",
       label = s"test webhook $i",
       WebhookStatus.Enabled,
-      WebhookDeliveryMode.BatchedAtLeastOnce
+      WebhookDeliveryMode.BatchedAtLeastOnce,
+      None
     )
   }
 

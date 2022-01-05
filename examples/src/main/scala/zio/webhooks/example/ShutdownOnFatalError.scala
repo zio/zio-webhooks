@@ -24,7 +24,8 @@ object ShutdownOnFatalError extends App {
     WebhookEventKey(WebhookEventId(-1), WebhookId(-1)),
     WebhookEventStatus.New,
     s"""{"payload":-1}""",
-    Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+    Chunk(("Accept", "*/*"), ("Content-Type", "application/json")),
+    None
   )
 
   private val goodEvents = UStream
@@ -34,7 +35,8 @@ object ShutdownOnFatalError extends App {
         WebhookEventKey(WebhookEventId(i), webhook.id),
         WebhookEventStatus.New,
         s"""{"payload":$i}""",
-        Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+        Chunk(("Accept", "*/*"), ("Content-Type", "application/json")),
+        None
       )
     }
 
@@ -81,6 +83,7 @@ object ShutdownOnFatalError extends App {
     url = s"http://0.0.0.0:$port/endpoint",
     label = "test webhook",
     WebhookStatus.Enabled,
-    WebhookDeliveryMode.SingleAtLeastOnce
+    WebhookDeliveryMode.SingleAtLeastOnce,
+    None
   )
 }

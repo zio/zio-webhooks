@@ -32,7 +32,8 @@ object ComprehensiveExample extends App {
             WebhookEventKey(WebhookEventId(i), WebhookId(webhookId.toLong)),
             WebhookEventStatus.New,
             i.toString, // a single number string is valid JSON
-            Chunk(("Accept", "*/*"), ("Content-Type", "application/json"))
+            Chunk(("Accept", "*/*"), ("Content-Type", "application/json")),
+            None
           )
       }
 
@@ -169,7 +170,8 @@ object RestartingWebhookServer {
       url = s"http://0.0.0.0:$port/endpoint/$i",
       label = s"test webhook $i",
       WebhookStatus.Enabled,
-      WebhookDeliveryMode.SingleAtLeastOnce
+      WebhookDeliveryMode.SingleAtLeastOnce,
+      None
     )
   } ++ (250 until 500).map { i =>
     Webhook(
@@ -177,7 +179,8 @@ object RestartingWebhookServer {
       url = s"http://0.0.0.0:$port/endpoint/$i",
       label = s"test webhook $i",
       WebhookStatus.Enabled,
-      WebhookDeliveryMode.SingleAtMostOnce
+      WebhookDeliveryMode.SingleAtMostOnce,
+      None
     )
   } ++ (500 until 750).map { i =>
     Webhook(
@@ -185,7 +188,8 @@ object RestartingWebhookServer {
       url = s"http://0.0.0.0:$port/endpoint/$i",
       label = s"test webhook $i",
       WebhookStatus.Enabled,
-      WebhookDeliveryMode.BatchedAtLeastOnce
+      WebhookDeliveryMode.BatchedAtLeastOnce,
+      None
     )
   } ++ (750 until 1000).map { i =>
     Webhook(
@@ -193,7 +197,8 @@ object RestartingWebhookServer {
       url = s"http://0.0.0.0:$port/endpoint/$i",
       label = s"test webhook $i",
       WebhookStatus.Enabled,
-      WebhookDeliveryMode.BatchedAtMostOnce
+      WebhookDeliveryMode.BatchedAtMostOnce,
+      None
     )
   }
 }
