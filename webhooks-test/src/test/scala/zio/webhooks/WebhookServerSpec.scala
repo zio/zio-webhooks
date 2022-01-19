@@ -217,11 +217,12 @@ object WebhookServerSpec extends ZIOSpecDefault {
 
             for {
               capacity   <- ZIO.service[WebhookServerConfig].map(_.webhookQueueCapacity)
-              clock <- ZIO.environment[Clock]
+              clock      <- ZIO.environment[Clock]
               testEvents  = createPlaintextEvents(capacity + 2)(webhook.id) // + 2 because the first one gets taken
               testResult <- webhooksTestScenario(
-                              initialStubResponses =
-                                UStream.fromZIO(UIO.right(WebhookHttpResponse(200)).delay(1.minute)).provideEnvironment(clock),
+                              initialStubResponses = UStream
+                                .fromZIO(UIO.right(WebhookHttpResponse(200)).delay(1.minute))
+                                .provideEnvironment(clock),
                               webhooks = List(webhook),
                               events = List.empty,
                               ScenarioInterest.Events
