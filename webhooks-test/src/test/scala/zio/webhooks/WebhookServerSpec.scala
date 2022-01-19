@@ -217,11 +217,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
 
             for {
               capacity   <- ZIO.service[WebhookServerConfig].map(_.webhookQueueCapacity)
-              clock      <- ZIO.environment[Clock]
+              clock <- ZIO.environment[Clock]
               testEvents  = createPlaintextEvents(capacity + 2)(webhook.id) // + 2 because the first one gets taken
               testResult <- webhooksTestScenario(
                               initialStubResponses =
-                                UStream.fromZIO(UIO.right(WebhookHttpResponse(200)).delay(1.minute)).provide(clock),
+                                UStream.fromZIO(UIO.right(WebhookHttpResponse(200)).delay(1.minute)).provideEnvironment(clock),
                               webhooks = List(webhook),
                               events = List.empty,
                               ScenarioInterest.Events
@@ -588,7 +588,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             }
           }
         )
-      ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
+      ).provideSome[TestEnvironment](WebhookServerConfig.default, specEnv),
       suite("batching enabled")(
         test("batches events queued up since last request") {
           val n       = 100
@@ -717,7 +717,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.take.map(_.content))(matchesRegex("(?:event payload \\d+)+")))
         }
-      ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
+      ).provideSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
       suite("manual server start and shutdown")(
         suite("on shutdown")(
           test("takes no new events on shut down right after startup") {
@@ -877,7 +877,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
           }
           // TODO: write unit tests for persistent retry backoff when needed
         )
-      ).injectSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
+      ).provideSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
     ) @@ timeout(20.seconds)
 }
 
@@ -925,7 +925,7 @@ object WebhookServerSpecUtil {
 
   lazy val mockEnv: ZLayer[Clock with WebhookServerConfig, Nothing, MockEnv] =
     ZLayer
-      .fromSomeMagic[Clock with WebhookServerConfig, MockEnv](
+      .makeSome[Clock with WebhookServerConfig, MockEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -979,7 +979,7 @@ object WebhookServerSpecUtil {
 
   lazy val specEnv: URLayer[Clock with Console with WebhookServerConfig, SpecEnv] =
     ZLayer
-      .fromSomeMagic[Clock with Console with WebhookServerConfig, SpecEnv](
+      .makeSome[Clock with Console with WebhookServerConfig, SpecEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
