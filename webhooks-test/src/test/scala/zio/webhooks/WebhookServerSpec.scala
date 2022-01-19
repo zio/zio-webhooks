@@ -1,16 +1,14 @@
 package zio.webhooks
 
 import zio._
-import zio.clock.Clock
-import zio.console.Console
-import zio.duration._
+import zio.Clock
+
 import zio.json._
-import zio.magic._
 import zio.stream._
 import zio.test.Assertion._
 import zio.test.TestAspect.{ failing, timeout }
 import zio.test._
-import zio.test.environment._
+
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.WebhookUpdate.WebhookChanged
@@ -20,13 +18,15 @@ import zio.webhooks.testkit.TestWebhookHttpClient._
 import zio.webhooks.testkit._
 
 import java.time.Instant
+import zio.Console
+import zio.test.{ TestClock, TestConsole, ZIOSpecDefault }
 
-object WebhookServerSpec extends DefaultRunnableSpec {
+object WebhookServerSpec extends ZIOSpecDefault {
   val spec =
     suite("WebhookServerSpec")(
       suite("batching disabled")(
         suite("webhooks with at-most-once delivery")(
-          testM("dispatches correct request given event") {
+          test("dispatches correct request given event") {
             val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             val event = WebhookEvent(
@@ -46,7 +46,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => assertM(requests.take)(equalTo(expectedRequest)))
           },
-          testM("webhook stays enabled on dispatch success") {
+          test("webhook stays enabled on dispatch success") {
             val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             val event = WebhookEvent(
@@ -64,7 +64,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Webhooks
             )((webhooks, _) => assertM(webhooks.take)(equalTo(WebhookChanged(webhook))))
           },
-          testM("event is marked Delivering, then Delivered on successful dispatch") {
+          test("event is marked Delivering, then Delivered on successful dispatch") {
             val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             val event = WebhookEvent(
@@ -87,7 +87,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               assertM(eventStatuses)(hasSameElements(expectedStatuses))
             }
           },
-          testM("can dispatch single event to n webhooks") {
+          test("can dispatch single event to n webhooks") {
             val n                 = 100
             val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
             val eventsToNWebhooks = webhooks.map(_.id).flatMap(webhook => createPlaintextEvents(1)(webhook))
@@ -99,7 +99,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => assertM(requests.takeBetween(n, n + 1))(hasSize(equalTo(n))))
           },
-          testM("dispatches no events for disabled webhooks") {
+          test("dispatches no events for disabled webhooks") {
             val n       = 100
             val webhook = singleWebhook(0, WebhookStatus.Disabled, WebhookDeliveryMode.SingleAtMostOnce)
 
@@ -110,7 +110,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => requests.take *> assertCompletesM)
           } @@ timeout(50.millis) @@ failing,
-          testM("dispatches no events for unavailable webhooks") {
+          test("dispatches no events for unavailable webhooks") {
             val n       = 100
             val webhook =
               singleWebhook(0, WebhookStatus.Unavailable(Instant.EPOCH), WebhookDeliveryMode.SingleAtMostOnce)
@@ -122,7 +122,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => requests.take *> assertCompletesM)
           } @@ timeout(50.millis) @@ failing,
-          testM("doesn't batch when no batching configuration is given") {
+          test("doesn't batch when no batching configuration is given") {
             val n       = 100
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
@@ -133,7 +133,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => assertM(requests.takeBetween(n, n + 1))(hasSize(equalTo(n))))
           },
-          testM("a webhook receiver returning non-200 fails events") {
+          test("a webhook receiver returning non-200 fails events") {
             val n       = 100
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
@@ -148,7 +148,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               )(hasSize(equalTo(n)))
             }
           },
-          testM("server dies with a fatal error when webhooks are missing") {
+          test("server dies with a fatal error when webhooks are missing") {
             val idRange               = 401L to 404L
             val missingWebhookIds     = idRange.map(WebhookId(_))
             val eventsMissingWebhooks = missingWebhookIds.flatMap(id => createPlaintextEvents(1)(id))
@@ -160,7 +160,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Errors
             )((errors, _) => assertM(errors.take)(isSubtype[FatalError](anything)))
           },
-          testM("bad webhook URL errors are published") {
+          test("bad webhook URL errors are published") {
             val webhookWithBadUrl = Webhook(
               id = WebhookId(0),
               url = "ne'er-do-well URL",
@@ -189,7 +189,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               assertM(errors.take)(equalTo(expectedError))
             }
           },
-          testM("do not retry events") {
+          test("do not retry events") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             val event = WebhookEvent(
@@ -212,7 +212,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               } yield assert(secondRequest)(isNone)
             }
           },
-          testM("writes warning to console when delivering to a slow webhook, i.e. queue gets full") {
+          test("writes warning to console when delivering to a slow webhook, i.e. queue gets full") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             for {
@@ -221,13 +221,13 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               testEvents  = createPlaintextEvents(capacity + 2)(webhook.id) // + 2 because the first one gets taken
               testResult <- webhooksTestScenario(
                               initialStubResponses =
-                                UStream.fromEffect(UIO.right(WebhookHttpResponse(200)).delay(1.minute)).provide(clock),
+                                UStream.fromZIO(UIO.right(WebhookHttpResponse(200)).delay(1.minute)).provide(clock),
                               webhooks = List(webhook),
                               events = List.empty,
                               ScenarioInterest.Events
                             ) { (_, _) =>
                               for {
-                                _ <- ZIO.foreach_(testEvents)(TestWebhookEventRepo.createEvent)
+                                _ <- ZIO.foreachDiscard(testEvents)(TestWebhookEventRepo.createEvent)
                                 _ <- TestConsole.output.repeatUntil(_.nonEmpty)
                               } yield assertCompletes
                             }
@@ -235,7 +235,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
         ),
         suite("webhooks with at-least-once delivery")(
-          testM("immediately retries once on non-200 response") {
+          test("immediately retries once on non-200 response") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
 
             val events = createPlaintextEvents(1)(webhook.id)
@@ -247,7 +247,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
           },
-          testM("immediately retries once on IOException") {
+          test("immediately retries once on IOException") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
 
             val events = createPlaintextEvents(1)(webhook.id)
@@ -259,7 +259,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
           },
-          testM("retries until success before retry timeout") {
+          test("retries until success before retry timeout") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
 
             val events = createPlaintextEvents(1)(webhook.id)
@@ -278,7 +278,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               } yield assertTrue(request1 && request2 && request3)
             }
           },
-          testM("webhook is set unavailable after retry timeout") {
+          test("webhook is set unavailable after retry timeout") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(1)(webhook.id)
 
@@ -295,7 +295,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 assert(status2)(isSome(isSubtype[WebhookStatus.Unavailable](Assertion.anything)))
             }
           },
-          testM("marks all a webhook's events failed when marked unavailable") {
+          test("marks all a webhook's events failed when marked unavailable") {
             val n       = 2
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(n)(webhook.id)
@@ -310,11 +310,11 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 .fromQueue(events)
                 .filter(_.status == WebhookEventStatus.Failed)
                 .take(n.toLong)
-                .mergeTerminateLeft(UStream.repeatEffect(TestClock.adjust(7.days)))
+                .mergeTerminateLeft(UStream.repeatZIO(TestClock.adjust(7.days)))
                 .runDrain *> assertCompletesM
             }
           },
-          testM("retries past first one back off exponentially") {
+          test("retries past first one back off exponentially") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val events  = createPlaintextEvents(1)(webhook.id)
 
@@ -342,7 +342,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assert(poll)(isNone)
             }
           },
-          testM("doesn't retry requests after requests succeed again") {
+          test("doesn't retry requests after requests succeed again") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
 
             val events = createPlaintextEvents(3)(webhook.id)
@@ -354,7 +354,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               ScenarioInterest.Requests
             )((requests, _) => assertM(requests.takeBetween(4, 5))(hasSize(equalTo(4))))
           },
-          testM("retries for multiple webhooks") {
+          test("retries for multiple webhooks") {
             val n                 = 100
             val webhooks          = createWebhooks(n)(WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val eventsToNWebhooks = webhooks.map(_.id).map { webhookId =>
@@ -386,7 +386,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
         ),
         suite("on webhook changes")(
-          testM("changing a webhook's URL eventually changes the request URL") {
+          test("changing a webhook's URL eventually changes the request URL") {
             val firstUrl  = "first url"
             val secondUrl = "second url"
 
@@ -438,7 +438,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
               } yield assertTrue(actualFirstUrl == firstUrl)
             }
           },
-          testM("toggling a webhook's status toggles event delivery") {
+          test("toggling a webhook's status toggles event delivery") {
             val webhook =
               Webhook(
                 WebhookId(0),
@@ -497,7 +497,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assertCompletes
             }
           },
-          testM("setting a webhook's delivery semantics to at-least-once enables retries") {
+          test("setting a webhook's delivery semantics to at-least-once enables retries") {
             val webhook =
               Webhook(
                 WebhookId(0),
@@ -553,7 +553,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assertCompletes
             }
           },
-          testM("disabling a webhook with at-least-once delivery semantics halts retries") {
+          test("disabling a webhook with at-least-once delivery semantics halts retries") {
             val webhook =
               Webhook(
                 WebhookId(0),
@@ -590,7 +590,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
         )
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
-        testM("batches events queued up since last request") {
+        test("batches events queued up since last request") {
           val n       = 100
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val batches = createPlaintextEvents(n)(webhook.id).grouped(10).toList
@@ -605,7 +605,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           ) { (requests, responseQueue) =>
             val actualRequests = ZIO.foreach(batches) { batch =>
               for {
-                _       <- ZIO.foreach_(batch)(TestWebhookEventRepo.createEvent)
+                _       <- ZIO.foreachDiscard(batch)(TestWebhookEventRepo.createEvent)
                 _       <- responseQueue.offer(Right(WebhookHttpResponse(200)))
                 request <- requests.take
               } yield request
@@ -613,7 +613,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             assertM(actualRequests)(hasSize(equalTo(expectedRequestsMade)))
           }
         },
-        testM("batches for multiple webhooks") {
+        test("batches for multiple webhooks") {
           val eventCount   = 100
           val webhookCount = 10
           val webhooks     = createWebhooks(webhookCount)(
@@ -639,7 +639,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             } yield assertTrue((minRequestsMade <= requests.size) && (requests.size <= maxRequestsMade))
           }
         },
-        testM("events dispatched by batch are marked delivered") {
+        test("events dispatched by batch are marked delivered") {
           val n          = 100
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val batchCount = 10
@@ -652,8 +652,8 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ScenarioInterest.Events
           ) { (events, responseQueue) =>
             for {
-              _               <- ZIO.foreach_(testEvents) {
-                                   ZIO.foreach_(_)(TestWebhookEventRepo.createEvent) *>
+              _               <- ZIO.foreachDiscard(testEvents) {
+                                   ZIO.foreachDiscard(_)(TestWebhookEventRepo.createEvent) *>
                                      responseQueue.offer(Right(WebhookHttpResponse(200)))
                                  }
               deliveredEvents <- events
@@ -662,7 +662,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             } yield assertTrue(batchCount <= deliveredEvents.size && deliveredEvents.size <= n)
           }
         },
-        testM("batches events on webhook and content-type") {
+        test("batches events on webhook and content-type") {
           val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
           val jsonEvents =
@@ -694,7 +694,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
         },
-        testM("batched JSON event contents are always serialized into a JSON array") {
+        test("batched JSON event contents are always serialized into a JSON array") {
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val jsonEvents = createJsonEvents(100)(webhook.id)
 
@@ -705,7 +705,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.take.map(_.content))(matchesRegex(jsonPayloadPattern)))
         },
-        testM("batched plain text event contents are concatenated") {
+        test("batched plain text event contents are concatenated") {
           val n               = 2
           val webhook         = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val plaintextEvents = createPlaintextEvents(n)(webhook.id)
@@ -720,7 +720,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
       ).injectSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
       suite("manual server start and shutdown")(
         suite("on shutdown")(
-          testM("takes no new events on shut down right after startup") {
+          test("takes no new events on shut down right after startup") {
             val webhook   = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvent = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -745,7 +745,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assertTrue(take.isEmpty)
             }
           },
-          testM("stops subscribing to new events") {
+          test("stops subscribing to new events") {
             val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvents = createPlaintextEvents(2)(WebhookId(0))
 
@@ -757,7 +757,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   _         <- responses.offerAll(
                                  List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
                                )
-                  event1    <- WebhookServer.start.use_ {
+                  event1    <- WebhookServer.start.useDiscard {
                                  for {
                                    _      <- TestWebhookRepo.setWebhook(webhook)
                                    _      <- TestWebhookEventRepo.createEvent(testEvents(0))
@@ -769,7 +769,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assertTrue(event1 && take.isEmpty)
             }
           },
-          testM("retry state is saved") {
+          test("retry state is saved") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val event   = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -785,7 +785,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[StubResponse]
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Left(None), Left(None)))
-                  _         <- WebhookServer.start.use_ {
+                  _         <- WebhookServer.start.useDiscard {
                                  for {
                                    _ <- TestWebhookRepo.setWebhook(webhook)
                                    _ <- TestWebhookEventRepo.createEvent(event)
@@ -804,7 +804,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
           }
         ),
         suite("on restart")(
-          testM("continues persisted retries") {
+          test("continues persisted retries") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val event   = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -820,18 +820,18 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses <- Queue.unbounded[StubResponse]
                   _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _         <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
-                  _         <- WebhookServer.start.use_ {
+                  _         <- WebhookServer.start.useDiscard {
                                  for {
                                    _ <- TestWebhookRepo.setWebhook(webhook)
                                    _ <- TestWebhookEventRepo.createEvent(event)
                                    _ <- requests.takeN(2)
                                  } yield ()
                                }
-                  _         <- WebhookServer.start.use_(requests.take.fork)
+                  _         <- WebhookServer.start.useDiscard(requests.take.fork)
                 } yield assertCompletes
             }
           },
-          testM("resumes timeout duration for retries") {
+          test("resumes timeout duration for retries") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val event   = WebhookEvent(
               WebhookEventKey(WebhookEventId(0), WebhookId(0)),
@@ -847,7 +847,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                   responses  <- Queue.unbounded[StubResponse]
                   _          <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                   _          <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
-                  _          <- WebhookServer.start.use_ {
+                  _          <- WebhookServer.start.useDiscard {
                                   for {
                                     _ <- TestWebhookRepo.setWebhook(webhook)
                                     _ <- TestWebhookEventRepo.createEvent(event)
@@ -855,7 +855,7 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                                     _ <- TestClock.adjust(3.days)
                                   } yield ()
                                 }
-                  lastStatus <- WebhookServer.start.use_ {
+                  lastStatus <- WebhookServer.start.useDiscard {
                                   for {
                                     _          <- TestClock.adjust(4.days)
                                     lastStatus <- webhooks.takeN(2).map(_.last.status)
@@ -866,12 +866,12 @@ object WebhookServerSpec extends DefaultRunnableSpec {
                 } yield assert(lastStatus)(isSome(isSubtype[WebhookStatus.Unavailable](anything)))
             }
           },
-          testM("clears persisted state after loading") {
+          test("clears persisted state after loading") {
             for {
               _              <- WebhookServer.start.useNow
-              persistedState <- ZIO.serviceWith[WebhookStateRepo](_.loadState)
-              _              <- WebhookServer.start.use_(
-                                  ZIO.serviceWith[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
+              persistedState <- ZIO.serviceWithZIO[WebhookStateRepo](_.loadState)
+              _              <- WebhookServer.start.useDiscard(
+                                  ZIO.serviceWithZIO[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
                                 )
             } yield assert(persistedState)(isSome(anything))
           }
@@ -913,19 +913,19 @@ object WebhookServerSpecUtil {
   val jsonPayloadPattern: String =
     """(?:\[\{\"event\":\"payload\d+\"}(?:,\{\"event\":\"payload\d+\"})*\])"""
 
-  type MockEnv = Has[WebhookEventRepo]
-    with Has[TestWebhookEventRepo]
-    with Has[WebhookRepo]
-    with Has[TestWebhookRepo]
-    with Has[WebhookStateRepo]
-    with Has[TestWebhookHttpClient]
-    with Has[WebhookHttpClient]
-    with Has[WebhooksProxy]
-    with Has[SerializePayload]
+  type MockEnv = WebhookEventRepo
+    with TestWebhookEventRepo
+    with WebhookRepo
+    with TestWebhookRepo
+    with WebhookStateRepo
+    with TestWebhookHttpClient
+    with WebhookHttpClient
+    with WebhooksProxy
+    with SerializePayload
 
-  lazy val mockEnv: ZLayer[Clock with Has[WebhookServerConfig], Nothing, MockEnv] =
+  lazy val mockEnv: ZLayer[Clock with WebhookServerConfig, Nothing, MockEnv] =
     ZLayer
-      .fromSomeMagic[Clock with Has[WebhookServerConfig], MockEnv](
+      .fromSomeMagic[Clock with WebhookServerConfig, MockEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -967,19 +967,19 @@ object WebhookServerSpecUtil {
       None
     )
 
-  type SpecEnv = Has[WebhookEventRepo]
-    with Has[TestWebhookEventRepo]
-    with Has[WebhookRepo]
-    with Has[TestWebhookRepo]
-    with Has[WebhookStateRepo]
-    with Has[TestWebhookHttpClient]
-    with Has[WebhookHttpClient]
-    with Has[WebhookServer]
-    with Has[WebhooksProxy]
+  type SpecEnv = WebhookEventRepo
+    with TestWebhookEventRepo
+    with WebhookRepo
+    with TestWebhookRepo
+    with WebhookStateRepo
+    with TestWebhookHttpClient
+    with WebhookHttpClient
+    with WebhookServer
+    with WebhooksProxy
 
-  lazy val specEnv: URLayer[Clock with Console with Has[WebhookServerConfig], SpecEnv] =
+  lazy val specEnv: URLayer[Clock with Console with WebhookServerConfig, SpecEnv] =
     ZLayer
-      .fromSomeMagic[Clock with Console with Has[WebhookServerConfig], SpecEnv](
+      .fromSomeMagic[Clock with Console with WebhookServerConfig, SpecEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -998,12 +998,12 @@ object WebhookServerSpecUtil {
     scenarioInterest: ScenarioInterest[A]
   )(
     assertion: Dequeue[A] => URIO[TestClock, TestResult]
-  ): URIO[SpecEnv with TestClock with Has[WebhookServer] with Clock, TestResult] =
+  ): URIO[SpecEnv with TestClock with WebhookServer with Clock, TestResult] =
     ScenarioInterest.dequeueFor(scenarioInterest).map(assertion).flatMap(_.forkManaged).use { testFiber =>
       for {
         _          <- TestWebhookHttpClient.setResponse(stubResponses)
-        _          <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
-        _          <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
+        _          <- ZIO.foreachDiscard(webhooks)(TestWebhookRepo.setWebhook)
+        _          <- ZIO.foreachDiscard(events)(TestWebhookEventRepo.createEvent)
         testResult <- testFiber.join
       } yield testResult
     }
@@ -1015,14 +1015,14 @@ object WebhookServerSpecUtil {
     scenarioInterest: ScenarioInterest[A]
   )(
     assertion: (Dequeue[A], Queue[StubResponse]) => URIO[SpecEnv with TestClock with TestConsole, TestResult]
-  ): URIO[SpecEnv with TestClock with TestConsole with Has[WebhookServer] with Clock, TestResult] =
+  ): URIO[SpecEnv with TestClock with TestConsole with WebhookServer with Clock, TestResult] =
     ScenarioInterest.dequeueFor(scenarioInterest).use { dequeue =>
       for {
         responseQueue <- Queue.bounded[StubResponse](1)
         testFiber     <- assertion(dequeue, responseQueue).fork
         _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-        _             <- ZIO.foreach_(webhooks)(TestWebhookRepo.setWebhook)
-        _             <- ZIO.foreach_(events)(TestWebhookEventRepo.createEvent)
+        _             <- ZIO.foreachDiscard(webhooks)(TestWebhookRepo.setWebhook)
+        _             <- ZIO.foreachDiscard(events)(TestWebhookEventRepo.createEvent)
         _             <- initialStubResponses.run(ZSink.fromQueue(responseQueue)).fork
         testResult    <- testFiber.join
       } yield testResult

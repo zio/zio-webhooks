@@ -3,14 +3,14 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.console._
-import zio.duration._
-import zio.magic._
+
 import zio.stream.UStream
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
+import zio.{ Random, ZIOAppDefault }
+import zio.Console.{ printLine, printLineError }
 
 /**
  * Runs a webhook server and a zio-http server to which webhook events are delivered. The webhook
@@ -20,7 +20,7 @@ import zio.webhooks.{ WebhooksProxy, _ }
  * and the events are delivered to an endpoint one-by-one. The zio-http endpoint prints out the
  * contents of each payload as it receives them.
  */
-object BasicExample extends App {
+object BasicExample extends ZIOAppDefault {
 
   // JSON webhook event stream
   private lazy val events = UStream
@@ -36,12 +36,12 @@ object BasicExample extends App {
     }
 
   // reliable endpoint
-  private val httpApp = HttpApp.collectM {
-    case request @ Method.POST -> Root / "endpoint" =>
+  private val httpApp = Http.collectZIO[Request] {
+    case request @ Method.POST -> !! / "endpoint" =>
       for {
-        randomDelay <- random.nextIntBounded(300).map(_.millis)
-        response    <- ZIO
-                         .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+        randomDelay <- Random.nextIntBounded(300).map(_.millis)
+        response    <- request.getBodyAsString
+                         .map(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
                          .as(Response.status(Status.OK))
                          .delay(randomDelay) // random delay to simulate latency
       } yield response
@@ -55,7 +55,7 @@ object BasicExample extends App {
   private def program =
     for {
       _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
       _ <- TestWebhookRepo.setWebhook(webhook)
       _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
@@ -63,9 +63,9 @@ object BasicExample extends App {
   /**
    * The webhook server is started as part of the layer construction. See `WebhookServer.live`.
    */
-  def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
     program
-      .injectCustom(
+      .provideCustom(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,

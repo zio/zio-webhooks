@@ -3,14 +3,14 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.console._
-import zio.duration._
-import zio.magic._
+
 import zio.stream.UStream
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
+import zio.{ Clock, Random, ZIOAppDefault }
+import zio.Console.{ printLine, printLineError }
 
 /**
  * An example of a webhook server performing event recovery on restart for a webhook with
@@ -19,7 +19,7 @@ import zio.webhooks.{ WebhooksProxy, _ }
  * Events that haven't been marked delivered prior to shutdown are retried on restart. All `n`
  * events are eventually delivered.
  */
-object EventRecoveryExample extends App {
+object EventRecoveryExample extends ZIOAppDefault {
 
   private lazy val events = UStream
     .iterate(0L)(_ + 1)
@@ -36,29 +36,26 @@ object EventRecoveryExample extends App {
 
   // server answers with 200 70% of the time, 404 the other
   private def httpApp(payloads: Ref[Set[String]]) =
-    HttpApp.collectM {
-      case request @ Method.POST -> Root / "endpoint" =>
-        val payload = request.getBodyAsString
+    Http.collectZIO[Request] {
+      case request @ Method.POST -> !! / "endpoint" =>
         for {
-          n        <- random.nextIntBounded(100)
-          tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]")
-          response <- ZIO
-                        .foreach(payload) { payload =>
-                          if (n < 70)
-                            for {
-                              newSize <- payloads.modify { set =>
-                                           val newSet = set + payload
-                                           (newSet.size, newSet)
-                                         }
-                              line     = s"$tsString: $payload Response: OK, events delivered: $newSize"
-                              _       <- putStrLn(line)
-                            } yield Response.status(Status.OK)
-                          else
-                            putStrLn(s"$tsString: $payload Response: NOT_FOUND") *>
-                              UIO(Response.status(Status.NOT_FOUND))
-                        }
-                        .orDie
-        } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
+          n        <- Random.nextIntBounded(100)
+          tsString <- Clock.instant.map(_.toString).map(ts => s"[$ts]")
+          response <- request.getBodyAsString.flatMap { payload =>
+                        if (n < 70)
+                          for {
+                            newSize <- payloads.modify { set =>
+                                         val newSet = set + payload
+                                         (newSet.size, newSet)
+                                       }
+                            line     = s"$tsString: $payload Response: OK, events delivered: $newSize"
+                            _       <- printLine(line)
+                          } yield Response.status(Status.OK)
+                        else
+                          printLine(s"$tsString: $payload Response: NOT_FOUND") *>
+                            UIO(Response.status(Status.NOT_FOUND))
+                      }.orDie
+        } yield response //.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
     }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
@@ -73,7 +70,7 @@ object EventRecoveryExample extends App {
       _ <- WebhookServer.start.use { server =>
              for {
                _        <- server.subscribeToErrors
-                             .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                             .use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
                              .fork
                payloads <- Ref.make(Set.empty[String])
                _        <- httpEndpointServer.start(port, httpApp(payloads)).fork
@@ -84,39 +81,39 @@ object EventRecoveryExample extends App {
                              .foreach(TestWebhookEventRepo.createEvent)
              } yield ()
            }
-      _ <- putStrLn("Shutdown successful")
+      _ <- printLine("Shutdown successful")
       _ <- WebhookServer.start.use { server =>
              for {
                _ <- server.subscribeToErrors
-                      .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                      .use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
                       .fork
-               _ <- putStrLn("Restart successful")
+               _ <- printLine("Restart successful")
                _ <- events
-                      .drop(n / 3)
+                      .drop(n.toInt / 3)
                       .take(n / 3)
                       .schedule(Schedule.spaced(50.micros))
-                      .foreach(TestWebhookEventRepo.createEvent)
+                      .foreach(TestWebhookEventRepo.createEvent(_))
              } yield ()
            }
-      _ <- putStrLn("Shutdown successful")
+      _ <- printLine("Shutdown successful")
       _ <- WebhookServer.start.use { server =>
              for {
                _ <- server.subscribeToErrors
-                      .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
+                      .use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
                       .fork
-               _ <- putStrLn("Restart successful")
+               _ <- printLine("Restart successful")
                _ <- events
-                      .drop(2 * n / 3)
+                      .drop(2 * n.toInt / 3)
                       .schedule(Schedule.spaced(50.micros))
-                      .foreach(TestWebhookEventRepo.createEvent)
-               _ <- clock.sleep(Duration.Infinity)
+                      .foreach(TestWebhookEventRepo.createEvent(_))
+               _ <- Clock.sleep(Duration.Infinity)
              } yield ()
            }
     } yield ()
 
-  def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
     program
-      .injectCustom(
+      .provideCustom(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

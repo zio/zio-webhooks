@@ -1,8 +1,8 @@
 package zio.webhooks
 
 import zio._
-import zio.clock.Clock
-import zio.duration.Duration
+import zio.Clock
+import zio.Duration
 import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.webhooks.WebhooksProxy.UpdateMode
@@ -32,7 +32,7 @@ final case class WebhooksProxy private (
   private def pollForUpdates(pollingFunction: PollingFunction): UIO[Unit] =
     for {
       keys <- cache.get.map(map => NonEmptySet.fromIterableOption(map.keys))
-      _    <- ZIO.foreach_(keys)(pollingFunction(_).flatMap(cache.set))
+      _    <- ZIO.foreachDiscard(keys)(pollingFunction(_).flatMap(cache.set))
     } yield ()
 
   def setWebhookStatus(webhookId: WebhookId, status: WebhookStatus): UIO[Unit] =
@@ -59,10 +59,10 @@ final case class WebhooksProxy private (
 }
 
 object WebhooksProxy {
-  type Env = Has[WebhookRepo] with Has[UpdateMode] with Clock
+  type Env = WebhookRepo with UpdateMode with Clock
 
-  val live: URLayer[Env, Has[WebhooksProxy]] =
-    ZIO.services[WebhookRepo, UpdateMode].flatMap((start _).tupled).toLayer
+  val live: URLayer[Env, WebhooksProxy] =
+    ZIO.environmentWithZIO[Env](env => start(env.get[WebhookRepo], env.get[UpdateMode])).toLayer
 
   private def start(webhookRepo: WebhookRepo, updateMode: UpdateMode): URIO[Clock, WebhooksProxy] =
     for {

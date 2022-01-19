@@ -3,12 +3,11 @@ package zio.webhooks
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.clock.Clock
-import zio.console.{ putStrLn, putStrLnErr }
-import zio.duration._
+import zio.Clock
+import zio.Console.{ putStrLn, putStrLnErr }
+import zio.Duration._
 import zio.json._
-import zio.magic._
-import zio.random.Random
+import zio.Random
 import zio.stream._
 import zio.test._
 import zio.test.TestAspect.{ sequential, timeout }
@@ -77,7 +76,7 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
                          } yield ()
                        )
         } yield assertCompletes)
-          .provideSomeLayer[IntegrationEnv](Clock.live ++ console.Console.live ++ random.Random.live)
+          .provideSomeLayer[IntegrationEnv](Clock.live ++ Console.live ++ Random.live)
       } @@ timeout(3.minutes),
       testM("slow subscribers do not slow down fast ones") {
         val webhookCount     = 100
@@ -128,7 +127,7 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
                         }
         } yield testResult).provideSomeLayer[IntegrationEnv](Clock.live ++ console.Console.live ++ random.Random.live)
       } @@ timeout(1.minute)
-    ).injectCustom(integrationEnv) @@ sequential
+    ).provideCustom(integrationEnv) @@ sequential
 }
 
 object WebhookServerIntegrationSpecUtil {
@@ -157,7 +156,7 @@ object WebhookServerIntegrationSpecUtil {
   def events(webhookIdRange: (Int, Int)): ZStream[Random, Nothing, WebhookEvent] =
     UStream
       .iterate(0L)(_ + 1)
-      .zip(UStream.repeatEffect(random.nextIntBetween(webhookIdRange._1, webhookIdRange._2)))
+      .zip(UStream.repeatEffect(Random.nextIntBetween(webhookIdRange._1, webhookIdRange._2)))
       .map {
         case (i, webhookId) =>
           WebhookEvent(
@@ -181,15 +180,15 @@ object WebhookServerIntegrationSpecUtil {
   def batchedAtLeastOnceEvents(n: Long) =
     events(webhookIdRange = (750, 1000)).drop(3 * n / 4).take(n / 4)
 
-  type IntegrationEnv = Has[WebhookEventRepo]
-    with Has[TestWebhookEventRepo]
-    with Has[WebhookRepo]
-    with Has[TestWebhookRepo]
-    with Has[WebhookStateRepo]
-    with Has[WebhookHttpClient]
-    with Has[WebhooksProxy]
-    with Has[WebhookServerConfig]
-    with Has[SerializePayload]
+  type IntegrationEnv =  WebhookEventRepo
+    with  TestWebhookEventRepo
+    with  WebhookRepo
+    with  TestWebhookRepo
+    with  WebhookStateRepo
+    with  WebhookHttpClient
+    with  WebhooksProxy
+    with  WebhookServerConfig
+    with  SerializePayload
 
   // alias for zio-http endpoint server
   lazy val httpEndpointServer = Server
@@ -211,12 +210,11 @@ object WebhookServerIntegrationSpecUtil {
   lazy val port = 8081
 
   def reliableEndpoint(delivered: SubscriptionRef[Set[Int]]) =
-    HttpApp.collectM {
+    Http.collectZIO[Request] {
       case request @ Method.POST -> Root / "endpoint" / (id @ _) =>
         for {
-          randomDelay <- random.nextIntBounded(200).map(_.millis)
-          response    <- ZIO
-                           .foreach_(request.getBodyAsString) { body =>
+          randomDelay <- Random.nextIntBounded(200).map(_.millis)
+          response    <- request.getBodyAsString.map  { body =>
                              val singlePayload = body.fromJson[Int].map(Left(_))
                              val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                              val payload       = singlePayload.orElseThat(batchPayload).toOption
@@ -233,10 +231,10 @@ object WebhookServerIntegrationSpecUtil {
     }
 
   def slowEndpointsExceptFirst(delivered: SubscriptionRef[Set[Int]]) =
-    HttpApp.collectM {
-      case request @ Method.POST -> Root / "endpoint" / id if id == "0" =>
+    Http.collectZIO[Request] {
+      case request @ Method.POST -> !! / "endpoint" / id if id == "0" =>
         for {
-          _        <- ZIO.foreach_(request.getBodyAsString) { body =>
+          _        <- request.getBodyAsString.map { body =>
                         val singlePayload = body.fromJson[Int].map(Left(_))
                         val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                         val payload       = singlePayload.orElseThat(batchPayload).toOption
@@ -312,13 +310,12 @@ object RandomEndpointBehavior {
   case object Flaky extends RandomEndpointBehavior
 
   def flakyBehavior(delivered: SubscriptionRef[Set[Int]]) =
-    HttpApp.collectM {
-      case request @ Method.POST -> Root / "endpoint" / (id @ _) =>
+    Http.collectZIO[Request] {
+      case request @ Method.POST -> !! / "endpoint" / (id @ _) =>
         for {
-          n           <- random.nextIntBounded(100)
-          randomDelay <- random.nextIntBounded(200).map(_.millis)
-          response    <- ZIO
-                           .foreach(request.getBodyAsString) { body =>
+          n           <- Random.nextIntBounded(100)
+          randomDelay <- Random.nextIntBounded(200).map(_.millis)
+          response    <- request.getBodyAsString.map { body =>
                              val singlePayload = body.fromJson[Int].map(Left(_))
                              val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                              val payload       = singlePayload.orElseThat(batchPayload).toOption
@@ -342,7 +339,7 @@ object RandomEndpointBehavior {
   lazy val httpEndpointServer: Server.type = Server
 
   val randomBehavior: URIO[Random, RandomEndpointBehavior] =
-    random.nextIntBounded(100).map(n => if (n < 80) Flaky else Down)
+    Random.nextIntBounded(100).map(n => if (n < 80) Flaky else Down)
 
   def run(delivered: SubscriptionRef[Set[Int]]) =
     UStream.repeatEffect(randomBehavior).foreach { behavior =>
@@ -375,7 +372,7 @@ object RestartingWebhookServer {
                              .use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_)))
                              .fork
                _        <- TestWebhookEventRepo.enqueueNew
-               duration <- random.nextIntBetween(3000, 5000).map(_.millis)
+               duration <- Random.nextIntBetween(3000, 5000).map(_.millis)
                _        <- f.interrupt.delay(duration)
              } yield ()
            }

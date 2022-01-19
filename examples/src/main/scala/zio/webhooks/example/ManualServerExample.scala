@@ -3,21 +3,21 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.console._
-import zio.duration._
-import zio.magic._
+
 import zio.stream.UStream
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
+import zio.ZIOAppDefault
+import zio.Console.{ printLine, printLineError }
 
 /**
  * An example of manually starting a server. The server is shut down as its release action,
  * releasing its dependencies as well. Other than that, this is the same scenario as in the
  * [[BasicExample]].
  */
-object ManualServerExample extends App {
+object ManualServerExample extends ZIOAppDefault {
 
   // JSON webhook event stream
   private lazy val events = UStream
@@ -32,10 +32,10 @@ object ManualServerExample extends App {
       )
     }
 
-  private val httpApp = HttpApp.collectM {
-    case request @ Method.POST -> Root / "endpoint" =>
-      ZIO
-        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+  private val httpApp = Http.collectZIO[Request] {
+    case request @ Method.POST -> !! / "endpoint" =>
+      request.getBodyAsString
+        .map(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
         .as(Response.status(Status.OK))
   }
 
@@ -49,16 +49,16 @@ object ManualServerExample extends App {
   private def program =
     WebhookServer.start.use { server =>
       for {
-        _ <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+        _ <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
         _ <- httpEndpointServer.start(port, httpApp).fork
         _ <- TestWebhookRepo.setWebhook(webhook)
         _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
       } yield ()
-    } *> putStrLn("Shutdown successful").orDie
+    } *> printLine("Shutdown successful").orDie
 
-  def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
     program
-      .injectCustom(
+      .provideCustom(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

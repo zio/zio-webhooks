@@ -21,27 +21,26 @@ object TestWebhookEventRepo {
 
   // Accessor Methods
 
-  def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
-    ZIO.serviceWith(_.createEvent(event))
+  def createEvent(event: WebhookEvent): URIO[TestWebhookEventRepo, Unit] =
+    ZIO.serviceWithZIO(_.createEvent(event))
 
-  def dumpEventIds: URIO[Has[TestWebhookEventRepo], Set[(Long, WebhookEventStatus)]] =
-    ZIO.serviceWith(_.dumpEventIds)
+  def dumpEventIds: URIO[TestWebhookEventRepo, Set[(Long, WebhookEventStatus)]] =
+    ZIO.serviceWithZIO(_.dumpEventIds)
 
-  def enqueueNew: URIO[Has[TestWebhookEventRepo], Unit] =
-    ZIO.serviceWith(_.enqueueNew)
+  def enqueueNew: URIO[TestWebhookEventRepo, Unit] =
+    ZIO.serviceWithZIO(_.enqueueNew)
 
-  def subscribeToEvents: URManaged[Has[TestWebhookEventRepo], Dequeue[WebhookEvent]] =
+  def subscribeToEvents: URManaged[TestWebhookEventRepo, Dequeue[WebhookEvent]] =
     ZManaged.service[TestWebhookEventRepo].flatMap(_.subscribeToEvents)
 
   // Layer Definitions
 
-  val test: ULayer[Has[WebhookEventRepo] with Has[TestWebhookEventRepo]] = {
+  val test: ULayer[WebhookEventRepo with TestWebhookEventRepo] = {
     for {
       ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
       hub <- Hub.unbounded[WebhookEvent]
-      impl = TestWebhookEventRepoImpl(ref, hub)
-    } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo](impl, impl)
-  }.toLayerMany
+    } yield TestWebhookEventRepoImpl(ref, hub)
+  }.toLayer
 }
 
 final private case class TestWebhookEventRepoImpl(
@@ -57,10 +56,10 @@ final private case class TestWebhookEventRepoImpl(
     ref.get.map(_.map { case (key, ev) => (key.eventId.value, ev.status) }.toSet)
 
   def enqueueNew: UIO[Unit]                              =
-    ref.get.flatMap(map => ZIO.foreach_(map.values.filter(_.isNew))(hub.publish))
+    ref.get.flatMap(map => ZIO.foreachDiscard(map.values.filter(_.isNew))(hub.publish))
 
   def recoverEvents: UStream[WebhookEvent] =
-    UStream.fromIterableM(ref.get.map(_.values.filter(_.isDelivering)))
+    UStream.fromIterableZIO(ref.get.map(_.values.filter(_.isDelivering)))
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): UIO[Unit] =
     for {

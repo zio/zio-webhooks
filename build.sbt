@@ -31,11 +31,11 @@ inThisBuild(
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
-val zioVersion        = "1.0.13"
-val zioHttpVersion    = "1.0.0.0-RC17"
-val zioJson           = "0.1.5"
-val zioMagicVersion   = "0.3.10"
-val zioPreludeVersion = "1.0.0-RC8"
+val zioVersion        = "2.0.0-RC1"
+val zioHttpVersion    = "2.0.0-RC1"
+val zioJson           = "0.3.0-RC1-1"
+//val zioMagicVersion   = "0.3.10"
+val zioPreludeVersion = "1.0.0-RC9"
 val sttpVersion       = "3.3.18"
 
 lazy val root =
@@ -68,11 +68,11 @@ lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
     Defaults.itSettings,
     publish / skip := true,
     libraryDependencies ++= Seq(
-      "dev.zio"              %% "zio-test"     % zioVersion      % "it,test",
-      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "it,test",
-      "dev.zio"              %% "zio-json"     % zioJson         % "it",
-      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "it,test",
-      "io.d11"               %% "zhttp"        % zioHttpVersion  % "it"
+      "dev.zio" %% "zio-test"     % zioVersion     % "it,test",
+      "dev.zio" %% "zio-test-sbt" % zioVersion     % "it,test",
+      "dev.zio" %% "zio-json"     % zioJson        % "it",
+//      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "it,test",
+      "io.d11"  %% "zhttp"        % zioHttpVersion % "it"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
@@ -93,10 +93,10 @@ lazy val examples = module("zio-webhooks-examples", "examples")
     publish / skip := true,
     fork := true,
     libraryDependencies ++= Seq(
-      "dev.zio"              %% "zio-test"     % zioVersion % "test",
-      "dev.zio"              %% "zio-test-sbt" % zioVersion % "test",
-      "io.d11"               %% "zhttp"        % zioHttpVersion,
-      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion
+      "dev.zio" %% "zio-test"     % zioVersion % "test",
+      "dev.zio" %% "zio-test-sbt" % zioVersion % "test",
+      "io.d11"  %% "zhttp"        % zioHttpVersion
+//      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )

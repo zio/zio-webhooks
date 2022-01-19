@@ -3,20 +3,20 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.console._
-import zio.duration._
-import zio.magic._
+
 import zio.stream._
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
+import zio.ZIOAppDefault
+import zio.Console.{ printLine, printLineError }
 
 /**
  * An example of how the server shuts down when encountering a fatal error: in this case a missing
  * webhook.
  */
-object ShutdownOnFatalError extends App {
+object ShutdownOnFatalError extends ZIOAppDefault {
 
   private lazy val events = goodEvents.take(2) ++ UStream(eventWithoutWebhook) ++ goodEvents.drop(2)
 
@@ -40,10 +40,10 @@ object ShutdownOnFatalError extends App {
       )
     }
 
-  private val httpApp = HttpApp.collectM {
-    case request @ Method.POST -> Root / "endpoint" =>
-      ZIO
-        .foreach(request.getBodyAsString)(str => putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+  private val httpApp = Http.collectZIO[Request] {
+    case request @ Method.POST -> !! / "endpoint" =>
+      request.getBodyAsString
+        .map(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
         .as(Response.status(Status.OK))
   }
 
@@ -59,13 +59,13 @@ object ShutdownOnFatalError extends App {
       eventFiber <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
       httpFiber  <- httpEndpointServer.start(port, httpApp).fork
       _          <- errorFiber.join
-                      .flatMap(error => putStrLnErr(error.toString))
+                      .flatMap(error => printLineError(error.toString))
                       .onExit(_ => (eventFiber zip httpFiber).interrupt)
     } yield ()
 
-  def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
     program
-      .injectCustom(
+      .provideCustom(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
