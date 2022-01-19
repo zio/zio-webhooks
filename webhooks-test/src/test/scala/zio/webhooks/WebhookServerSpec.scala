@@ -589,7 +589,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             }
           }
         )
-      ).provideSome[TestEnvironment](WebhookServerConfig.default, specEnv),
+      ).provideSome[TestEnvironment](specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
         test("batches events queued up since last request") {
           val n       = 100
