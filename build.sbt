@@ -36,7 +36,7 @@ val zioHttpVersion    = "2.0.0-RC1"
 val zioJson           = "0.3.0-RC1-1"
 //val zioMagicVersion   = "0.3.10"
 val zioPreludeVersion = "1.0.0-RC9"
-val sttpVersion       = "3.3.18"
+val sttpVersion       = "3.4.0"
 
 lazy val root =
   project

@@ -14,7 +14,7 @@ import java.io.IOException
  * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] using sttp's ZIO backend, i.e.
  * `AsyncHttpClientZioBackend`.
  */
-final case class WebhookSttpClient(sttpClient: SttpClient.Service, permits: Semaphore) extends WebhookHttpClient {
+final case class WebhookSttpClient(sttpClient: SttpClient, permits: Semaphore) extends WebhookHttpClient {
 
   def post(webhookRequest: WebhookHttpRequest): IO[HttpPostError, WebhookHttpResponse] =
     permits.withPermit {
