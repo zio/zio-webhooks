@@ -589,7 +589,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             }
           }
         )
-      ).provideSome[TestEnvironment](specEnv, WebhookServerConfig.default),
+      ).provideCustom(specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
         test("batches events queued up since last request") {
           val n       = 100
@@ -718,7 +718,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.take.map(_.content))(matchesRegex("(?:event payload \\d+)+")))
         }
-      ).provideSome[TestEnvironment](specEnv, WebhookServerConfig.defaultWithBatching),
+      ).provideCustom(specEnv, WebhookServerConfig.defaultWithBatching),
       suite("manual server start and shutdown")(
         suite("on shutdown")(
           test("takes no new events on shut down right after startup") {
@@ -878,7 +878,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
           }
           // TODO: write unit tests for persistent retry backoff when needed
         )
-      ).provideSome[TestEnvironment](mockEnv, WebhookServerConfig.default)
+      ).provideCustom(mockEnv, WebhookServerConfig.default)
     ) @@ timeout(20.seconds)
 }
 
