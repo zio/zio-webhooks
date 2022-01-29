@@ -47,7 +47,7 @@ object BasicExampleWithRetrying extends ZIOAppDefault {
                                   printLine(tsString + payload + " Response: NOT_FOUND") *>
                                     UIO(Response.status(Status.NOT_FOUND))
                               }.orDie
-      } yield response //.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
+      } yield response
   }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server

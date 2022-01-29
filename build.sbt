@@ -70,7 +70,6 @@ lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
       "dev.zio" %% "zio-test"     % zioVersion     % "it,test",
       "dev.zio" %% "zio-test-sbt" % zioVersion     % "it,test",
       "dev.zio" %% "zio-json"     % zioJson        % "it",
-//      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "it,test",
       "io.d11"  %% "zhttp"        % zioHttpVersion % "it"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
@@ -95,7 +94,6 @@ lazy val examples = module("zio-webhooks-examples", "examples")
       "dev.zio" %% "zio-test"     % zioVersion % "test",
       "dev.zio" %% "zio-test-sbt" % zioVersion % "test",
       "io.d11"  %% "zhttp"        % zioHttpVersion
-//      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )

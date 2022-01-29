@@ -94,7 +94,7 @@ object RandomEndpointBehavior {
                              printLine(line + " Response: NOT_FOUND") *> UIO(Response.status(Status.NOT_FOUND))
                          }.orDie
                            .delay(randomDelay)
-        } yield response //.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
+        } yield response
       response.uninterruptible
   }
 
@@ -106,7 +106,7 @@ object RandomEndpointBehavior {
       val response =
         for {
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.getBodyAsString.map { str =>
+          response    <- request.getBodyAsString.flatMap { str =>
                            printLine(s"""SERVER RECEIVED PAYLOAD: webhook: $id $str OK""")
                          }
                            .as(Response.status(Status.OK))

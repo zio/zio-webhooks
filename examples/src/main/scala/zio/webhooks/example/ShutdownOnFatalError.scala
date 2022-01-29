@@ -43,7 +43,7 @@ object ShutdownOnFatalError extends ZIOAppDefault {
   private val httpApp = Http.collectZIO[Request] {
     case request @ Method.POST -> !! / "endpoint" =>
       request.getBodyAsString
-        .map(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+        .flatMap(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
         .as(Response.status(Status.OK))
   }
 

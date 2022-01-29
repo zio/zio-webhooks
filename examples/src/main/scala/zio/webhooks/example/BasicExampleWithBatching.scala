@@ -35,7 +35,7 @@ object BasicExampleWithBatching extends ZIOAppDefault {
     case request @ Method.POST -> !! / "endpoint" =>
       for {
         randomDelay <- Random.nextIntBetween(10, 20).map(_.millis)
-        response    <- request.getBodyAsString.map { str =>
+        response    <- request.getBodyAsString.flatMap { str =>
                          printLine(s"""SERVER RECEIVED PAYLOAD: "$str"""")
                        }
                          .as(Response.status(Status.OK))

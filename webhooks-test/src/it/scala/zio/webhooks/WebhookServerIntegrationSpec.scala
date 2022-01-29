@@ -4,14 +4,14 @@ import zhttp.http._
 import zhttp.service.Server
 import zio._
 import zio.Clock
-import zio.Console.{printError, printLine}
+import zio.Console.{ printError, printLine }
 import zio.json._
 import zio.Random
 import zio.stream._
 import zio.test._
-import zio.test.TestAspect.{sequential, timeout}
+import zio.test.TestAspect.{ sequential, timeout }
 import zio.webhooks.WebhookServerIntegrationSpecUtil._
-import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
@@ -178,15 +178,15 @@ object WebhookServerIntegrationSpecUtil {
   def batchedAtLeastOnceEvents(n: Long) =
     events(webhookIdRange = (750, 1000)).drop(3 * n.toInt / 4).take(n / 4)
 
-  type IntegrationEnv =  WebhookEventRepo
-    with  TestWebhookEventRepo
-    with  WebhookRepo
-    with  TestWebhookRepo
-    with  WebhookStateRepo
-    with  WebhookHttpClient
-    with  WebhooksProxy
-    with  WebhookServerConfig
-    with  SerializePayload
+  type IntegrationEnv = WebhookEventRepo
+    with TestWebhookEventRepo
+    with WebhookRepo
+    with TestWebhookRepo
+    with WebhookStateRepo
+    with WebhookHttpClient
+    with WebhooksProxy
+    with WebhookServerConfig
+    with SerializePayload
 
   // alias for zio-http endpoint server
   lazy val httpEndpointServer = Server
@@ -212,17 +212,17 @@ object WebhookServerIntegrationSpecUtil {
       case request @ Method.POST -> !! / "endpoint" / (id @ _) =>
         for {
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.getBodyAsString.map  { body =>
-                             val singlePayload = body.fromJson[Int].map(Left(_))
-                             val batchPayload  = body.fromJson[List[Int]].map(Right(_))
-                             val payload       = singlePayload.orElseThat(batchPayload).toOption
-                             ZIO.foreachDiscard(payload) {
-                               case Left(i)   =>
-                                 delivered.ref.updateZIO(set => UIO(set + i))
-                               case Right(is) =>
-                                 delivered.ref.updateZIO(set => UIO(set ++ is))
-                             }
+          response    <- request.getBodyAsString.flatMap { body =>
+                           val singlePayload = body.fromJson[Int].map(Left(_))
+                           val batchPayload  = body.fromJson[List[Int]].map(Right(_))
+                           val payload       = singlePayload.orElseThat(batchPayload).toOption
+                           ZIO.foreachDiscard(payload) {
+                             case Left(i)   =>
+                               delivered.ref.updateZIO(set => UIO(set + i))
+                             case Right(is) =>
+                               delivered.ref.updateZIO(set => UIO(set ++ is))
                            }
+                         }
                            .as(Response.status(Status.OK))
                            .delay(randomDelay) // simulate network/server latency
         } yield response
@@ -246,7 +246,7 @@ object WebhookServerIntegrationSpecUtil {
                       }
           response <- UIO(Response.status(Status.OK))
         } yield response
-      case _                                                            =>
+      case _                                                          =>
         UIO(Response.status(Status.OK)).delay(1.minute)
     }
 
@@ -314,23 +314,23 @@ object RandomEndpointBehavior {
           n           <- Random.nextIntBounded(100)
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
           response    <- request.getBodyAsString.flatMap { body =>
-                             val singlePayload = body.fromJson[Int].map(Left(_))
-                             val batchPayload  = body.fromJson[List[Int]].map(Right(_))
-                             val payload       = singlePayload.orElseThat(batchPayload).toOption
-                             if (n < 60)
-                               ZIO
-                                 .foreachDiscard(payload) {
-                                   case Left(i)   =>
-                                     delivered.ref.updateZIO(set => UIO(set + i))
-                                   case Right(is) =>
-                                     delivered.ref.updateZIO(set => UIO(set ++ is))
-                                 }
-                                 .as(Response.status(Status.OK))
-                             else
-                               UIO(Response.status(Status.NOT_FOUND))
-                           }
+                           val singlePayload = body.fromJson[Int].map(Left(_))
+                           val batchPayload  = body.fromJson[List[Int]].map(Right(_))
+                           val payload       = singlePayload.orElseThat(batchPayload).toOption
+                           if (n < 60)
+                             ZIO
+                               .foreachDiscard(payload) {
+                                 case Left(i)   =>
+                                   delivered.ref.updateZIO(set => UIO(set + i))
+                                 case Right(is) =>
+                                   delivered.ref.updateZIO(set => UIO(set ++ is))
+                               }
+                               .as(Response.status(Status.OK))
+                           else
+                             UIO(Response.status(Status.NOT_FOUND))
+                         }
                            .delay(randomDelay)
-        } yield response//.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
+        } yield response
     }
 
   // just an alias for a zio-http server to tell it apart from the webhook server

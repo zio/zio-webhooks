@@ -41,7 +41,7 @@ object BasicExample extends ZIOAppDefault {
       for {
         randomDelay <- Random.nextIntBounded(300).map(_.millis)
         response    <- request.getBodyAsString
-                         .map(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
+                         .flatMap(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
                          .as(Response.status(Status.OK))
                          .delay(randomDelay) // random delay to simulate latency
       } yield response
