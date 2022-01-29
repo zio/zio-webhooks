@@ -12,15 +12,15 @@ import java.time.Instant
  * dispatchers and state for each webhook.
  */
 private[webhooks] final case class RetryController(
-  private val clock: zio.clock.Clock.Service,
+  private val clock: zio.Clock,
   private val config: WebhookServerConfig,
   private val errorHub: Hub[WebhookError],
   private val eventRepo: WebhookEventRepo,
   private val fatalPromise: Promise[Cause[Nothing], Nothing],
   private val httpClient: WebhookHttpClient,
   private val inputQueue: Queue[WebhookEvent],
-  private val retryDispatchers: RefM[Map[WebhookId, RetryDispatcher]],
-  private val retryStates: RefM[Map[WebhookId, RetryState]],
+  private val retryDispatchers: Ref.Synchronized[Map[WebhookId, RetryDispatcher]],
+  private val retryStates: Ref.Synchronized[Map[WebhookId, RetryState]],
   private val serializePayload: SerializePayload,
   private val shutdownLatch: CountDownLatch,
   private val shutdownSignal: Promise[Nothing, Unit],
@@ -39,7 +39,7 @@ private[webhooks] final case class RetryController(
       _             <- retryDispatchers.set(loadedRetries.map { case (id, (dispatcher, _)) => (id, dispatcher) })
       _             <- retryStates.set(loadedRetries.map { case (id, (_, retryState)) => (id, retryState) })
       _             <- retryDispatchers.get.flatMap {
-                         ZIO.foreach_(_) {
+                         ZIO.foreachDiscard(_) {
                            case (_, retryDispatcher) =>
                              retryDispatcher.start *> retryDispatcher.activateWithTimeout
                          }
@@ -103,7 +103,7 @@ private[webhooks] final case class RetryController(
     val handleRetryEvents = mergeShutdown(UStream.fromQueue(inputQueue), shutdownSignal).foreach { event =>
       val webhookId = event.key.webhookId
       for {
-        retryQueue <- retryDispatchers.modify { map =>
+        retryQueue <- retryDispatchers.modifyZIO { map =>
                         map.get(webhookId) match {
                           case Some(dispatcher) =>
                             UIO((dispatcher.retryQueue, map))
@@ -125,7 +125,7 @@ private[webhooks] final case class RetryController(
                                                   webhookId,
                                                   webhooksProxy
                                                 )
-                              _              <- retryStates.update(states =>
+                              _              <- retryStates.updateZIO(states =>
                                                   UIO(
                                                     states + (webhookId -> RetryState(
                                                       activeSinceTime = now,

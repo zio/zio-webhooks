@@ -1,7 +1,7 @@
 package zio.webhooks.internal
 
 import zio._
-import zio.duration._
+
 import zio.webhooks.WebhookServerConfig
 
 import java.time.{ Instant, Duration => JDuration }
@@ -23,7 +23,7 @@ private[webhooks] final case class RetryState(
    * Kills the current timeout timer, marking this retry state inactive.
    */
   def deactivate: UIO[RetryState] =
-    ZIO.foreach_(timerKillSwitch)(_.succeed(())).as(copy(isActive = false, timerKillSwitch = None))
+    ZIO.foreachDiscard(timerKillSwitch)(_.succeed(())).as(copy(isActive = false, timerKillSwitch = None))
 
   /**
    * Progresses retrying to the next exponential backoff.

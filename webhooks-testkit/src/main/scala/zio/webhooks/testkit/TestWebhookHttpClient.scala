@@ -18,21 +18,21 @@ trait TestWebhookHttpClient {
 object TestWebhookHttpClient {
   // Accessors
 
-  def getRequests: URManaged[Has[TestWebhookHttpClient], Dequeue[WebhookHttpRequest]] =
+  def getRequests: URManaged[TestWebhookHttpClient, Dequeue[WebhookHttpRequest]] =
     ZManaged.service[TestWebhookHttpClient].flatMap(_.requests)
 
   def setResponse(
     f: WebhookHttpRequest => StubResponses
-  ): URIO[Has[TestWebhookHttpClient], Unit] =
-    ZIO.serviceWith(_.setResponse(f))
+  ): URIO[TestWebhookHttpClient, Unit] =
+    ZIO.serviceWithZIO(_.setResponse(f))
 
-  val test: ULayer[Has[TestWebhookHttpClient] with Has[WebhookHttpClient]] = {
+  val test: ULayer[TestWebhookHttpClient with WebhookHttpClient] = {
     for {
       ref   <- Ref.makeManaged[WebhookHttpRequest => StubResponses](_ => None)
-      queue <- Hub.unbounded[WebhookHttpRequest].toManaged_
+      queue <- Hub.unbounded[WebhookHttpRequest].toManaged
       impl   = TestWebhookHttpClientImpl(ref, queue)
-    } yield Has.allOf[TestWebhookHttpClient, WebhookHttpClient](impl, impl)
-  }.toLayerMany
+    } yield impl
+  }.toLayer
 
   type StubResponse  = Either[Option[BadWebhookUrlError], WebhookHttpResponse]
   type StubResponses = Option[Queue[StubResponse]]

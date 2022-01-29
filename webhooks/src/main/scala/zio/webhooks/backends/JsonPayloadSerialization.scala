@@ -1,11 +1,11 @@
 package zio.webhooks.backends
 
-import zio.{ Chunk, Has, ULayer, ZLayer }
+import zio.{ Chunk, ULayer, ZLayer }
 import zio.webhooks._
 
 object JsonPayloadSerialization {
 
-  val live: ULayer[Has[SerializePayload]] =
+  val live: ULayer[SerializePayload] =
     ZLayer.succeed { (webhookPayload: WebhookPayload, contentType: Option[WebhookContentMimeType]) =>
       contentType match {
         case Some(WebhookContentMimeType(contentType)) if contentType.toLowerCase == "application/json" =>
