@@ -31,7 +31,7 @@ private[webhooks] final case class RetryDispatcher(
       val currentState = retryStates(webhookId)
       for {
         nextState <- if (currentState.isActive)
-                       UIO(currentState)
+                       UIO.succeed(currentState)
                      else
                        for {
                          timerKillSwitch <- Promise.make[Nothing, Unit]
@@ -91,7 +91,7 @@ private[webhooks] final case class RetryDispatcher(
                                                          .foreach(batchQueue)(_.size.map(_ <= 0))
                                                          .map(_.getOrElse(true))
                                    allEmpty          = queueEmpty && batchExistsEmpty
-                                   newState         <- if (allEmpty) newState.deactivate else UIO(newState)
+                                   newState         <- if (allEmpty) newState.deactivate else UIO.succeed(newState)
                                  } yield retryStates.updated(dispatch.webhookId, newState)
                                }
                       } yield ()
@@ -102,7 +102,7 @@ private[webhooks] final case class RetryDispatcher(
                         timestamp <- clock.instant
                         _         <- retryStates.updateZIO { retryStates =>
                                        retryQueue.offerAll(dispatch.events).fork *>
-                                         UIO(
+                                         UIO.succeed(
                                            retryStates.updated(
                                              webhookId,
                                              retryStates(webhookId).increaseBackoff(timestamp, config.retry)

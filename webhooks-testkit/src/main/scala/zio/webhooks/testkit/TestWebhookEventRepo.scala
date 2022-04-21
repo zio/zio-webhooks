@@ -4,6 +4,7 @@ import zio._
 import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.webhooks._
+import zio.webhooks.internal.DequeueUtils
 
 import scala.util.control.NoStackTrace
 
@@ -14,7 +15,7 @@ trait TestWebhookEventRepo {
 
   def enqueueNew: UIO[Unit]
 
-  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]]
+  def subscribeToEvents: URIO[Scope, Dequeue[WebhookEvent]]
 }
 
 object TestWebhookEventRepo {
@@ -30,17 +31,18 @@ object TestWebhookEventRepo {
   def enqueueNew: URIO[TestWebhookEventRepo, Unit] =
     ZIO.serviceWithZIO(_.enqueueNew)
 
-  def subscribeToEvents: URManaged[TestWebhookEventRepo, Dequeue[WebhookEvent]] =
-    ZManaged.service[TestWebhookEventRepo].flatMap(_.subscribeToEvents)
+  def subscribeToEvents: URIO[Scope with TestWebhookEventRepo, Dequeue[WebhookEvent]] =
+    ZIO.serviceWithZIO[TestWebhookEventRepo](_.subscribeToEvents)
 
   // Layer Definitions
 
-  val test: ULayer[WebhookEventRepo with TestWebhookEventRepo] = {
-    for {
-      ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
-      hub <- Hub.unbounded[WebhookEvent]
-    } yield TestWebhookEventRepoImpl(ref, hub)
-  }.toLayer
+  val test: ULayer[WebhookEventRepo with TestWebhookEventRepo] =
+    ZLayer.fromZIO {
+      for {
+        ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
+        hub <- Hub.unbounded[WebhookEvent]
+      } yield TestWebhookEventRepoImpl(ref, hub)
+    }
 }
 
 final private case class TestWebhookEventRepoImpl(
@@ -103,9 +105,9 @@ final private case class TestWebhookEventRepoImpl(
                 }
     } yield ()
 
-  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]] =
+  def subscribeToEvents: URIO[Scope, Dequeue[WebhookEvent]] =
     hub.subscribe
 
-  def subscribeToNewEvents: UManaged[Dequeue[WebhookEvent]] =
-    subscribeToEvents.map(_.filterOutput(_.isNew))
+  def subscribeToNewEvents: URIO[Scope, Dequeue[WebhookEvent]] =
+    subscribeToEvents.map(d => DequeueUtils.filterOutput[WebhookEvent](d, _.isNew))
 }

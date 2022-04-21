@@ -40,9 +40,9 @@ object BasicExample extends ZIOAppDefault {
     case request @ Method.POST -> !! / "endpoint" =>
       for {
         randomDelay <- Random.nextIntBounded(300).map(_.millis)
-        response    <- request.getBodyAsString
+        response    <- request.bodyAsString
                          .flatMap(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-                         .as(Response.status(Status.OK))
+                         .as(Response.status(Status.Ok))
                          .delay(randomDelay) // random delay to simulate latency
       } yield response
   }
@@ -53,19 +53,21 @@ object BasicExample extends ZIOAppDefault {
   private lazy val port = 8080
 
   private def program =
-    for {
-      _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
-      _ <- TestWebhookRepo.setWebhook(webhook)
-      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-    } yield ()
+    ZIO.scoped {
+      for {
+        _ <- httpEndpointServer.start(port, httpApp).fork
+        _ <- WebhookServer.getErrors.flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
+        _ <- TestWebhookRepo.setWebhook(webhook)
+        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      } yield ()
+    }
 
   /**
    * The webhook server is started as part of the layer construction. See `WebhookServer.live`.
    */
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run =
     program
-      .provideCustom(
+      .provide(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,

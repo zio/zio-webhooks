@@ -4,7 +4,7 @@ import zhttp.http._
 import zhttp.service.Server
 import zio._
 
-import zio.stream.{ UStream, ZStream }
+import zio.stream.UStream
 import zio.webhooks._
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
@@ -21,7 +21,7 @@ import zio.Console.{ printLine, printLineError }
  */
 object ComprehensiveExample extends ZIOAppDefault {
 
-  def events: ZStream[Random, Nothing, WebhookEvent] =
+  def events: UStream[WebhookEvent] =
     UStream
       .iterate(0L)(_ + 1)
       .zip(UStream.repeatZIO(Random.nextIntBetween(0, 1000)))
@@ -45,9 +45,9 @@ object ComprehensiveExample extends ZIOAppDefault {
       _ <- Clock.sleep(Duration.Infinity)
     } yield ()
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run =
     program
-      .provideCustom(
+      .provide(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -63,7 +63,7 @@ object ComprehensiveExample extends ZIOAppDefault {
 sealed trait RandomEndpointBehavior extends Product with Serializable { self =>
   import RandomEndpointBehavior._
 
-  def start: ZIO[ZEnv, Throwable, Any] =
+  def start: ZIO[Any, Throwable, Any] =
     self match {
       case RandomEndpointBehavior.Down   =>
         ZIO.unit
@@ -79,19 +79,19 @@ object RandomEndpointBehavior {
   case object Flaky  extends RandomEndpointBehavior
   case object Normal extends RandomEndpointBehavior
 
-  val flakyBehavior: HttpApp[Console with Clock with Random, Nothing] = Http.collectZIO[Request] {
+  val flakyBehavior: UHttpApp = Http.collectZIO[Request] {
     case request @ Method.POST -> !! / "endpoint" / id =>
       val response =
         for {
           n           <- Random.nextIntBounded(100)
           timeString  <- Clock.instant.map(_.toString).map(ts => s"[$ts]: ")
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.getBodyAsString.flatMap { payload =>
+          response    <- request.bodyAsString.flatMap { payload =>
                            val line = s"$timeString webhook $id $payload"
                            if (n < 60)
-                             printLine(line + " Response: OK") *> UIO(Response.status(Status.OK))
+                             printLine(line + " Response: Ok") *> UIO.succeed(Response.status(Status.Ok))
                            else
-                             printLine(line + " Response: NOT_FOUND") *> UIO(Response.status(Status.NOT_FOUND))
+                             printLine(line + " Response: NotFound") *> UIO.succeed(Response.status(Status.NotFound))
                          }.orDie
                            .delay(randomDelay)
         } yield response
@@ -106,10 +106,10 @@ object RandomEndpointBehavior {
       val response =
         for {
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.getBodyAsString.flatMap { str =>
-                           printLine(s"""SERVER RECEIVED PAYLOAD: webhook: $id $str OK""")
+          response    <- request.bodyAsString.flatMap { str =>
+                           printLine(s"""SERVER RECEIVED PAYLOAD: webhook: $id $str Ok""")
                          }
-                           .as(Response.status(Status.OK))
+                           .as(Response.status(Status.Ok))
                            .orDie
                            .delay(randomDelay)
         } yield response
@@ -118,14 +118,14 @@ object RandomEndpointBehavior {
 
   private lazy val port = 8080
 
-  val randomBehavior: URIO[Random, RandomEndpointBehavior] =
+  val randomBehavior: UIO[RandomEndpointBehavior] =
     Random.nextIntBounded(3).map {
       case 0 => Normal
       case 1 => Flaky
       case _ => Down
     }
 
-  def run: ZIO[ZEnv, IOException, Unit] =
+  def run: ZIO[Any, IOException, Unit] =
     UStream.repeatZIO(randomBehavior).foreach { behavior =>
       for {
         _ <- printLine(s"Endpoint server behavior: $behavior")
@@ -145,16 +145,18 @@ object RestartingWebhookServer {
   private def runServerThenShutdown =
     for {
       _ <- printLine("Server starting")
-      _ <- WebhookServer.start.use { server =>
-             for {
-               _        <- printLine("Server started")
-               f        <- server.subscribeToErrors
-                             .use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
-                             .fork
-               _        <- TestWebhookEventRepo.enqueueNew
-               duration <- Random.nextIntBetween(3000, 5000).map(_.millis)
-               _        <- f.interrupt.delay(duration)
-             } yield ()
+      _ <- ZIO.scoped {
+             WebhookServer.start.flatMap { server =>
+               for {
+                 _        <- printLine("Server started")
+                 f        <- server.subscribeToErrors
+                               .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
+                               .fork
+                 _        <- TestWebhookEventRepo.enqueueNew
+                 duration <- Random.nextIntBetween(3000, 5000).map(_.millis)
+                 _        <- f.interrupt.delay(duration)
+               } yield ()
+             }
            }
       _ <- printLine("Server shut down")
     } yield ()

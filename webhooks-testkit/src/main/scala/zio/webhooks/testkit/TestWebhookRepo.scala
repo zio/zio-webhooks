@@ -22,7 +22,7 @@ trait TestWebhookRepo {
   /**
    * Subscribes to webhook updates.
    */
-  def subscribeToWebhookUpdates: UManaged[Dequeue[WebhookUpdate]]
+  def subscribeToWebhookUpdates: URIO[Scope, Dequeue[WebhookUpdate]]
 }
 
 object TestWebhookRepo {
@@ -30,21 +30,22 @@ object TestWebhookRepo {
   def removeWebhook(webhookId: WebhookId): URIO[TestWebhookRepo, Unit] =
     ZIO.serviceWithZIO(_.removeWebhook(webhookId))
 
-  val test: ULayer[TestWebhookRepo with WebhookRepo] = {
-    for {
-      ref <- Ref.make(Map.empty[WebhookId, Webhook])
-      hub <- Hub.bounded[WebhookUpdate](256)
-    } yield TestWebhookRepoImpl(ref, hub)
-  }.toLayer
+  val test: ULayer[TestWebhookRepo with WebhookRepo] =
+    ZLayer.fromZIO {
+      for {
+        ref <- Ref.make(Map.empty[WebhookId, Webhook])
+        hub <- Hub.bounded[WebhookUpdate](256)
+      } yield TestWebhookRepoImpl(ref, hub)
+    }
 
   val subscriptionUpdateMode: URLayer[TestWebhookRepo, UpdateMode] =
-    ZIO.service[TestWebhookRepo].map(repo => UpdateMode.Subscription(repo.getWebhookUpdates)).toLayer
+    ZLayer.fromZIO(ZIO.service[TestWebhookRepo].map(repo => UpdateMode.Subscription(repo.getWebhookUpdates)))
 
   def setWebhook(webhook: Webhook): URIO[TestWebhookRepo, Unit] =
     ZIO.serviceWithZIO(_.setWebhook(webhook))
 
-  def subscribeToWebhooks: URManaged[TestWebhookRepo, Dequeue[WebhookUpdate]] =
-    ZManaged.service[TestWebhookRepo].flatMap(_.subscribeToWebhookUpdates)
+  def subscribeToWebhooks: URIO[Scope with TestWebhookRepo, Dequeue[WebhookUpdate]] =
+    ZIO.serviceWithZIO[TestWebhookRepo](_.subscribeToWebhookUpdates)
 }
 
 final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], hub: Hub[WebhookUpdate])
@@ -76,6 +77,6 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], 
       _              <- hub.publish(WebhookChanged(updatedWebhook))
     } yield ()
 
-  def subscribeToWebhookUpdates: UManaged[Dequeue[WebhookUpdate]] =
+  def subscribeToWebhookUpdates: URIO[Scope, Dequeue[WebhookUpdate]] =
     hub.subscribe
 }

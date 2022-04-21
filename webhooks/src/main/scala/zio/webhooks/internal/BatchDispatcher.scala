@@ -46,7 +46,7 @@ private[webhooks] final class BatchDispatcher private (
             batchQueue <- batchQueues.modifyZIO { map =>
                             map.get(batchKey) match {
                               case Some(queue) =>
-                                UIO((queue, map))
+                                UIO.succeed((queue, map))
                               case None        =>
                                 for (queue <- Queue.bounded[WebhookEvent](batchingCapacity))
                                   yield (queue, map + (batchKey -> queue))

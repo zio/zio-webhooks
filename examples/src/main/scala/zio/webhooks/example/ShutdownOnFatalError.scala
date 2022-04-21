@@ -3,7 +3,6 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-
 import zio.stream._
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
@@ -11,6 +10,8 @@ import zio.webhooks.testkit._
 import zio.webhooks.{ WebhooksProxy, _ }
 import zio.ZIOAppDefault
 import zio.Console.{ printLine, printLineError }
+
+import java.io.IOException
 
 /**
  * An example of how the server shuts down when encountering a fatal error: in this case a missing
@@ -42,9 +43,9 @@ object ShutdownOnFatalError extends ZIOAppDefault {
 
   private val httpApp = Http.collectZIO[Request] {
     case request @ Method.POST -> !! / "endpoint" =>
-      request.getBodyAsString
+      request.bodyAsString
         .flatMap(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-        .as(Response.status(Status.OK))
+        .as(Response.status(Status.Ok))
   }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
@@ -52,20 +53,23 @@ object ShutdownOnFatalError extends ZIOAppDefault {
 
   private lazy val port = 8080
 
-  private def program =
-    for {
-      errorFiber <- WebhookServer.getErrors.use(UStream.fromQueue(_).runHead).fork
-      _          <- TestWebhookRepo.setWebhook(webhook)
-      eventFiber <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
-      httpFiber  <- httpEndpointServer.start(port, httpApp).fork
-      _          <- errorFiber.join
-                      .flatMap(error => printLineError(error.toString))
-                      .onExit(_ => (eventFiber zip httpFiber).interrupt)
-    } yield ()
+  private def program: ZIO[WebhookServer with TestWebhookRepo with TestWebhookEventRepo, IOException, Unit] =
+    ZIO.scoped {
+      for {
+        errorFiber <- WebhookServer.getErrors.flatMap(UStream.fromQueue(_).runHead).fork
+        _          <- TestWebhookRepo.setWebhook(webhook)
+        eventFiber <-
+          events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
+        httpFiber  <- httpEndpointServer.start(port, httpApp).fork
+        _          <- errorFiber.join
+                        .flatMap(error => printLineError(error.toString))
+                        .onExit(_ => (eventFiber zip httpFiber).interrupt)
+      } yield ()
+    }
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run =
     program
-      .provideCustom(
+      .provide(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,

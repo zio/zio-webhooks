@@ -37,16 +37,16 @@ object BasicExampleWithRetrying extends ZIOAppDefault {
   private lazy val httpApp = Http.collectZIO[Request] {
     case request @ Method.POST -> !! / "endpoint" =>
       for {
-        n                  <- Random.nextIntBounded(100)
-        tsString           <- Clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response: Response <- request.getBodyAsString.flatMap { payload =>
-                                if (n < 60)
-                                  printLine(tsString + payload + " Response: OK") *>
-                                    UIO(Response.status(Status.OK))
-                                else
-                                  printLine(tsString + payload + " Response: NOT_FOUND") *>
-                                    UIO(Response.status(Status.NOT_FOUND))
-                              }.orDie
+        n        <- Random.nextIntBounded(100)
+        tsString <- Clock.instant.map(_.toString).map(ts => s"[$ts]: ")
+        response <- request.bodyAsString.flatMap { payload =>
+                      if (n < 60)
+                        printLine(tsString + payload + " Response: Ok") *>
+                          UIO.succeed(Response.status(Status.Ok))
+                      else
+                        printLine(tsString + payload + " Response: NotFound") *>
+                          UIO.succeed(Response.status(Status.NotFound))
+                    }.orDie
       } yield response
   }
 
@@ -58,17 +58,22 @@ object BasicExampleWithRetrying extends ZIOAppDefault {
   private lazy val port = 8080
 
   private def program =
-    for {
-      _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
-      _ <- TestWebhookRepo.setWebhook(webhook)
-      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-      _ <- Clock.sleep(Duration.Infinity)
-    } yield ()
+    ZIO.scoped {
+      for {
+        _ <- printLine("starting http")
+        _ <- httpEndpointServer.start(port, httpApp).forkScoped
+        _ <- WebhookServer.getErrors.flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).forkScoped
+        _ <- printLine("set webhook")
+        _ <- TestWebhookRepo.setWebhook(webhook)
+        _ <- printLine("scheduling events")
+        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+        _ <- Clock.sleep(Duration.Infinity)
+      } yield ()
+    }
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run =
     program
-      .provideCustom(
+      .provide(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

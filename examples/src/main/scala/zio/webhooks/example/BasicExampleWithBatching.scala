@@ -35,10 +35,10 @@ object BasicExampleWithBatching extends ZIOAppDefault {
     case request @ Method.POST -> !! / "endpoint" =>
       for {
         randomDelay <- Random.nextIntBetween(10, 20).map(_.millis)
-        response    <- request.getBodyAsString.flatMap { str =>
+        response    <- request.bodyAsString.flatMap { str =>
                          printLine(s"""SERVER RECEIVED PAYLOAD: "$str"""")
                        }
-                         .as(Response.status(Status.OK))
+                         .as(Response.status(Status.Ok))
                          .delay(randomDelay)
       } yield response
   }
@@ -49,16 +49,18 @@ object BasicExampleWithBatching extends ZIOAppDefault {
   private lazy val port = 8080
 
   private def program =
-    for {
-      _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
-      _ <- TestWebhookRepo.setWebhook(webhook)
-      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-    } yield ()
+    ZIO.scoped {
+      for {
+        _ <- httpEndpointServer.start(port, httpApp).fork
+        _ <- WebhookServer.getErrors.flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
+        _ <- TestWebhookRepo.setWebhook(webhook)
+        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      } yield ()
+    }
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run =
     program
-      .provideCustom(
+      .provide(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

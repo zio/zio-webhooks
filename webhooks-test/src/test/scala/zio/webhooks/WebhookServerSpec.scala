@@ -1,7 +1,6 @@
 package zio.webhooks
 
 import zio._
-import zio.Clock
 
 import zio.json._
 import zio.stream._
@@ -16,9 +15,8 @@ import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerializatio
 import zio.webhooks.internal.PersistentRetries
 import zio.webhooks.testkit.TestWebhookHttpClient._
 import zio.webhooks.testkit._
-
+import zio.webhooks.internal.DequeueUtils._
 import java.time.Instant
-import zio.Console
 import zio.test.{ TestClock, TestConsole, ZIOSpecDefault }
 
 object WebhookServerSpec extends ZIOSpecDefault {
@@ -208,7 +206,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             ) { (requests, _) =>
               for {
                 _             <- requests.take
-                secondRequest <- requests.take.timeout(100.millis).provideLayer(Clock.live)
+                secondRequest <- requests.take.timeout(100.millis)
               } yield assert(secondRequest)(isNone)
             }
           },
@@ -217,12 +215,13 @@ object WebhookServerSpec extends ZIOSpecDefault {
 
             for {
               capacity   <- ZIO.service[WebhookServerConfig].map(_.webhookQueueCapacity)
-              clock      <- ZIO.environment[Clock]
+//              clock      <- ZIO.environment[Clock]
               testEvents  = createPlaintextEvents(capacity + 2)(webhook.id) // + 2 because the first one gets taken
               testResult <- webhooksTestScenario(
                               initialStubResponses = UStream
                                 .fromZIO(UIO.right(WebhookHttpResponse(200)).delay(1.minute))
-                                .provideEnvironment(clock),
+//                                .provideEnvironment(clock)
+                              ,
                               webhooks = List(webhook),
                               events = List.empty,
                               ScenarioInterest.Events
@@ -422,7 +421,6 @@ object WebhookServerSpec extends ZIOSpecDefault {
               }
               .drop(1)
               .schedule(Schedule.spaced(1.milli))
-              .provideLayer(Clock.live)
 
             webhooksTestScenario(
               initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
@@ -471,7 +469,6 @@ object WebhookServerSpec extends ZIOSpecDefault {
               }
               .drop(1)
               .schedule(Schedule.spaced(1.milli))
-              .provideLayer(Clock.live)
 
             webhooksTestScenario(
               initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
@@ -489,12 +486,12 @@ object WebhookServerSpec extends ZIOSpecDefault {
                   _               <- deliveringEvents.take
                                        .timeout(2.millis)
                                        .repeatUntil(_.isEmpty)
-                                       .provideLayer(Clock.live)
+
                   _               <- TestWebhookRepo.setWebhook(webhook.enable)
                   _               <- deliveringEvents.take
                                        .timeout(2.millis)
                                        .repeatUntil(_.isDefined)
-                                       .provideLayer(Clock.live)
+
                 } yield assertCompletes
             }
           },
@@ -530,7 +527,6 @@ object WebhookServerSpec extends ZIOSpecDefault {
               }
               .drop(1)
               .schedule(Schedule.spaced(1.milli))
-              .provideLayer(Clock.live)
 
             webhooksTestScenario(
               initialStubResponses = UStream.repeat(Left(None)),
@@ -583,7 +579,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                 _          <- TestWebhookEventRepo.createEvent(event)
                 _          <- requests.take
                 _          <- TestWebhookRepo.setWebhook(webhook.copy(status = WebhookStatus.Disabled))
-                waitForHalt = requests.take.timeout(50.millis).repeatUntil(_.isEmpty).provideLayer(Clock.live)
+                waitForHalt = requests.take.timeout(50.millis).repeatUntil(_.isEmpty)
                 _          <- waitForHalt race TestClock.adjust(10.millis).forever
               } yield assertCompletes
             }
@@ -718,7 +714,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             ScenarioInterest.Requests
           )((requests, _) => assertM(requests.take.map(_.content))(matchesRegex("(?:event payload \\d+)+")))
         }
-      ).provideCustom(specEnv, WebhookServerConfig.defaultWithBatching),
+      ).provide(specEnv, WebhookServerConfig.defaultWithBatching),
       suite("manual server start and shutdown")(
         suite("on shutdown")(
           test("takes no new events on shut down right after startup") {
@@ -731,43 +727,54 @@ object WebhookServerSpec extends ZIOSpecDefault {
               None
             )
 
-            TestWebhookEventRepo.subscribeToEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
-              events =>
-                for {
-                  responses <- Queue.unbounded[StubResponse]
-                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(
-                                 List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
-                               )
-                  _         <- WebhookServer.start.useNow
-                  _         <- TestWebhookRepo.setWebhook(webhook)
-                  _         <- TestWebhookEventRepo.createEvent(testEvent)
-                  take      <- events.take.timeout(1.second).provideLayer(Clock.live)
-                } yield assertTrue(take.isEmpty)
+            ZIO.scoped {
+              TestWebhookEventRepo.subscribeToEvents
+                .map(_.filterOutput(_.status == WebhookEventStatus.Delivering))
+                .flatMap {
+                  events =>
+                    for {
+                      responses <- Queue.unbounded[StubResponse]
+                      _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                      _         <- responses.offerAll(
+                                     List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
+                                   )
+                      _         <- ZIO.scoped {
+                                     WebhookServer.start
+                                   }
+                      _         <- TestWebhookRepo.setWebhook(webhook)
+                      _         <- TestWebhookEventRepo.createEvent(testEvent)
+                      take      <- events.take.timeout(1.second)
+                    } yield assertTrue(take.isEmpty)
+                }
             }
           },
           test("stops subscribing to new events") {
             val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
             val testEvents = createPlaintextEvents(2)(WebhookId(0))
-
-            TestWebhookEventRepo.subscribeToEvents.map(_.filterOutput(_.status == WebhookEventStatus.Delivering)).use {
-              events =>
-                for {
-                  responses <- Queue.unbounded[StubResponse]
-                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(
-                                 List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
-                               )
-                  event1    <- WebhookServer.start.useDiscard {
-                                 for {
-                                   _      <- TestWebhookRepo.setWebhook(webhook)
-                                   _      <- TestWebhookEventRepo.createEvent(testEvents(0))
-                                   event1 <- events.take.as(true)
-                                 } yield event1
-                               }
-                  _         <- TestWebhookEventRepo.createEvent(testEvents(1))
-                  take      <- events.take.timeout(1.second).provideLayer(Clock.live)
-                } yield assertTrue(event1 && take.isEmpty)
+            ZIO.scoped {
+              TestWebhookEventRepo.subscribeToEvents
+                .map(_.filterOutput(_.status == WebhookEventStatus.Delivering))
+                .flatMap {
+                  events =>
+                    for {
+                      responses <- Queue.unbounded[StubResponse]
+                      _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                      _         <- responses.offerAll(
+                                     List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
+                                   )
+                      event1    <- ZIO.scoped {
+                                     WebhookServer.start.flatMap { _ =>
+                                       for {
+                                         _      <- TestWebhookRepo.setWebhook(webhook)
+                                         _      <- TestWebhookEventRepo.createEvent(testEvents(0))
+                                         event1 <- events.take.as(true)
+                                       } yield event1
+                                     }
+                                   }
+                      _         <- TestWebhookEventRepo.createEvent(testEvents(1))
+                      take      <- events.take.timeout(1.second)
+                    } yield assertTrue(event1 && take.isEmpty)
+                }
             }
           },
           test("retry state is saved") {
@@ -779,28 +786,31 @@ object WebhookServerSpec extends ZIOSpecDefault {
               plaintextContentHeaders,
               None
             )
-
-            TestWebhookHttpClient.getRequests.use {
-              requests =>
-                for {
-                  responses <- Queue.unbounded[StubResponse]
-                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(List(Left(None), Left(None)))
-                  _         <- WebhookServer.start.useDiscard {
-                                 for {
-                                   _ <- TestWebhookRepo.setWebhook(webhook)
-                                   _ <- TestWebhookEventRepo.createEvent(event)
-                                   _ <- requests.takeN(2) // wait for 2 requests to come through
-                                 } yield ()
-                               }
-                  saveState <- WebhookStateRepo.loadState
-                                 .repeatUntil(_.isDefined)
-                                 .map {
-                                   _.map(_.fromJson[PersistentRetries])
-                                     .toRight("No save-state")
-                                     .flatMap(Predef.identity)
+            ZIO.scoped {
+              TestWebhookHttpClient.getRequests.flatMap {
+                requests =>
+                  for {
+                    responses <- Queue.unbounded[StubResponse]
+                    _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                    _         <- responses.offerAll(List(Left(None), Left(None)))
+                    _         <- ZIO.scoped {
+                                   WebhookServer.start.flatMap { _ =>
+                                     for {
+                                       _ <- TestWebhookRepo.setWebhook(webhook)
+                                       _ <- TestWebhookEventRepo.createEvent(event)
+                                       _ <- requests.takeN(2) // wait for 2 requests to come through
+                                     } yield ()
+                                   }
                                  }
-                } yield assertTrue(saveState.isRight)
+                    saveState <- WebhookStateRepo.loadState
+                                   .repeatUntil(_.isDefined)
+                                   .map {
+                                     _.map(_.fromJson[PersistentRetries])
+                                       .toRight("No save-state")
+                                       .flatMap(Predef.identity)
+                                   }
+                  } yield assertTrue(saveState.isRight)
+              }
             }
           }
         ),
@@ -814,22 +824,27 @@ object WebhookServerSpec extends ZIOSpecDefault {
               plaintextContentHeaders,
               None
             )
-
-            TestWebhookHttpClient.getRequests.use {
-              requests =>
-                for {
-                  responses <- Queue.unbounded[StubResponse]
-                  _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _         <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
-                  _         <- WebhookServer.start.useDiscard {
-                                 for {
-                                   _ <- TestWebhookRepo.setWebhook(webhook)
-                                   _ <- TestWebhookEventRepo.createEvent(event)
-                                   _ <- requests.takeN(2)
-                                 } yield ()
-                               }
-                  _         <- WebhookServer.start.useDiscard(requests.take.fork)
-                } yield assertCompletes
+            ZIO.scoped {
+              TestWebhookHttpClient.getRequests.flatMap {
+                requests =>
+                  for {
+                    responses <- Queue.unbounded[StubResponse]
+                    _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                    _         <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
+                    _         <- ZIO.scoped {
+                                   WebhookServer.start.flatMap { _ =>
+                                     for {
+                                       _ <- TestWebhookRepo.setWebhook(webhook)
+                                       _ <- TestWebhookEventRepo.createEvent(event)
+                                       _ <- requests.takeN(2)
+                                     } yield ()
+                                   }
+                                 }
+                    _         <- ZIO.scoped {
+                                   WebhookServer.start.flatMap(_ => requests.take.fork)
+                                 }
+                  } yield assertCompletes
+              }
             }
           },
           test("resumes timeout duration for retries") {
@@ -841,45 +856,48 @@ object WebhookServerSpec extends ZIOSpecDefault {
               plaintextContentHeaders,
               None
             )
+            ZIO.scoped {
+              (TestWebhookHttpClient.getRequests zip TestWebhookRepo.subscribeToWebhooks).flatMap {
+                case (requests, webhooks) =>
+                  for {
+                    responses  <- Queue.unbounded[StubResponse]
+                    _          <- TestWebhookHttpClient.setResponse(_ => Some(responses))
+                    _          <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
+                    _          <- WebhookServer.start.flatMap { _ =>
+                                    for {
+                                      _ <- TestWebhookRepo.setWebhook(webhook)
+                                      _ <- TestWebhookEventRepo.createEvent(event)
+                                      _ <- requests.takeN(2)
+                                      _ <- TestClock.adjust(3.days)
+                                    } yield ()
+                                  }
+                    lastStatus <- WebhookServer.start.flatMap { _ =>
+                                    for {
+                                      _          <- TestClock.adjust(4.days)
+                                      lastStatus <- webhooks.takeN(2).map(_.last.status)
+                                      _          <- requests.take
+                                    } yield lastStatus
+                                  }
 
-            (TestWebhookHttpClient.getRequests zip TestWebhookRepo.subscribeToWebhooks).use {
-              case (requests, webhooks) =>
-                for {
-                  responses  <- Queue.unbounded[StubResponse]
-                  _          <- TestWebhookHttpClient.setResponse(_ => Some(responses))
-                  _          <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
-                  _          <- WebhookServer.start.useDiscard {
-                                  for {
-                                    _ <- TestWebhookRepo.setWebhook(webhook)
-                                    _ <- TestWebhookEventRepo.createEvent(event)
-                                    _ <- requests.takeN(2)
-                                    _ <- TestClock.adjust(3.days)
-                                  } yield ()
-                                }
-                  lastStatus <- WebhookServer.start.useDiscard {
-                                  for {
-                                    _          <- TestClock.adjust(4.days)
-                                    lastStatus <- webhooks.takeN(2).map(_.last.status)
-                                    _          <- requests.take
-                                  } yield lastStatus
-                                }
-
-                } yield assert(lastStatus)(isSome(isSubtype[WebhookStatus.Unavailable](anything)))
+                  } yield assert(lastStatus)(isSome(isSubtype[WebhookStatus.Unavailable](anything)))
+              }
             }
           },
           test("clears persisted state after loading") {
             for {
-              _              <- WebhookServer.start.useNow
+              _              <- ZIO.scoped(WebhookServer.start)
               persistedState <- ZIO.serviceWithZIO[WebhookStateRepo](_.loadState)
-              _              <- WebhookServer.start.useDiscard(
-                                  ZIO.serviceWithZIO[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
-                                )
+              _              <- ZIO.scoped {
+                                  WebhookServer.start.flatMap { _ =>
+                                    ZIO.serviceWithZIO[WebhookStateRepo](_.loadState).repeatUntil(_.isEmpty)
+                                  }
+                                }
             } yield assert(persistedState)(isSome(anything))
           }
           // TODO: write unit tests for persistent retry backoff when needed
         )
-      ).provideCustom(mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(20.seconds)
+      ).provide(mockEnv, WebhookServerConfig.default)
+    ) @@ timeout(20.seconds) @@ TestAspect.withLiveClock
 }
 
 object WebhookServerSpecUtil {
@@ -924,9 +942,9 @@ object WebhookServerSpecUtil {
     with WebhooksProxy
     with SerializePayload
 
-  lazy val mockEnv: ZLayer[Clock with WebhookServerConfig, Nothing, MockEnv] =
+  lazy val mockEnv: URLayer[Any, MockEnv] =
     ZLayer
-      .makeSome[Clock with WebhookServerConfig, MockEnv](
+      .make[MockEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -945,10 +963,10 @@ object WebhookServerSpecUtil {
     case object Requests extends ScenarioInterest[WebhookHttpRequest]
     case object Webhooks extends ScenarioInterest[WebhookUpdate]
 
-    final def dequeueFor[A](scenarioInterest: ScenarioInterest[A]): URManaged[SpecEnv, Dequeue[A]] =
+    final def dequeueFor[A](scenarioInterest: ScenarioInterest[A]): URIO[Scope with SpecEnv, Dequeue[A]] =
       scenarioInterest match {
         case ScenarioInterest.Errors   =>
-          ZManaged.service[WebhookServer].flatMap(_.subscribeToErrors)
+          ZIO.serviceWithZIO[WebhookServer](_.subscribeToErrors)
         case ScenarioInterest.Events   =>
           TestWebhookEventRepo.subscribeToEvents
         case ScenarioInterest.Requests =>
@@ -978,9 +996,9 @@ object WebhookServerSpecUtil {
     with WebhookServer
     with WebhooksProxy
 
-  lazy val specEnv: URLayer[Clock with Console with WebhookServerConfig, SpecEnv] =
+  lazy val specEnv: URLayer[WebhookServerConfig, SpecEnv] =
     ZLayer
-      .makeSome[Clock with Console with WebhookServerConfig, SpecEnv](
+      .makeSome[WebhookServerConfig, SpecEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -998,15 +1016,17 @@ object WebhookServerSpecUtil {
     events: Iterable[WebhookEvent],
     scenarioInterest: ScenarioInterest[A]
   )(
-    assertion: Dequeue[A] => URIO[TestClock, TestResult]
-  ): URIO[SpecEnv with TestClock with WebhookServer with Clock, TestResult] =
-    ScenarioInterest.dequeueFor(scenarioInterest).map(assertion).flatMap(_.forkManaged).use { testFiber =>
-      for {
-        _          <- TestWebhookHttpClient.setResponse(stubResponses)
-        _          <- ZIO.foreachDiscard(webhooks)(TestWebhookRepo.setWebhook)
-        _          <- ZIO.foreachDiscard(events)(TestWebhookEventRepo.createEvent)
-        testResult <- testFiber.join
-      } yield testResult
+    assertion: Dequeue[A] => UIO[TestResult]
+  ): URIO[SpecEnv with WebhookServer, TestResult] =
+    ZIO.scoped {
+      ScenarioInterest.dequeueFor(scenarioInterest).map(assertion).flatMap(_.forkScoped).flatMap { testFiber =>
+        for {
+          _          <- TestWebhookHttpClient.setResponse(stubResponses)
+          _          <- ZIO.foreachDiscard(webhooks)(TestWebhookRepo.setWebhook)
+          _          <- ZIO.foreachDiscard(events)(TestWebhookEventRepo.createEvent)
+          testResult <- testFiber.join
+        } yield testResult
+      }
     }
 
   def webhooksTestScenario[A](
@@ -1015,17 +1035,19 @@ object WebhookServerSpecUtil {
     events: Iterable[WebhookEvent],
     scenarioInterest: ScenarioInterest[A]
   )(
-    assertion: (Dequeue[A], Queue[StubResponse]) => URIO[SpecEnv with TestClock with TestConsole, TestResult]
-  ): URIO[SpecEnv with TestClock with TestConsole with WebhookServer with Clock, TestResult] =
-    ScenarioInterest.dequeueFor(scenarioInterest).use { dequeue =>
-      for {
-        responseQueue <- Queue.bounded[StubResponse](1)
-        testFiber     <- assertion(dequeue, responseQueue).fork
-        _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
-        _             <- ZIO.foreachDiscard(webhooks)(TestWebhookRepo.setWebhook)
-        _             <- ZIO.foreachDiscard(events)(TestWebhookEventRepo.createEvent)
-        _             <- initialStubResponses.run(ZSink.fromQueue(responseQueue)).fork
-        testResult    <- testFiber.join
-      } yield testResult
+    assertion: (Dequeue[A], Queue[StubResponse]) => URIO[SpecEnv, TestResult]
+  ): URIO[SpecEnv with WebhookServer, TestResult] =
+    ZIO.scoped {
+      ScenarioInterest.dequeueFor(scenarioInterest).flatMap { dequeue =>
+        for {
+          responseQueue <- Queue.bounded[StubResponse](1)
+          testFiber     <- assertion(dequeue, responseQueue).fork
+          _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
+          _             <- ZIO.foreachDiscard(webhooks)(TestWebhookRepo.setWebhook)
+          _             <- ZIO.foreachDiscard(events)(TestWebhookEventRepo.createEvent)
+          _             <- initialStubResponses.run(ZSink.fromQueue(responseQueue)).fork
+          testResult    <- testFiber.join
+        } yield testResult
+      }
     }
 }

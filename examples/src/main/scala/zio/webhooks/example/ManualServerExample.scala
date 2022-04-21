@@ -34,9 +34,9 @@ object ManualServerExample extends ZIOAppDefault {
 
   private val httpApp = Http.collectZIO[Request] {
     case request @ Method.POST -> !! / "endpoint" =>
-      request.getBodyAsString
+      request.bodyAsString
         .flatMap(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
-        .as(Response.status(Status.OK))
+        .as(Response.status(Status.Ok))
   }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
@@ -47,18 +47,20 @@ object ManualServerExample extends ZIOAppDefault {
   // Server is created and shut down manually. On shutdown, all existing work is finished before
   // the example finishes.
   private def program =
-    WebhookServer.start.use { server =>
-      for {
-        _ <- server.subscribeToErrors.use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
-        _ <- httpEndpointServer.start(port, httpApp).fork
-        _ <- TestWebhookRepo.setWebhook(webhook)
-        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-      } yield ()
+    ZIO.scoped {
+      WebhookServer.start.flatMap { server =>
+        for {
+          _ <- server.subscribeToErrors.flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
+          _ <- httpEndpointServer.start(port, httpApp).fork
+          _ <- TestWebhookRepo.setWebhook(webhook)
+          _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+        } yield ()
+      }
     } *> printLine("Shutdown successful").orDie
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run =
     program
-      .provideCustom(
+      .provide(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

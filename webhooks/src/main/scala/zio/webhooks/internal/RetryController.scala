@@ -106,7 +106,7 @@ private[webhooks] final case class RetryController(
         retryQueue <- retryDispatchers.modifyZIO { map =>
                         map.get(webhookId) match {
                           case Some(dispatcher) =>
-                            UIO((dispatcher.retryQueue, map))
+                            UIO.succeed((dispatcher.retryQueue, map))
                           case None             =>
                             for {
                               retryQueue     <- Queue.bounded[WebhookEvent](config.retry.capacity)
@@ -126,7 +126,7 @@ private[webhooks] final case class RetryController(
                                                   webhooksProxy
                                                 )
                               _              <- retryStates.updateZIO(states =>
-                                                  UIO(
+                                                  UIO.succeed(
                                                     states + (webhookId -> RetryState(
                                                       activeSinceTime = now,
                                                       backoff = None,

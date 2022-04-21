@@ -3,7 +3,6 @@ package zio.webhooks
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.Clock
 import zio.Console.{ printError, printLine }
 import zio.json._
 import zio.Random
@@ -15,13 +14,13 @@ import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerializatio
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
 
-object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
+object WebhookServerIntegrationSpec extends ZIOSpecDefault {
   val spec =
     suite("WebhookServerIntegrationSpec")(
       test("all events are delivered eventually") {
         val n = 10000L // number of events
 
-        def test(delivered: SubscriptionRef[Set[Int]]) =
+        def testDelivered(delivered: SubscriptionRef[Set[Int]]) =
           for {
             _ <- ZIO.foreachDiscard(testWebhooks)(TestWebhookRepo.setWebhook)
             _ <- delivered.changes.collect {
@@ -30,21 +29,24 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
                  }
                    .foreach(size => printLine(s"delivered so far: $size").orDie)
                    .fork
-            _ <- WebhookServer.start.useDiscard {
-                   for {
-                     reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
-                     // create events for webhooks with single delivery, at-most-once semantics
-                     _                <- singleAtMostOnceEvents(n)
-                                           // pace events so we don't overwhelm the endpoint
-                                           .schedule(Schedule.spaced(50.micros).jittered)
-                                           .foreach(TestWebhookEventRepo.createEvent)
-                     // create events for webhooks with batched delivery, at-most-once semantics
-                     // no need to pace events as batching minimizes requests sent
-                     _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
-                     // wait to get half
-                     _                <- delivered.changes.filter(_.size == n / 2).runHead
-                     _                <- reliableEndpoint.interrupt
-                   } yield ()
+            _ <- ZIO.scoped {
+                   WebhookServer.start.flatMap {
+                     _ =>
+                       for {
+                         reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
+                         // create events for webhooks with single delivery, at-most-once semantics
+                         _                <- singleAtMostOnceEvents(n)
+                                               // pace events so we don't overwhelm the endpoint
+                                               .schedule(Schedule.spaced(50.micros).jittered)
+                                               .foreach(TestWebhookEventRepo.createEvent)
+                         // create events for webhooks with batched delivery, at-most-once semantics
+                         // no need to pace events as batching minimizes requests sent
+                         _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                         // wait to get half
+                         _                <- delivered.changes.filter(_.size == n / 2).runHead
+                         _                <- reliableEndpoint.interrupt
+                       } yield ()
+                   }
                  }
             // start restarting server and endpoint with random behavior
             _ <- RestartingWebhookServer.start.fork
@@ -60,22 +62,21 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
 
         (for {
           delivered <- SubscriptionRef.make(Set.empty[Int])
-          _         <- test(delivered).ensuring(
+          _         <- testDelivered(delivered).ensuring(
                          // dump repo and events not delivered on timeout
                          for {
-                           deliveredSize <- delivered.ref.get.map(_.size)
+                           deliveredSize <- delivered.get.map(_.size)
                            _             <- TestWebhookEventRepo.dumpEventIds
                                               .map(_.toList.sortBy(_._1))
                                               .debug("all IDs in repo")
                                               .when(deliveredSize < n)
-                           _             <- delivered.ref.get
+                           _             <- delivered.get
                                               .map(delivered => ((0 until n.toInt).toSet diff delivered).toList.sorted)
                                               .debug("not delivered")
                                               .when(deliveredSize < n)
                          } yield ()
                        )
         } yield assertCompletes)
-          .provideSomeLayer[IntegrationEnv](Clock.live ++ Console.live ++ Random.live)
       } @@ timeout(3.minutes),
       test("slow subscribers do not slow down fast ones") {
         val webhookCount     = 100
@@ -115,18 +116,20 @@ object WebhookServerIntegrationSpec extends DefaultRunnableSpec {
           _          <- delivered.changes.map(_.size).foreach(size => printLine(s"delivered so far: $size").orDie).fork
           _          <- httpEndpointServer.start(port, slowEndpointsExceptFirst(delivered)).fork
           _          <- ZIO.foreachDiscard(testWebhooks)(TestWebhookRepo.setWebhook)
-          testResult <- WebhookServer.start.use { server =>
-                          for {
-                            _ <- server.subscribeToErrors
-                                   .use(UStream.fromQueue(_).map(_.toString).foreach(printError(_)))
-                                   .fork
-                            _ <- eventStreams.foreach(TestWebhookEventRepo.createEvent).fork
-                            _ <- delivered.changes.filter(_.size == eventsPerWebhook).runHead
-                          } yield assertCompletes
+          testResult <- ZIO.scoped {
+                          WebhookServer.start.flatMap { server =>
+                            for {
+                              _ <- server.subscribeToErrors
+                                     .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printError(_)))
+                                     .fork
+                              _ <- eventStreams.foreach(TestWebhookEventRepo.createEvent).fork
+                              _ <- delivered.changes.filter(_.size == eventsPerWebhook).runHead
+                            } yield assertCompletes
+                          }
                         }
-        } yield testResult).provideSomeLayer[IntegrationEnv](Clock.live ++ Console.live ++ Random.live)
+        } yield testResult)
       } @@ timeout(1.minute)
-    ).provideCustom(integrationEnv) @@ sequential
+    ).provideCustom(integrationEnv) @@ sequential @@ TestAspect.withLiveClock
 }
 
 object WebhookServerIntegrationSpecUtil {
@@ -151,7 +154,7 @@ object WebhookServerIntegrationSpecUtil {
       }
   }
 
-  def events(webhookIdRange: (Int, Int)): ZStream[Random, Nothing, WebhookEvent] =
+  def events(webhookIdRange: (Int, Int)): ZStream[Any, Nothing, WebhookEvent] =
     UStream
       .iterate(0L)(_ + 1)
       .zip(UStream.repeatZIO(Random.nextIntBetween(webhookIdRange._1, webhookIdRange._2)))
@@ -191,9 +194,9 @@ object WebhookServerIntegrationSpecUtil {
   // alias for zio-http endpoint server
   lazy val httpEndpointServer = Server
 
-  lazy val integrationEnv: URLayer[Clock, IntegrationEnv] =
+  lazy val integrationEnv: ULayer[IntegrationEnv] =
     ZLayer
-      .makeSome[Clock, IntegrationEnv](
+      .make[IntegrationEnv](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,
@@ -212,18 +215,18 @@ object WebhookServerIntegrationSpecUtil {
       case request @ Method.POST -> !! / "endpoint" / (id @ _) =>
         for {
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.getBodyAsString.flatMap { body =>
+          response    <- request.bodyAsString.flatMap { body =>
                            val singlePayload = body.fromJson[Int].map(Left(_))
                            val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                            val payload       = singlePayload.orElseThat(batchPayload).toOption
                            ZIO.foreachDiscard(payload) {
                              case Left(i)   =>
-                               delivered.ref.updateZIO(set => UIO(set + i))
+                               delivered.updateZIO(set => UIO.succeed(set + i))
                              case Right(is) =>
-                               delivered.ref.updateZIO(set => UIO(set ++ is))
+                               delivered.updateZIO(set => UIO.succeed(set ++ is))
                            }
                          }
-                           .as(Response.status(Status.OK))
+                           .as(Response.status(Status.Ok))
                            .delay(randomDelay) // simulate network/server latency
         } yield response
     }
@@ -232,22 +235,22 @@ object WebhookServerIntegrationSpecUtil {
     Http.collectZIO[Request] {
       case request @ Method.POST -> !! / "endpoint" / id if id == "0" =>
         for {
-          _        <- request.getBodyAsString.flatMap { body =>
+          _        <- request.bodyAsString.flatMap { body =>
                         val singlePayload = body.fromJson[Int].map(Left(_))
                         val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                         val payload       = singlePayload.orElseThat(batchPayload).toOption
                         ZIO
                           .foreachDiscard(payload) {
                             case Left(i)   =>
-                              delivered.ref.updateZIO(set => UIO(set + i))
+                              delivered.updateZIO(set => UIO.succeed(set + i))
                             case Right(is) =>
-                              delivered.ref.updateZIO(set => UIO(set ++ is))
+                              delivered.updateZIO(set => UIO.succeed(set ++ is))
                           }
                       }
-          response <- UIO(Response.status(Status.OK))
+          response <- UIO.succeed(Response.status(Status.Ok))
         } yield response
       case _                                                          =>
-        UIO(Response.status(Status.OK)).delay(1.minute)
+        UIO.succeed(Response.status(Status.Ok)).delay(1.minute)
     }
 
   lazy val testWebhooks: IndexedSeq[Webhook] = (0 until 250).map { i =>
@@ -313,7 +316,7 @@ object RandomEndpointBehavior {
         for {
           n           <- Random.nextIntBounded(100)
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.getBodyAsString.flatMap { body =>
+          response    <- request.bodyAsString.flatMap { body =>
                            val singlePayload = body.fromJson[Int].map(Left(_))
                            val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                            val payload       = singlePayload.orElseThat(batchPayload).toOption
@@ -321,13 +324,13 @@ object RandomEndpointBehavior {
                              ZIO
                                .foreachDiscard(payload) {
                                  case Left(i)   =>
-                                   delivered.ref.updateZIO(set => UIO(set + i))
+                                   delivered.updateZIO(set => UIO.succeed(set + i))
                                  case Right(is) =>
-                                   delivered.ref.updateZIO(set => UIO(set ++ is))
+                                   delivered.updateZIO(set => UIO.succeed(set ++ is))
                                }
-                               .as(Response.status(Status.OK))
+                               .as(Response.status(Status.Ok))
                            else
-                             UIO(Response.status(Status.NOT_FOUND))
+                             UIO.succeed(Response.status(Status.NotFound))
                          }
                            .delay(randomDelay)
         } yield response
@@ -336,7 +339,7 @@ object RandomEndpointBehavior {
   // just an alias for a zio-http server to tell it apart from the webhook server
   lazy val httpEndpointServer: Server.type = Server
 
-  val randomBehavior: URIO[Random, RandomEndpointBehavior] =
+  val randomBehavior: UIO[RandomEndpointBehavior] =
     Random.nextIntBounded(100).map(n => if (n < 80) Flaky else Down)
 
   def run(delivered: SubscriptionRef[Set[Int]]) =
@@ -363,16 +366,18 @@ object RestartingWebhookServer {
   private def runServerThenShutdown =
     for {
       _ <- printLine("Server starting")
-      _ <- WebhookServer.start.use { server =>
-             for {
-               _        <- printLine("Server started")
-               f        <- server.subscribeToErrors
-                             .use(UStream.fromQueue(_).map(_.toString).foreach(printError(_)))
-                             .fork
-               _        <- TestWebhookEventRepo.enqueueNew
-               duration <- Random.nextIntBetween(3000, 5000).map(_.millis)
-               _        <- f.interrupt.delay(duration)
-             } yield ()
+      _ <- ZIO.scoped {
+             WebhookServer.start.flatMap { server =>
+               for {
+                 _        <- printLine("Server started")
+                 f        <- server.subscribeToErrors
+                               .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printError(_)))
+                               .fork
+                 _        <- TestWebhookEventRepo.enqueueNew
+                 duration <- Random.nextIntBetween(3000, 5000).map(_.millis)
+                 _        <- f.interrupt.delay(duration)
+               } yield ()
+             }
            }
       _ <- printLine("Server shut down")
     } yield ()

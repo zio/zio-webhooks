@@ -10,7 +10,7 @@ import java.io.IOException
 
 // TODO: scaladoc
 trait TestWebhookHttpClient {
-  def requests: UManaged[Dequeue[WebhookHttpRequest]]
+  def requests: URIO[Scope, Dequeue[WebhookHttpRequest]]
 
   def setResponse(f: WebhookHttpRequest => StubResponses): UIO[Unit]
 }
@@ -18,21 +18,21 @@ trait TestWebhookHttpClient {
 object TestWebhookHttpClient {
   // Accessors
 
-  def getRequests: URManaged[TestWebhookHttpClient, Dequeue[WebhookHttpRequest]] =
-    ZManaged.service[TestWebhookHttpClient].flatMap(_.requests)
+  def getRequests: URIO[Scope with TestWebhookHttpClient, Dequeue[WebhookHttpRequest]] =
+    ZIO.serviceWithZIO[TestWebhookHttpClient](_.requests)
 
   def setResponse(
     f: WebhookHttpRequest => StubResponses
   ): URIO[TestWebhookHttpClient, Unit] =
     ZIO.serviceWithZIO(_.setResponse(f))
 
-  val test: ULayer[TestWebhookHttpClient with WebhookHttpClient] = {
+  val test: ULayer[TestWebhookHttpClient with WebhookHttpClient] = ZLayer.scoped {
     for {
-      ref   <- Ref.makeManaged[WebhookHttpRequest => StubResponses](_ => None)
-      queue <- Hub.unbounded[WebhookHttpRequest].toManaged
+      ref   <- Ref.make[WebhookHttpRequest => StubResponses](_ => None)
+      queue <- Hub.unbounded[WebhookHttpRequest]
       impl   = TestWebhookHttpClientImpl(ref, queue)
     } yield impl
-  }.toLayer
+  }
 
   type StubResponse  = Either[Option[BadWebhookUrlError], WebhookHttpResponse]
   type StubResponses = Option[Queue[StubResponse]]
@@ -44,7 +44,7 @@ final case class TestWebhookHttpClientImpl(
 ) extends WebhookHttpClient
     with TestWebhookHttpClient {
 
-  def requests: UManaged[Dequeue[WebhookHttpRequest]] =
+  def requests: URIO[Scope, Dequeue[WebhookHttpRequest]] =
     received.subscribe
 
   def post(request: WebhookHttpRequest): IO[HttpPostError, WebhookHttpResponse] =

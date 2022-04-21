@@ -41,19 +41,19 @@ object EventRecoveryExample extends ZIOAppDefault {
         for {
           n        <- Random.nextIntBounded(100)
           tsString <- Clock.instant.map(_.toString).map(ts => s"[$ts]")
-          response <- request.getBodyAsString.flatMap { payload =>
+          response <- request.bodyAsString.flatMap { payload =>
                         if (n < 70)
                           for {
                             newSize <- payloads.modify { set =>
                                          val newSet = set + payload
                                          (newSet.size, newSet)
                                        }
-                            line     = s"$tsString: $payload Response: OK, events delivered: $newSize"
+                            line     = s"$tsString: $payload Response: Ok, events delivered: $newSize"
                             _       <- printLine(line)
-                          } yield Response.status(Status.OK)
+                          } yield Response.status(Status.Ok)
                         else
-                          printLine(s"$tsString: $payload Response: NOT_FOUND") *>
-                            UIO(Response.status(Status.NOT_FOUND))
+                          printLine(s"$tsString: $payload Response: NotFound") *>
+                            UIO.succeed(Response.status(Status.NotFound))
                       }.orDie
         } yield response
     }
@@ -67,53 +67,59 @@ object EventRecoveryExample extends ZIOAppDefault {
 
   private def program =
     for {
-      _ <- WebhookServer.start.use { server =>
-             for {
-               _        <- server.subscribeToErrors
-                             .use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
-                             .fork
-               payloads <- Ref.make(Set.empty[String])
-               _        <- httpEndpointServer.start(port, httpApp(payloads)).fork
-               _        <- TestWebhookRepo.setWebhook(webhook)
-               _        <- events
-                             .take(n / 3)
-                             .schedule(Schedule.spaced(50.micros))
-                             .foreach(TestWebhookEventRepo.createEvent)
-             } yield ()
+      _ <- ZIO.scoped {
+             WebhookServer.start.flatMap { server =>
+               for {
+                 _        <- server.subscribeToErrors
+                               .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
+                               .fork
+                 payloads <- Ref.make(Set.empty[String])
+                 _        <- httpEndpointServer.start(port, httpApp(payloads)).fork
+                 _        <- TestWebhookRepo.setWebhook(webhook)
+                 _        <- events
+                               .take(n / 3)
+                               .schedule(Schedule.spaced(50.micros))
+                               .foreach(TestWebhookEventRepo.createEvent)
+               } yield ()
+             }
            }
       _ <- printLine("Shutdown successful")
-      _ <- WebhookServer.start.use { server =>
-             for {
-               _ <- server.subscribeToErrors
-                      .use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
-                      .fork
-               _ <- printLine("Restart successful")
-               _ <- events
-                      .drop(n.toInt / 3)
-                      .take(n / 3)
-                      .schedule(Schedule.spaced(50.micros))
-                      .foreach(TestWebhookEventRepo.createEvent(_))
-             } yield ()
+      _ <- ZIO.scoped {
+             WebhookServer.start.flatMap { server =>
+               for {
+                 _ <- server.subscribeToErrors
+                        .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
+                        .fork
+                 _ <- printLine("Restart successful")
+                 _ <- events
+                        .drop(n.toInt / 3)
+                        .take(n / 3)
+                        .schedule(Schedule.spaced(50.micros))
+                        .foreach(TestWebhookEventRepo.createEvent(_))
+               } yield ()
+             }
            }
       _ <- printLine("Shutdown successful")
-      _ <- WebhookServer.start.use { server =>
-             for {
-               _ <- server.subscribeToErrors
-                      .use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
-                      .fork
-               _ <- printLine("Restart successful")
-               _ <- events
-                      .drop(2 * n.toInt / 3)
-                      .schedule(Schedule.spaced(50.micros))
-                      .foreach(TestWebhookEventRepo.createEvent(_))
-               _ <- Clock.sleep(Duration.Infinity)
-             } yield ()
+      _ <- ZIO.scoped {
+             WebhookServer.start.flatMap { server =>
+               for {
+                 _ <- server.subscribeToErrors
+                        .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
+                        .fork
+                 _ <- printLine("Restart successful")
+                 _ <- events
+                        .drop(2 * n.toInt / 3)
+                        .schedule(Schedule.spaced(50.micros))
+                        .foreach(TestWebhookEventRepo.createEvent(_))
+                 _ <- Clock.sleep(Duration.Infinity)
+               } yield ()
+             }
            }
     } yield ()
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run =
     program
-      .provideCustom(
+      .provide(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

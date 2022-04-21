@@ -56,13 +56,13 @@ object CustomConfigExample extends ZIOAppDefault {
       for {
         n        <- Random.nextIntBounded(100)
         tsString <- Clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response <- request.getBodyAsString.flatMap { payload =>
+        response <- request.bodyAsString.flatMap { payload =>
                       if (n < 40)
-                        printLine(tsString + payload + " Response: OK") *>
-                          UIO(Response.status(Status.OK))
+                        printLine(tsString + payload + " Response: Ok") *>
+                          UIO.succeed(Response.status(Status.Ok))
                       else
-                        printLine(tsString + payload + " Response: NOT_FOUND") *>
-                          UIO(Response.status(Status.NOT_FOUND))
+                        printLine(tsString + payload + " Response: NotFound") *>
+                          UIO.succeed(Response.status(Status.NotFound))
                     }.orDie
       } yield response
   }
@@ -75,17 +75,19 @@ object CustomConfigExample extends ZIOAppDefault {
   private lazy val port = 8080
 
   private def program =
-    for {
-      _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
-      _ <- TestWebhookRepo.setWebhook(webhook)
-      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-      _ <- zio.Clock.sleep(Duration.Infinity)
-    } yield ()
+    ZIO.scoped {
+      for {
+        _ <- httpEndpointServer.start(port, httpApp).fork
+        _ <- WebhookServer.getErrors.flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
+        _ <- TestWebhookRepo.setWebhook(webhook)
+        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+        _ <- zio.Clock.sleep(Duration.Infinity)
+      } yield ()
+    }
 
-  override def run: ZIO[ZEnv with ZIOAppArgs, Any, Any] =
+  override def run =
     program
-      .provideCustom(
+      .provide(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,
