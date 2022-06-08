@@ -3,14 +3,13 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-
-import zio.stream.UStream
-import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
+import zio.stream.ZStream
+import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
-import zio.webhooks.{ WebhooksProxy, _ }
+import zio.webhooks.{WebhooksProxy, _}
 import zio.ZIOAppDefault
-import zio.Console.{ printLine, printLineError }
+import zio.Console.{printLine, printLineError}
 
 /**
  * An example of manually starting a server. The server is shut down as its release action,
@@ -20,7 +19,7 @@ import zio.Console.{ printLine, printLineError }
 object ManualServerExample extends ZIOAppDefault {
 
   // JSON webhook event stream
-  private lazy val events = UStream
+  private lazy val events = ZStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -47,20 +46,18 @@ object ManualServerExample extends ZIOAppDefault {
   // Server is created and shut down manually. On shutdown, all existing work is finished before
   // the example finishes.
   private def program =
-    ZIO.scoped {
-      WebhookServer.start.flatMap { server =>
-        for {
-          _ <- server.subscribeToErrors.flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
-          _ <- httpEndpointServer.start(port, httpApp).fork
-          _ <- TestWebhookRepo.setWebhook(webhook)
-          _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-        } yield ()
-      }
+    WebhookServer.start.flatMap { server =>
+      for {
+        _ <- server.subscribeToErrors.flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
+        _ <- httpEndpointServer.start(port, httpApp).fork
+        _ <- TestWebhookRepo.setWebhook(webhook)
+        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      } yield ()
     } *> printLine("Shutdown successful").orDie
 
   override def run =
     program
-      .provide(
+      .provideSome[Scope](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

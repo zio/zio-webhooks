@@ -3,14 +3,13 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-
-import zio.stream.UStream
-import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
-import zio.webhooks.{ WebhooksProxy, _ }
+import zio.stream.ZStream
+import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
+import zio.webhooks.{WebhooksProxy, _}
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
-import zio.{ Random, ZIOAppDefault }
-import zio.Console.{ printLine, printLineError }
+import zio.{Random, ZIOAppDefault}
+import zio.Console.{printLine, printLineError}
 
 /**
  * Differs from the [[BasicExample]] in that events are batched with the default batching setting
@@ -19,7 +18,7 @@ import zio.Console.{ printLine, printLineError }
  */
 object BasicExampleWithBatching extends ZIOAppDefault {
 
-  private lazy val events = UStream
+  private lazy val events = ZStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -49,18 +48,16 @@ object BasicExampleWithBatching extends ZIOAppDefault {
   private lazy val port = 8080
 
   private def program =
-    ZIO.scoped {
-      for {
-        _ <- httpEndpointServer.start(port, httpApp).fork
-        _ <- WebhookServer.getErrors.flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
-        _ <- TestWebhookRepo.setWebhook(webhook)
-        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-      } yield ()
-    }
+    for {
+      _ <- httpEndpointServer.start(port, httpApp).fork
+      _ <- WebhookServer.getErrors.flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
+      _ <- TestWebhookRepo.setWebhook(webhook)
+      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+    } yield ()
 
   override def run =
     program
-      .provide(
+      .provideSome[Scope](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

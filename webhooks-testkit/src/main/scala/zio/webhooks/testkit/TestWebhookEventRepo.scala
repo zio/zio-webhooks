@@ -2,7 +2,7 @@ package zio.webhooks.testkit
 
 import zio._
 import zio.prelude.NonEmptySet
-import zio.stream.UStream
+import zio.stream.{UStream, ZStream}
 import zio.webhooks._
 import zio.webhooks.internal.DequeueUtils
 
@@ -61,7 +61,7 @@ final private case class TestWebhookEventRepoImpl(
     ref.get.flatMap(map => ZIO.foreachDiscard(map.values.filter(_.isNew))(hub.publish))
 
   def recoverEvents: UStream[WebhookEvent] =
-    UStream.fromIterableZIO(ref.get.map(_.values.filter(_.isDelivering)))
+    ZStream.fromIterableZIO(ref.get.map(_.values.filter(_.isDelivering)))
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): UIO[Unit] =
     for {

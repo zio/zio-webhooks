@@ -2,7 +2,7 @@ package zio.webhooks.testkit
 
 import zio._
 import zio.prelude.NonEmptySet
-import zio.stream.UStream
+import zio.stream.{UStream, ZStream}
 import zio.webhooks.WebhookUpdate._
 import zio.webhooks.WebhooksProxy.UpdateMode
 import zio.webhooks._
@@ -56,7 +56,7 @@ final private case class TestWebhookRepoImpl(ref: Ref[Map[WebhookId, Webhook]], 
     ref.get.map(_(webhookId))
 
   def getWebhookUpdates: UStream[WebhookUpdate] =
-    UStream.fromHub(hub)
+    ZStream.fromHub(hub)
 
   def pollWebhooksById(webhookIds: NonEmptySet[WebhookId]): UIO[Map[WebhookId, Webhook]] =
     ref.get.map(_.filter { case (id, _) => webhookIds.contains(id) })

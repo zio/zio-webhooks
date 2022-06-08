@@ -36,7 +36,7 @@ private[webhooks] final class BatchDispatcher private (
     inputQueue.offer(event).unit
 
   def start: UIO[Any] =
-    mergeShutdown(UStream.fromQueue(inputQueue), shutdownSignal).groupByKey { ev =>
+    mergeShutdown(ZStream.fromQueue(inputQueue), shutdownSignal).groupByKey { ev =>
       val (webhookId, contentType) = ev.webhookIdAndContentType
       BatchKey(webhookId, contentType)
     } {
@@ -46,7 +46,7 @@ private[webhooks] final class BatchDispatcher private (
             batchQueue <- batchQueues.modifyZIO { map =>
                             map.get(batchKey) match {
                               case Some(queue) =>
-                                UIO.succeed((queue, map))
+                                ZIO.succeed((queue, map))
                               case None        =>
                                 for (queue <- Queue.bounded[WebhookEvent](batchingCapacity))
                                   yield (queue, map + (batchKey -> queue))

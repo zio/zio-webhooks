@@ -19,7 +19,7 @@ import java.io.IOException
  */
 object ShutdownOnFatalError extends ZIOAppDefault {
 
-  private lazy val events = goodEvents.take(2) ++ UStream(eventWithoutWebhook) ++ goodEvents.drop(2)
+  private lazy val events = goodEvents.take(2) ++ ZStream(eventWithoutWebhook) ++ goodEvents.drop(2)
 
   private lazy val eventWithoutWebhook = WebhookEvent(
     WebhookEventKey(WebhookEventId(-1), WebhookId(-1)),
@@ -29,7 +29,7 @@ object ShutdownOnFatalError extends ZIOAppDefault {
     None
   )
 
-  private val goodEvents = UStream
+  private val goodEvents = ZStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -53,23 +53,20 @@ object ShutdownOnFatalError extends ZIOAppDefault {
 
   private lazy val port = 8080
 
-  private def program: ZIO[WebhookServer with TestWebhookRepo with TestWebhookEventRepo, IOException, Unit] =
-    ZIO.scoped {
-      for {
-        errorFiber <- WebhookServer.getErrors.flatMap(UStream.fromQueue(_).runHead).fork
-        _          <- TestWebhookRepo.setWebhook(webhook)
-        eventFiber <-
-          events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
-        httpFiber  <- httpEndpointServer.start(port, httpApp).fork
-        _          <- errorFiber.join
-                        .flatMap(error => printLineError(error.toString))
-                        .onExit(_ => (eventFiber zip httpFiber).interrupt)
-      } yield ()
-    }
+  private def program: ZIO[Scope with WebhookServer with TestWebhookRepo with TestWebhookEventRepo, IOException, Unit] =
+    for {
+      errorFiber <- WebhookServer.getErrors.flatMap(ZStream.fromQueue(_).runHead).fork
+      _          <- TestWebhookRepo.setWebhook(webhook)
+      eventFiber <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent).fork
+      httpFiber  <- httpEndpointServer.start(port, httpApp).fork
+      _          <- errorFiber.join
+                      .flatMap(error => printLineError(error.toString))
+                      .onExit(_ => (eventFiber zip httpFiber).interrupt)
+    } yield ()
 
   override def run =
     program
-      .provide(
+      .provideSome[Scope](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookEventRepo.test,

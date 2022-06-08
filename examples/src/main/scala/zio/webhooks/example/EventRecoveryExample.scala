@@ -3,14 +3,13 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-
-import zio.stream.UStream
-import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
+import zio.stream.ZStream
+import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
-import zio.webhooks.{ WebhooksProxy, _ }
-import zio.{ Clock, Random, ZIOAppDefault }
-import zio.Console.{ printLine, printLineError }
+import zio.webhooks.{WebhooksProxy, _}
+import zio.{Clock, Random, ZIOAppDefault}
+import zio.Console.{printLine, printLineError}
 
 /**
  * An example of a webhook server performing event recovery on restart for a webhook with
@@ -21,7 +20,7 @@ import zio.Console.{ printLine, printLineError }
  */
 object EventRecoveryExample extends ZIOAppDefault {
 
-  private lazy val events = UStream
+  private lazy val events = ZStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -53,7 +52,7 @@ object EventRecoveryExample extends ZIOAppDefault {
                           } yield Response.status(Status.Ok)
                         else
                           printLine(s"$tsString: $payload Response: NotFound") *>
-                            UIO.succeed(Response.status(Status.NotFound))
+                            ZIO.succeed(Response.status(Status.NotFound))
                       }.orDie
         } yield response
     }
@@ -71,7 +70,7 @@ object EventRecoveryExample extends ZIOAppDefault {
              WebhookServer.start.flatMap { server =>
                for {
                  _        <- server.subscribeToErrors
-                               .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
+                               .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
                                .fork
                  payloads <- Ref.make(Set.empty[String])
                  _        <- httpEndpointServer.start(port, httpApp(payloads)).fork
@@ -88,7 +87,7 @@ object EventRecoveryExample extends ZIOAppDefault {
              WebhookServer.start.flatMap { server =>
                for {
                  _ <- server.subscribeToErrors
-                        .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
+                        .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
                         .fork
                  _ <- printLine("Restart successful")
                  _ <- events
@@ -104,7 +103,7 @@ object EventRecoveryExample extends ZIOAppDefault {
              WebhookServer.start.flatMap { server =>
                for {
                  _ <- server.subscribeToErrors
-                        .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
+                        .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
                         .fork
                  _ <- printLine("Restart successful")
                  _ <- events

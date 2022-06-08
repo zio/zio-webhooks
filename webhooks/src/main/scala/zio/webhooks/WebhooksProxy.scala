@@ -25,7 +25,7 @@ final case class WebhooksProxy private (
   def getWebhookById(webhookId: WebhookId): UIO[Webhook] =
     for {
       option  <- cache.get.map(_.get(webhookId))
-      webhook <- option.map(UIO.succeed(_)).getOrElse(webhookRepo.getWebhookById(webhookId))
+      webhook <- option.map(ZIO.succeed(_)).getOrElse(webhookRepo.getWebhookById(webhookId))
     } yield webhook
 
   private def pollForUpdates(pollingFunction: PollingFunction): UIO[Unit] =

@@ -38,11 +38,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val expectedRequest = WebhookHttpRequest(webhook.url, event.content, event.headers)
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List(event),
               ScenarioInterest.Requests
-            )((requests, _) => assertM(requests.take)(equalTo(expectedRequest)))
+            )((requests, _) => assertZIO(requests.take)(equalTo(expectedRequest)))
           },
           test("webhook stays enabled on dispatch success") {
             val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
@@ -56,11 +56,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
             )
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List(event),
               ScenarioInterest.Webhooks
-            )((webhooks, _) => assertM(webhooks.take)(equalTo(WebhookChanged(webhook))))
+            )((webhooks, _) => assertZIO(webhooks.take)(equalTo(WebhookChanged(webhook))))
           },
           test("event is marked Delivering, then Delivered on successful dispatch") {
             val webhook = singleWebhook(0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
@@ -76,13 +76,13 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val expectedStatuses = List(WebhookEventStatus.Delivering, WebhookEventStatus.Delivered)
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List(event),
               ScenarioInterest.Events
             ) { (events, _) =>
               val eventStatuses = events.filterOutput(!_.isNew).map(_.status).takeBetween(2, 3)
-              assertM(eventStatuses)(hasSameElements(expectedStatuses))
+              assertZIO(eventStatuses)(hasSameElements(expectedStatuses))
             }
           },
           test("can dispatch single event to n webhooks") {
@@ -91,22 +91,22 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val eventsToNWebhooks = webhooks.map(_.id).flatMap(webhook => createPlaintextEvents(1)(webhook))
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = webhooks,
               events = eventsToNWebhooks,
               ScenarioInterest.Requests
-            )((requests, _) => assertM(requests.takeBetween(n, n + 1))(hasSize(equalTo(n))))
+            )((requests, _) => assertZIO(requests.takeBetween(n, n + 1))(hasSize(equalTo(n))))
           },
           test("dispatches no events for disabled webhooks") {
             val n       = 100
             val webhook = singleWebhook(0, WebhookStatus.Disabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               ScenarioInterest.Requests
-            )((requests, _) => requests.take *> assertCompletesM)
+            )((requests, _) => requests.take *> assertCompletesZIO)
           } @@ timeout(50.millis) @@ failing,
           test("dispatches no events for unavailable webhooks") {
             val n       = 100
@@ -114,34 +114,34 @@ object WebhookServerSpec extends ZIOSpecDefault {
               singleWebhook(0, WebhookStatus.Unavailable(Instant.EPOCH), WebhookDeliveryMode.SingleAtMostOnce)
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               ScenarioInterest.Requests
-            )((requests, _) => requests.take *> assertCompletesM)
+            )((requests, _) => requests.take *> assertCompletesZIO)
           } @@ timeout(50.millis) @@ failing,
           test("doesn't batch when no batching configuration is given") {
             val n       = 100
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               ScenarioInterest.Requests
-            )((requests, _) => assertM(requests.takeBetween(n, n + 1))(hasSize(equalTo(n))))
+            )((requests, _) => assertZIO(requests.takeBetween(n, n + 1))(hasSize(equalTo(n))))
           },
           test("a webhook receiver returning non-200 fails events") {
             val n       = 100
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(404))),
+              initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(404))),
               webhooks = List(webhook),
               events = createPlaintextEvents(n)(webhook.id),
               ScenarioInterest.Events
             ) { (events, _) =>
-              assertM(
+              assertZIO(
                 events.map(_.status).filterOutput(_ == WebhookEventStatus.Failed).takeBetween(n, n + 1)
               )(hasSize(equalTo(n)))
             }
@@ -152,11 +152,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val eventsMissingWebhooks = missingWebhookIds.flatMap(id => createPlaintextEvents(1)(id))
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream(Right(WebhookHttpResponse(200))),
               webhooks = List.empty,
               events = eventsMissingWebhooks,
               ScenarioInterest.Errors
-            )((errors, _) => assertM(errors.take)(isSubtype[FatalError](anything)))
+            )((errors, _) => assertZIO(errors.take)(isSubtype[FatalError](anything)))
           },
           test("bad webhook URL errors are published") {
             val webhookWithBadUrl = Webhook(
@@ -179,12 +179,12 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val expectedError = BadWebhookUrlError(webhookWithBadUrl.url, "'twas a ne'er do-well")
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Left(Some(expectedError))),
+              initialStubResponses = ZStream(Left(Some(expectedError))),
               webhooks = List(webhookWithBadUrl),
               events = List(event),
               ScenarioInterest.Errors
             ) { (errors, _) =>
-              assertM(errors.take)(equalTo(expectedError))
+              assertZIO(errors.take)(equalTo(expectedError))
             }
           },
           test("do not retry events") {
@@ -199,7 +199,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             )
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Left(None)),
+              initialStubResponses = ZStream.repeat(Left(None)),
               webhooks = List(webhook),
               events = List(event),
               ScenarioInterest.Requests
@@ -218,8 +218,8 @@ object WebhookServerSpec extends ZIOSpecDefault {
 //              clock      <- ZIO.environment[Clock]
               testEvents  = createPlaintextEvents(capacity + 2)(webhook.id) // + 2 because the first one gets taken
               testResult <- webhooksTestScenario(
-                              initialStubResponses = UStream
-                                .fromZIO(UIO.right(WebhookHttpResponse(200)).delay(1.minute))
+                              initialStubResponses = ZStream
+                                .fromZIO(ZIO.right(WebhookHttpResponse(200)).delay(1.minute))
 //                                .provideEnvironment(clock)
                               ,
                               webhooks = List(webhook),
@@ -241,11 +241,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val events = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Right(WebhookHttpResponse(500)), Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream(Right(WebhookHttpResponse(500)), Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
-            )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
+            )((requests, _) => assertZIO(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
           },
           test("immediately retries once on IOException") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -253,11 +253,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val events = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Left(None), Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream(Left(None), Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
-            )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
+            )((requests, _) => assertZIO(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
           },
           test("retries until success before retry timeout") {
             val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtLeastOnce)
@@ -265,7 +265,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val events = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Left(None), Left(None), Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream(Left(None), Left(None), Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
@@ -283,7 +283,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val events  = createPlaintextEvents(1)(webhook.id)
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Left(None), Left(None)),
+              initialStubResponses = ZStream(Left(None), Left(None)),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Webhooks
@@ -301,17 +301,17 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val events  = createPlaintextEvents(n)(webhook.id)
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Left(None), Left(None)),
+              initialStubResponses = ZStream(Left(None), Left(None)),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Events
             ) { (events, _) =>
-              UStream
+              ZStream
                 .fromQueue(events)
                 .filter(_.status == WebhookEventStatus.Failed)
                 .take(n.toLong)
-                .mergeTerminateLeft(UStream.repeatZIO(TestClock.adjust(7.days)))
-                .runDrain *> assertCompletesM
+                .mergeTerminateLeft(ZStream.repeatZIO(TestClock.adjust(7.days)))
+                .runDrain *> assertCompletesZIO
             }
           },
           test("retries past first one back off exponentially") {
@@ -320,7 +320,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
 
             webhooksTestScenario(
               initialStubResponses =
-                UStream.fromIterable(List.fill(5)(Left(None))) ++ UStream(Right(WebhookHttpResponse(200))),
+                ZStream.fromIterable(List.fill(5)(Left(None))) ++ ZStream(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
@@ -348,11 +348,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
             val events = createPlaintextEvents(3)(webhook.id)
 
             webhooksTestScenario(
-              initialStubResponses = UStream(Left(None)) ++ UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream(Left(None)) ++ ZStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = events,
               ScenarioInterest.Requests
-            )((requests, _) => assertM(requests.takeBetween(4, 5))(hasSize(equalTo(4))))
+            )((requests, _) => assertZIO(requests.takeBetween(4, 5))(hasSize(equalTo(4))))
           },
           test("retries for multiple webhooks") {
             val n                 = 100
@@ -378,7 +378,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                               events = eventsToNWebhooks,
                               ScenarioInterest.Requests
                             ) { requests =>
-                              assertM(requests.takeBetween(expectedCount, expectedCount + 1))(
+                              assertZIO(requests.takeBetween(expectedCount, expectedCount + 1))(
                                 hasSize(equalTo(expectedCount))
                               )
                             }
@@ -408,7 +408,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
               None
             )
 
-            val nextEvents = UStream
+            val nextEvents = ZStream
               .iterate(0L)(_ + 1)
               .map { eventId =>
                 WebhookEvent(
@@ -423,7 +423,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
               .schedule(Schedule.spaced(1.milli))
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Requests
@@ -456,7 +456,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
               None
             )
 
-            val nextEvents = UStream
+            val nextEvents = ZStream
               .iterate(0L)(_ + 1)
               .map { eventId =>
                 WebhookEvent(
@@ -471,7 +471,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
               .schedule(Schedule.spaced(1.milli))
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+              initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Events
@@ -514,7 +514,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
               None
             )
 
-            val nextEvents = UStream
+            val nextEvents = ZStream
               .iterate(0L)(_ + 1)
               .map { eventId =>
                 WebhookEvent(
@@ -529,7 +529,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
               .schedule(Schedule.spaced(1.milli))
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Left(None)),
+              initialStubResponses = ZStream.repeat(Left(None)),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Requests
@@ -570,7 +570,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             )
 
             webhooksTestScenario(
-              initialStubResponses = UStream.repeat(Left(None)),
+              initialStubResponses = ZStream.repeat(Left(None)),
               webhooks = List(webhook),
               events = List.empty,
               ScenarioInterest.Requests
@@ -595,7 +595,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
           val expectedRequestsMade = 10
 
           webhooksTestScenario(
-            initialStubResponses = UStream.empty,
+            initialStubResponses = ZStream.empty,
             webhooks = List(webhook),
             events = Iterable.empty,
             ScenarioInterest.Requests
@@ -607,7 +607,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                 request <- requests.take
               } yield request
             }
-            assertM(actualRequests)(hasSize(equalTo(expectedRequestsMade)))
+            assertZIO(actualRequests)(hasSize(equalTo(expectedRequestsMade)))
           }
         },
         test("batches for multiple webhooks") {
@@ -625,7 +625,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
           val maxRequestsMade = minRequestsMade * 2
 
           webhooksTestScenario(
-            initialStubResponses = UStream.empty,
+            initialStubResponses = ZStream.empty,
             webhooks = webhooks,
             events = events,
             ScenarioInterest.Requests
@@ -643,7 +643,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
           val testEvents = createPlaintextEvents(n)(webhook.id).grouped(batchCount).toList
 
           webhooksTestScenario(
-            initialStubResponses = UStream.empty,
+            initialStubResponses = ZStream.empty,
             webhooks = List(webhook),
             events = Iterable.empty,
             ScenarioInterest.Events
@@ -685,22 +685,22 @@ object WebhookServerSpec extends ZIOSpecDefault {
             }
 
           webhooksTestScenario(
-            initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+            initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = jsonEvents ++ plaintextEvents,
             ScenarioInterest.Requests
-          )((requests, _) => assertM(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
+          )((requests, _) => assertZIO(requests.takeBetween(2, 3))(hasSize(equalTo(2))))
         },
         test("batched JSON event contents are always serialized into a JSON array") {
           val webhook    = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.BatchedAtMostOnce)
           val jsonEvents = createJsonEvents(100)(webhook.id)
 
           webhooksTestScenario(
-            initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+            initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = jsonEvents,
             ScenarioInterest.Requests
-          )((requests, _) => assertM(requests.take.map(_.content))(matchesRegex(jsonPayloadPattern)))
+          )((requests, _) => assertZIO(requests.take.map(_.content))(matchesRegex(jsonPayloadPattern)))
         },
         test("batched plain text event contents are concatenated") {
           val n               = 2
@@ -708,11 +708,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
           val plaintextEvents = createPlaintextEvents(n)(webhook.id)
 
           webhooksTestScenario(
-            initialStubResponses = UStream.repeat(Right(WebhookHttpResponse(200))),
+            initialStubResponses = ZStream.repeat(Right(WebhookHttpResponse(200))),
             webhooks = List(webhook),
             events = plaintextEvents,
             ScenarioInterest.Requests
-          )((requests, _) => assertM(requests.take.map(_.content))(matchesRegex("(?:event payload \\d+)+")))
+          )((requests, _) => assertZIO(requests.take.map(_.content))(matchesRegex("(?:event payload \\d+)+")))
         }
       ).provide(specEnv, WebhookServerConfig.defaultWithBatching),
       suite("manual server start and shutdown")(
@@ -841,7 +841,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                                    }
                                  }
                     _         <- ZIO.scoped {
-                                   WebhookServer.start.flatMap(_ => requests.take.fork)
+                                   WebhookServer.start.flatMap(_ => requests.take.forkScoped)
                                  }
                   } yield assertCompletes
               }
@@ -897,7 +897,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
           // TODO: write unit tests for persistent retry backoff when needed
         )
       ).provide(mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(20.seconds) @@ TestAspect.withLiveClock
+    ) @@ timeout(20.seconds) @@ TestAspect.sequential @@ TestAspect.withLiveClock
 }
 
 object WebhookServerSpecUtil {
@@ -1041,11 +1041,11 @@ object WebhookServerSpecUtil {
       ScenarioInterest.dequeueFor(scenarioInterest).flatMap { dequeue =>
         for {
           responseQueue <- Queue.bounded[StubResponse](1)
-          testFiber     <- assertion(dequeue, responseQueue).fork
+          testFiber     <- assertion(dequeue, responseQueue).forkScoped
           _             <- TestWebhookHttpClient.setResponse(_ => Some(responseQueue))
           _             <- ZIO.foreachDiscard(webhooks)(TestWebhookRepo.setWebhook)
           _             <- ZIO.foreachDiscard(events)(TestWebhookEventRepo.createEvent)
-          _             <- initialStubResponses.run(ZSink.fromQueue(responseQueue)).fork
+          _             <- initialStubResponses.run(ZSink.fromQueue(responseQueue)).forkScoped
           testResult    <- testFiber.join
         } yield testResult
       }

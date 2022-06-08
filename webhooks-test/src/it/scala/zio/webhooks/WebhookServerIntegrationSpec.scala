@@ -43,11 +43,15 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                          // no need to pace events as batching minimizes requests sent
                          _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
                          // wait to get half
+                         _ <- printLine("delivered").orDie
                          _                <- delivered.changes.filter(_.size == n / 2).runHead
-                         _                <- reliableEndpoint.interrupt
+                         _ <- printLine("reliableEndpoint").orDie
+                         _                <- reliableEndpoint.interrupt.fork
+                         _ <- printLine("reliableEndpoint inter").orDie
                        } yield ()
                    }
                  }
+            _ <- printLine("RestartingWebhookServer").orDie
             // start restarting server and endpoint with random behavior
             _ <- RestartingWebhookServer.start.fork
             _ <- RandomEndpointBehavior.run(delivered).fork
@@ -74,10 +78,11 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                                               .map(delivered => ((0 until n.toInt).toSet diff delivered).toList.sorted)
                                               .debug("not delivered")
                                               .when(deliveredSize < n)
+                           _ <- printLine("complete 1").orDie
                          } yield ()
                        )
         } yield assertCompletes)
-      } @@ timeout(3.minutes),
+      } @@ timeout(3.minutes) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole,
       test("slow subscribers do not slow down fast ones") {
         val webhookCount     = 100
         val eventsPerWebhook = 1000
@@ -94,9 +99,9 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
 
         // 100 streams with 1000 events each
         val eventStreams =
-          UStream.mergeAllUnbounded()(
+          ZStream.mergeAllUnbounded()(
             (0L until webhookCount.toLong).map(webhookId =>
-              UStream
+              ZStream
                 .iterate(0L)(_ + 1)
                 .map { eventId =>
                   WebhookEvent(
@@ -120,16 +125,18 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                           WebhookServer.start.flatMap { server =>
                             for {
                               _ <- server.subscribeToErrors
-                                     .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printError(_)))
-                                     .fork
-                              _ <- eventStreams.foreach(TestWebhookEventRepo.createEvent).fork
+                                     .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printError(_)))
+                                     .forkScoped
+                              _ <- eventStreams.foreach(TestWebhookEventRepo.createEvent).forkScoped
+                              _ <- printLine("1")
                               _ <- delivered.changes.filter(_.size == eventsPerWebhook).runHead
+                              _ <- printLine("complete 2")
                             } yield assertCompletes
                           }
                         }
         } yield testResult)
-      } @@ timeout(1.minute)
-    ).provideCustom(integrationEnv) @@ sequential @@ TestAspect.withLiveClock
+      } @@ timeout(1.minute) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
+    ).provideCustom(integrationEnv) @@ sequential // @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
 }
 
 object WebhookServerIntegrationSpecUtil {
@@ -155,9 +162,9 @@ object WebhookServerIntegrationSpecUtil {
   }
 
   def events(webhookIdRange: (Int, Int)): ZStream[Any, Nothing, WebhookEvent] =
-    UStream
+    ZStream
       .iterate(0L)(_ + 1)
-      .zip(UStream.repeatZIO(Random.nextIntBetween(webhookIdRange._1, webhookIdRange._2)))
+      .zip(ZStream.repeatZIO(Random.nextIntBetween(webhookIdRange._1, webhookIdRange._2)))
       .map {
         case (i, webhookId) =>
           WebhookEvent(
@@ -221,9 +228,9 @@ object WebhookServerIntegrationSpecUtil {
                            val payload       = singlePayload.orElseThat(batchPayload).toOption
                            ZIO.foreachDiscard(payload) {
                              case Left(i)   =>
-                               delivered.updateZIO(set => UIO.succeed(set + i))
+                               delivered.updateZIO(set => ZIO.succeed(set + i))
                              case Right(is) =>
-                               delivered.updateZIO(set => UIO.succeed(set ++ is))
+                               delivered.updateZIO(set => ZIO.succeed(set ++ is))
                            }
                          }
                            .as(Response.status(Status.Ok))
@@ -242,15 +249,15 @@ object WebhookServerIntegrationSpecUtil {
                         ZIO
                           .foreachDiscard(payload) {
                             case Left(i)   =>
-                              delivered.updateZIO(set => UIO.succeed(set + i))
+                              delivered.updateZIO(set => ZIO.succeed(set + i))
                             case Right(is) =>
-                              delivered.updateZIO(set => UIO.succeed(set ++ is))
+                              delivered.updateZIO(set => ZIO.succeed(set ++ is))
                           }
                       }
-          response <- UIO.succeed(Response.status(Status.Ok))
+          response <- ZIO.succeed(Response.status(Status.Ok))
         } yield response
       case _                                                          =>
-        UIO.succeed(Response.status(Status.Ok)).delay(1.minute)
+        ZIO.succeed(Response.status(Status.Ok)).delay(1.minute)
     }
 
   lazy val testWebhooks: IndexedSeq[Webhook] = (0 until 250).map { i =>
@@ -324,13 +331,13 @@ object RandomEndpointBehavior {
                              ZIO
                                .foreachDiscard(payload) {
                                  case Left(i)   =>
-                                   delivered.updateZIO(set => UIO.succeed(set + i))
+                                   delivered.updateZIO(set => ZIO.succeed(set + i))
                                  case Right(is) =>
-                                   delivered.updateZIO(set => UIO.succeed(set ++ is))
+                                   delivered.updateZIO(set => ZIO.succeed(set ++ is))
                                }
                                .as(Response.status(Status.Ok))
                            else
-                             UIO.succeed(Response.status(Status.NotFound))
+                             ZIO.succeed(Response.status(Status.NotFound))
                          }
                            .delay(randomDelay)
         } yield response
@@ -343,7 +350,7 @@ object RandomEndpointBehavior {
     Random.nextIntBounded(100).map(n => if (n < 80) Flaky else Down)
 
   def run(delivered: SubscriptionRef[Set[Int]]) =
-    UStream.repeatZIO(randomBehavior).foreach { behavior =>
+    ZStream.repeatZIO(randomBehavior).foreach { behavior =>
       for {
         _ <- printLine(s"Endpoint server behavior: $behavior")
         f <- behavior.start(delivered).fork
@@ -371,8 +378,8 @@ object RestartingWebhookServer {
                for {
                  _        <- printLine("Server started")
                  f        <- server.subscribeToErrors
-                               .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printError(_)))
-                               .fork
+                               .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printError(_)))
+                               .forkScoped
                  _        <- TestWebhookEventRepo.enqueueNew
                  duration <- Random.nextIntBetween(3000, 5000).map(_.millis)
                  _        <- f.interrupt.delay(duration)

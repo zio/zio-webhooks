@@ -3,14 +3,13 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-
-import zio.stream.UStream
-import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
-import zio.webhooks.{ WebhooksProxy, _ }
+import zio.stream.ZStream
+import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
+import zio.webhooks.{WebhooksProxy, _}
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
-import zio.{ Clock, Random, ZIOAppDefault }
-import zio.Console.{ printLine, printLineError }
+import zio.{Clock, Random, ZIOAppDefault}
+import zio.Console.{printLine, printLineError}
 
 /**
  * Differs from the [[BasicExample]] in that the zio-http server responds with a non-200 status some
@@ -20,7 +19,7 @@ import zio.Console.{ printLine, printLineError }
  */
 object BasicExampleWithRetrying extends ZIOAppDefault {
 
-  private lazy val events = UStream
+  private lazy val events = ZStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -42,10 +41,10 @@ object BasicExampleWithRetrying extends ZIOAppDefault {
         response <- request.bodyAsString.flatMap { payload =>
                       if (n < 60)
                         printLine(tsString + payload + " Response: Ok") *>
-                          UIO.succeed(Response.status(Status.Ok))
+                          ZIO.succeed(Response.status(Status.Ok))
                       else
                         printLine(tsString + payload + " Response: NotFound") *>
-                          UIO.succeed(Response.status(Status.NotFound))
+                          ZIO.succeed(Response.status(Status.NotFound))
                     }.orDie
       } yield response
   }
@@ -58,22 +57,20 @@ object BasicExampleWithRetrying extends ZIOAppDefault {
   private lazy val port = 8080
 
   private def program =
-    ZIO.scoped {
-      for {
-        _ <- printLine("starting http")
-        _ <- httpEndpointServer.start(port, httpApp).forkScoped
-        _ <- WebhookServer.getErrors.flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).forkScoped
-        _ <- printLine("set webhook")
-        _ <- TestWebhookRepo.setWebhook(webhook)
-        _ <- printLine("scheduling events")
-        _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-        _ <- Clock.sleep(Duration.Infinity)
-      } yield ()
-    }
+    for {
+      _ <- printLine("starting http")
+      _ <- httpEndpointServer.start(port, httpApp).forkScoped
+      _ <- WebhookServer.getErrors.flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).forkScoped
+      _ <- printLine("set webhook")
+      _ <- TestWebhookRepo.setWebhook(webhook)
+      _ <- printLine("scheduling events")
+      _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
+      _ <- Clock.sleep(Duration.Infinity)
+    } yield ()
 
   override def run =
     program
-      .provide(
+      .provideSome[Scope](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

@@ -3,17 +3,16 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-
-import zio.stream.UStream
+import zio.stream.{UStream, ZStream}
 import zio.webhooks._
-import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
+import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.example.RestartingWebhookServer.testWebhooks
 import zio.webhooks.testkit._
 
 import java.io.IOException
-import zio.{ Clock, Random, ZIOAppDefault }
-import zio.Console.{ printLine, printLineError }
+import zio.{Clock, Random, ZIOAppDefault}
+import zio.Console.{printLine, printLineError}
 
 /**
  * Runs an example that simulates a comprehensive suite of scenarios that may occur during the
@@ -22,9 +21,9 @@ import zio.Console.{ printLine, printLineError }
 object ComprehensiveExample extends ZIOAppDefault {
 
   def events: UStream[WebhookEvent] =
-    UStream
+    ZStream
       .iterate(0L)(_ + 1)
-      .zip(UStream.repeatZIO(Random.nextIntBetween(0, 1000)))
+      .zip(ZStream.repeatZIO(Random.nextIntBetween(0, 1000)))
       .map {
         case (i, webhookId) =>
           WebhookEvent(
@@ -89,9 +88,9 @@ object RandomEndpointBehavior {
           response    <- request.bodyAsString.flatMap { payload =>
                            val line = s"$timeString webhook $id $payload"
                            if (n < 60)
-                             printLine(line + " Response: Ok") *> UIO.succeed(Response.status(Status.Ok))
+                             printLine(line + " Response: Ok") *> ZIO.succeed(Response.status(Status.Ok))
                            else
-                             printLine(line + " Response: NotFound") *> UIO.succeed(Response.status(Status.NotFound))
+                             printLine(line + " Response: NotFound") *> ZIO.succeed(Response.status(Status.NotFound))
                          }.orDie
                            .delay(randomDelay)
         } yield response
@@ -126,7 +125,7 @@ object RandomEndpointBehavior {
     }
 
   def run: ZIO[Any, IOException, Unit] =
-    UStream.repeatZIO(randomBehavior).foreach { behavior =>
+    ZStream.repeatZIO(randomBehavior).foreach { behavior =>
       for {
         _ <- printLine(s"Endpoint server behavior: $behavior")
         f <- behavior.start.fork.delay(2.seconds)
@@ -150,7 +149,7 @@ object RestartingWebhookServer {
                for {
                  _        <- printLine("Server started")
                  f        <- server.subscribeToErrors
-                               .flatMap(UStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
+                               .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_)))
                                .fork
                  _        <- TestWebhookEventRepo.enqueueNew
                  duration <- Random.nextIntBetween(3000, 5000).map(_.millis)

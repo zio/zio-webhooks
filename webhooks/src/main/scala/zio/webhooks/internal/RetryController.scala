@@ -2,7 +2,7 @@ package zio.webhooks.internal
 
 import zio._
 import zio.prelude.NonEmptySet
-import zio.stream.UStream
+import zio.stream.ZStream
 import zio.webhooks._
 
 import java.time.Instant
@@ -100,13 +100,14 @@ private[webhooks] final case class RetryController(
     inputQueue.offerAll(events)
 
   def start: UIO[Any] = {
-    val handleRetryEvents = mergeShutdown(UStream.fromQueue(inputQueue), shutdownSignal).foreach { event =>
+    val handleRetryEvents = mergeShutdown(ZStream.fromQueue(inputQueue), shutdownSignal).ensuring(Console.printLine("terminate").orDie).foreach { event =>
       val webhookId = event.key.webhookId
       for {
+        _ <- Console.printLine("event "+ event).orDie
         retryQueue <- retryDispatchers.modifyZIO { map =>
                         map.get(webhookId) match {
                           case Some(dispatcher) =>
-                            UIO.succeed((dispatcher.retryQueue, map))
+                            ZIO.succeed((dispatcher.retryQueue, map))
                           case None             =>
                             for {
                               retryQueue     <- Queue.bounded[WebhookEvent](config.retry.capacity)
@@ -126,7 +127,7 @@ private[webhooks] final case class RetryController(
                                                   webhooksProxy
                                                 )
                               _              <- retryStates.updateZIO(states =>
-                                                  UIO.succeed(
+                                                  ZIO.succeed(
                                                     states + (webhookId -> RetryState(
                                                       activeSinceTime = now,
                                                       backoff = None,
@@ -143,6 +144,7 @@ private[webhooks] final case class RetryController(
                         }
                       }
         isShutDown <- shutdownSignal.isDone
+        _ <- Console.printLine("shutdown signal is done").orDie
         _          <- retryQueue.offer(event).race(shutdownSignal.await).unless(isShutDown)
       } yield ()
     }
