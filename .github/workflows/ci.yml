@@ -17,7 +17,7 @@ jobs:
         java: ['adopt@1.8', 'adopt@1.11']
         scala: ['2.12.14', '2.13.6']
     steps:
-    - uses: actions/checkout@v2.4.0
+    - uses: actions/checkout@v2.4.2
     - uses: olafurpg/setup-scala@v13
       with:
         java-version: ${{ matrix.java }}
@@ -33,7 +33,7 @@ jobs:
     needs: [build]
     if: github.event_name != 'pull_request'
     steps:
-      - uses: actions/checkout@v2.4.0
+      - uses: actions/checkout@v2.4.2
         with:
           fetch-depth: 0
       - uses: olafurpg/setup-scala@v13
