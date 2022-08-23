@@ -310,7 +310,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                 .fromQueue(events)
                 .filter(_.status == WebhookEventStatus.Failed)
                 .take(n.toLong)
-                .mergeTerminateLeft(ZStream.repeatZIO(TestClock.adjust(7.days)))
+                .mergeHaltLeft(ZStream.repeatZIO(TestClock.adjust(7.days)))
                 .runDrain *> assertCompletesZIO
             }
           },

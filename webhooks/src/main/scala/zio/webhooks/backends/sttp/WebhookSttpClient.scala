@@ -1,7 +1,9 @@
 package zio.webhooks.backends.sttp
 
-import _root_.sttp.client3.asynchttpclient.zio.{ AsyncHttpClientZioBackend, SttpClient }
+import _root_.sttp.client3.asynchttpclient.zio.AsyncHttpClientZioBackend
 import _root_.sttp.client3._
+import sttp.capabilities
+import sttp.capabilities.zio.ZioStreams
 import sttp.model.Uri
 import zio._
 import zio.webhooks.WebhookError.BadWebhookUrlError
@@ -14,7 +16,7 @@ import java.io.IOException
  * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] using sttp's ZIO backend, i.e.
  * `AsyncHttpClientZioBackend`.
  */
-final case class WebhookSttpClient(sttpClient: SttpClient, permits: Semaphore) extends WebhookHttpClient {
+final case class WebhookSttpClient(sttpClient: SttpBackend[Task, ZioStreams with capabilities.WebSockets], permits: Semaphore) extends WebhookHttpClient {
 
   def post(webhookRequest: WebhookHttpRequest): IO[HttpPostError, WebhookHttpResponse] =
     permits.withPermit {
