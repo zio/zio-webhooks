@@ -14,8 +14,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        java: ['adopt@1.8', 'adopt@1.11']
-        scala: ['2.12.14', '2.13.6']
+        java: ['openjdk@1.11.0-2', 'openjdk@1.17.0']
+        scala: ['2.12.16', '2.13.8']
     steps:
     - uses: actions/checkout@v3.0.2
     - uses: olafurpg/setup-scala@v13
