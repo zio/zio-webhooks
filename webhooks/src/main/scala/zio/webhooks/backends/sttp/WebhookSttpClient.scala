@@ -1,7 +1,7 @@
 package zio.webhooks.backends.sttp
 
-import _root_.sttp.client3.asynchttpclient.zio.{ AsyncHttpClientZioBackend, SttpClient }
 import _root_.sttp.client3._
+import _root_.sttp.client3.httpclient.zio.{ HttpClientZioBackend, SttpClient }
 import sttp.model.Uri
 import zio._
 import zio.webhooks.WebhookError.BadWebhookUrlError
@@ -42,7 +42,7 @@ object WebhookSttpClient {
    */
   val live: RLayer[Has[WebhookServerConfig], Has[WebhookHttpClient]] = {
     for {
-      sttpBackend <- AsyncHttpClientZioBackend.managed()
+      sttpBackend <- HttpClientZioBackend.managed()
       capacity    <- ZManaged.service[WebhookServerConfig].map(_.maxRequestsInFlight)
       permits     <- Semaphore.make(capacity.toLong).toManaged_
     } yield WebhookSttpClient(sttpBackend, permits)
