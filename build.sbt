@@ -31,30 +31,30 @@ inThisBuild(
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
-val zioVersion        = "2.0.1"
-val zioHttpVersion    = "2.0.0-RC10"
-val zioJson           = "0.3.0-RC10"
+val zioVersion        = "2.0.2"
+val zioHttpVersion    = "2.0.0-RC11"
+val zioJson           = "0.3.0"
 val zioPreludeVersion = "1.0.0-RC15"
-val sttpVersion       = "3.7.4"
+val sttpVersion       = "3.8.0"
 
-lazy val root =
+lazy val `zio-webhooks` =
   project
     .in(file("."))
     .settings(publish / skip := true)
-    .aggregate(zioWebhooks, zioWebhooksTest, webhooksTestkit, examples)
+    .aggregate(zioWebhooksCore, zioWebhooksTest, webhooksTestkit, examples)
 
-lazy val zioWebhooks = module("zio-webhooks", "webhooks")
+lazy val zioWebhooksCore = module("zio-webhooks-core", "webhooks")
   .enablePlugins(BuildInfoPlugin)
   .settings(buildInfoSettings("zio.webhooks"))
   .settings(
     libraryDependencies ++= Seq(
-      "dev.zio"                       %% "zio"                           % zioVersion,
-      "dev.zio"                       %% "zio-json"                      % zioJson,
-      "dev.zio"                       %% "zio-prelude"                   % zioPreludeVersion,
-      "dev.zio"                       %% "zio-streams"                   % zioVersion,
-      "dev.zio"                       %% "zio-test"                      % zioVersion,
-      "com.softwaremill.sttp.client3" %% "core"                          % sttpVersion,
-      "com.softwaremill.sttp.client3" %% "async-http-client-backend-zio" % sttpVersion
+      "dev.zio"                       %% "zio"         % zioVersion,
+      "dev.zio"                       %% "zio-json"    % zioJson,
+      "dev.zio"                       %% "zio-prelude" % zioPreludeVersion,
+      "dev.zio"                       %% "zio-streams" % zioVersion,
+      "dev.zio"                       %% "zio-test"    % zioVersion,
+      "com.softwaremill.sttp.client3" %% "core"        % sttpVersion,
+      "com.softwaremill.sttp.client3" %% "zio1"        % sttpVersion
     )
   )
   .settings(
@@ -74,7 +74,7 @@ lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioWebhooks, webhooksTestkit)
+  .dependsOn(zioWebhooksCore, webhooksTestkit)
 
 lazy val webhooksTestkit = module("zio-webhooks-testkit", "webhooks-testkit")
   .settings(
@@ -84,7 +84,7 @@ lazy val webhooksTestkit = module("zio-webhooks-testkit", "webhooks-testkit")
       "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
     )
   )
-  .dependsOn(zioWebhooks)
+  .dependsOn(zioWebhooksCore)
 
 lazy val examples = module("zio-webhooks-examples", "examples")
   .settings(
@@ -97,7 +97,7 @@ lazy val examples = module("zio-webhooks-examples", "examples")
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
-  .dependsOn(zioWebhooks, webhooksTestkit)
+  .dependsOn(zioWebhooksCore, webhooksTestkit)
 
 def module(moduleName: String, fileName: String): Project =
   Project(moduleName, file(fileName))
@@ -118,11 +118,11 @@ lazy val docs = project
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio" % zioVersion
     ),
-    ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(root),
+    ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(`zio-webhooks`),
     ScalaUnidoc / unidoc / target := (LocalRootProject / baseDirectory).value / "website" / "static" / "api",
     cleanFiles += (ScalaUnidoc / unidoc / target).value,
     docusaurusCreateSite := docusaurusCreateSite.dependsOn(Compile / unidoc).value,
     docusaurusPublishGhpages := docusaurusPublishGhpages.dependsOn(Compile / unidoc).value
   )
-  .dependsOn(zioWebhooks)
+  .dependsOn(zioWebhooksCore)
   .enablePlugins(MdocPlugin, DocusaurusPlugin, ScalaUnidocPlugin)
