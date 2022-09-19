@@ -136,7 +136,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                         }
         } yield testResult)
       } @@ timeout(1.minute) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
-    ).provideCustom(integrationEnv) @@ sequential // @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
+    ).provide(integrationEnv) @@ sequential // @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
 }
 
 object WebhookServerIntegrationSpecUtil {
@@ -222,7 +222,7 @@ object WebhookServerIntegrationSpecUtil {
       case request @ Method.POST -> !! / "endpoint" / (id @ _) =>
         for {
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.bodyAsString.flatMap { body =>
+          response    <- request.body.asString.flatMap { body =>
                            val singlePayload = body.fromJson[Int].map(Left(_))
                            val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                            val payload       = singlePayload.orElseThat(batchPayload).toOption
@@ -242,7 +242,7 @@ object WebhookServerIntegrationSpecUtil {
     Http.collectZIO[Request] {
       case request @ Method.POST -> !! / "endpoint" / id if id == "0" =>
         for {
-          _        <- request.bodyAsString.flatMap { body =>
+          _        <- request.body.asString.flatMap { body =>
                         val singlePayload = body.fromJson[Int].map(Left(_))
                         val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                         val payload       = singlePayload.orElseThat(batchPayload).toOption
@@ -323,7 +323,7 @@ object RandomEndpointBehavior {
         for {
           n           <- Random.nextIntBounded(100)
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.bodyAsString.flatMap { body =>
+          response    <- request.body.asString.flatMap { body =>
                            val singlePayload = body.fromJson[Int].map(Left(_))
                            val batchPayload  = body.fromJson[List[Int]].map(Right(_))
                            val payload       = singlePayload.orElseThat(batchPayload).toOption

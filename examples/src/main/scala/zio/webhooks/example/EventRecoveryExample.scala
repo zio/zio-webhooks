@@ -40,7 +40,7 @@ object EventRecoveryExample extends ZIOAppDefault {
         for {
           n        <- Random.nextIntBounded(100)
           tsString <- Clock.instant.map(_.toString).map(ts => s"[$ts]")
-          response <- request.bodyAsString.flatMap { payload =>
+          response <- request.body.asString.flatMap { payload =>
                         if (n < 70)
                           for {
                             newSize <- payloads.modify { set =>

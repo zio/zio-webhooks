@@ -585,7 +585,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
             }
           }
         )
-      ).provideCustom(specEnv, WebhookServerConfig.default),
+      ).provide(specEnv, WebhookServerConfig.default),
       suite("batching enabled")(
         test("batches events queued up since last request") {
           val n       = 100

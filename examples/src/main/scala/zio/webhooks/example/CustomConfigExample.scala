@@ -55,7 +55,7 @@ object CustomConfigExample extends ZIOAppDefault {
       for {
         n        <- Random.nextIntBounded(100)
         tsString <- Clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response <- request.bodyAsString.flatMap { payload =>
+        response <- request.body.asString.flatMap { payload =>
                       if (n < 40)
                         printLine(tsString + payload + " Response: Ok") *>
                           ZIO.succeed(Response.status(Status.Ok))

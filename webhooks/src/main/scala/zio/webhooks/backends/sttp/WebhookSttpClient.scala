@@ -1,7 +1,7 @@
 package zio.webhooks.backends.sttp
 
-import _root_.sttp.client3.asynchttpclient.zio.AsyncHttpClientZioBackend
 import _root_.sttp.client3._
+import _root_.sttp.client3.httpclient.zio.HttpClientZioBackend
 import sttp.capabilities
 import sttp.capabilities.zio.ZioStreams
 import sttp.model.Uri
@@ -16,7 +16,10 @@ import java.io.IOException
  * A [[WebhookSttpClient]] provides a [[WebhookHttpClient]] using sttp's ZIO backend, i.e.
  * `AsyncHttpClientZioBackend`.
  */
-final case class WebhookSttpClient(sttpClient: SttpBackend[Task, ZioStreams with capabilities.WebSockets], permits: Semaphore) extends WebhookHttpClient {
+final case class WebhookSttpClient(
+  sttpClient: SttpBackend[Task, ZioStreams with capabilities.WebSockets],
+  permits: Semaphore
+) extends WebhookHttpClient {
 
   def post(webhookRequest: WebhookHttpRequest): IO[HttpPostError, WebhookHttpResponse] =
     permits.withPermit {
@@ -44,7 +47,7 @@ object WebhookSttpClient {
    */
   val live: RLayer[WebhookServerConfig, WebhookHttpClient] = ZLayer.scoped {
     for {
-      sttpBackend <- AsyncHttpClientZioBackend.scoped()
+      sttpBackend <- HttpClientZioBackend.scoped()
       capacity    <- ZIO.service[WebhookServerConfig].map(_.maxRequestsInFlight)
       permits     <- Semaphore.make(capacity.toLong)
     } yield WebhookSttpClient(sttpBackend, permits)

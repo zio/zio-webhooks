@@ -33,7 +33,7 @@ object ManualServerExample extends ZIOAppDefault {
 
   private val httpApp = Http.collectZIO[Request] {
     case request @ Method.POST -> !! / "endpoint" =>
-      request.bodyAsString
+      request.body.asString
         .flatMap(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
         .as(Response.status(Status.Ok))
   }

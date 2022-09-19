@@ -85,7 +85,7 @@ object RandomEndpointBehavior {
           n           <- Random.nextIntBounded(100)
           timeString  <- Clock.instant.map(_.toString).map(ts => s"[$ts]: ")
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.bodyAsString.flatMap { payload =>
+          response    <- request.body.asString.flatMap { payload =>
                            val line = s"$timeString webhook $id $payload"
                            if (n < 60)
                              printLine(line + " Response: Ok") *> ZIO.succeed(Response.status(Status.Ok))
@@ -105,7 +105,7 @@ object RandomEndpointBehavior {
       val response =
         for {
           randomDelay <- Random.nextIntBounded(200).map(_.millis)
-          response    <- request.bodyAsString.flatMap { str =>
+          response    <- request.body.asString.flatMap { str =>
                            printLine(s"""SERVER RECEIVED PAYLOAD: webhook: $id $str Ok""")
                          }
                            .as(Response.status(Status.Ok))

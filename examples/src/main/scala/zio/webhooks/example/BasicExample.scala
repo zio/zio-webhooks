@@ -39,7 +39,7 @@ object BasicExample extends ZIOAppDefault {
     case request @ Method.POST -> !! / "endpoint" =>
       for {
         randomDelay <- Random.nextIntBounded(300).map(_.millis)
-        response    <- request.bodyAsString
+        response    <- request.body.asString
                          .flatMap(str => printLine(s"""SERVER RECEIVED PAYLOAD: "$str""""))
                          .as(Response.status(Status.Ok))
                          .delay(randomDelay) // random delay to simulate latency
