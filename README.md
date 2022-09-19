@@ -61,6 +61,6 @@ Come chat with us on [![Badge-Discord]][Link-Discord].
 [Link-SonatypeSnapshots]: https://oss.sonatype.org/content/repositories/snapshots/dev/zio/zio-webhooks_2.12/ "Sonatype Snapshots"
 [Link-Discord]: https://discord.gg/2ccFBr4 "Discord"
 [Badge-CI]: https://github.com/zio/zio-webhooks/workflows/CI/badge.svg
-[Stage]: https://img.shields.io/badge/Project%20Stage-Concept-red.svg
+[Stage]: https://img.shields.io/badge/Project%20Stage-Development-green.svg
 [Stage-Page]: https://github.com/zio/zio/wiki/Project-Stages
 
