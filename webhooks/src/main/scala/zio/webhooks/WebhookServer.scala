@@ -1,13 +1,11 @@
 package zio.webhooks
 
-import zio._
-import zio.Clock
 import zio.json._
 import zio.stream.ZStream
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
 import zio.webhooks.internal._
-import zio.Console
+import zio.{ Clock, Console, _ }
 
 /**
  * A [[WebhookServer]] is a stateful server that subscribes to [[WebhookEvent]]s and reliably
@@ -16,7 +14,7 @@ import zio.Console
  * [[WebhookStatus.Unavailable]] since some `Instant`. Dispatches are batched if and
  * only if a batching capacity is configured ''and'' a webhook's delivery batching is
  * [[WebhookDeliveryBatching.Batched]]. When `shutdown` is called, a `shutdownSignal` is sent
- * which lets all dispatching work finish. Finally, the retry state is persisted, which allows
+ * which lets all dispatching work finish. A shutdownLatch  Finally, the retry state is persisted, which allows
  * retries to resume after server restarts.
  *
  * A `live` server layer is provided in the companion object for convenience and proper resource
@@ -111,12 +109,10 @@ final class WebhookServer private (
     for {
       isRetrying         <- retryController.isActive(webhookId)
       webhook            <- webhooksProxy.getWebhookById(webhookId)
-      isShutDown         <- shutdownSignal.isDone
-//      _ <- Console.printLine("shutdown signal is done").orDie
       attemptRetryEnqueue = retryController.enqueueRetry(event).race(shutdownSignal.await)
       attemptDelivery     = eventRepo.setEventStatus(event.key, WebhookEventStatus.Delivering) *>
                               (if (isRetrying && webhook.deliveryMode.semantics == AtLeastOnce)
-                                 attemptRetryEnqueue.unless(isShutDown)
+                                 attemptRetryEnqueue.unlessZIO(shutdownSignal.isDone)
                                else
                                  deliverEvent(batchDispatcher, event, webhook))
       _                  <- attemptDelivery.when(webhook.isEnabled)
@@ -185,7 +181,7 @@ final class WebhookServer private (
              )
         f <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal)
                .foreach(retryController.enqueueRetry)
-               .ensuring(Console.printLine("shutdownLatch.countDown 1").orDie *> shutdownLatch.countDown)
+               .ensuring(shutdownLatch.countDown)
                .forkScoped
       } yield f
     } <* startupLatch.countDown)
@@ -209,12 +205,10 @@ final class WebhookServer private (
                              event <- (shutdownSignal.await raceEither eventDequeue.take).map(_.toOption)
                              _     <- ZIO.foreachDiscard(event)(enqueueNewEvent(batchDispatcher, _))
                            } yield ()
-        isShutdown      <- shutdownSignal.isDone
-//        _ <- Console.printLine("shutdown signal is done").orDie
         _               <- handleEvent
                              .repeatUntilZIO(_ => shutdownSignal.isDone)
-                             .unless(isShutdown)
-                             .ensuring(Console.printLine("shutdownLatch.countDown 2").orDie *> shutdownLatch.countDown)
+                             .unlessZIO(shutdownSignal.isDone)
+                             .ensuring(shutdownLatch.countDown)
       } yield ()
     }.forkScoped
 
@@ -222,7 +216,9 @@ final class WebhookServer private (
    * Listens for new retries and starts retrying delivers to a webhook.
    */
   private def startRetryMonitoring =
-    retryController.start.ensuring(Console.printLine("shutdownLatch.countDown 3").orDie *> shutdownLatch.countDown).forkScoped
+    retryController.start
+      .ensuring(shutdownLatch.countDown)
+      .forkScoped
 
   /**
    * Waits until all work in progress is finished, persists retries, then shuts down.
@@ -319,12 +315,11 @@ object WebhookServer {
     ZLayer.scoped(WebhookServer.start)
 
   def start: URIO[Scope with Env, WebhookServer] =
-    ZIO.acquireRelease {
-      for {
-        server <- create
-        _      <- server.start
-      } yield server
-    }(server => Console.printLine("shutdown start").orDie *> server.shutdown *>  Console.printLine("shutdown end").orDie)
+    for {
+      server <- create
+      _      <- server.start
+      _      <- ZIO.addFinalizer(server.shutdown)
+    } yield server
 
   def subscribeToErrors: URIO[Scope with WebhookServer, Dequeue[WebhookError]] =
     ZIO.service[WebhookServer].flatMap(_.subscribeToErrors)

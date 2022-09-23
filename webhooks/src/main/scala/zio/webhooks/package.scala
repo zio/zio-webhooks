@@ -29,8 +29,8 @@ package object webhooks {
   private[webhooks] def mergeShutdown[A](stream: UStream[A], shutdownSignal: Promise[Nothing, Unit]): UStream[A] =
     stream
       .map(Left(_))
-      .mergeHaltRight(ZStream.fromZIO(shutdownSignal.await.tap(_ => Console.printLine("shutdownSignal").orDie).map(Right(_))).ensuring(Console.printLine("shutdownSignal terminate").orDie))
-      .collectLeft.ensuring(Console.printLine("mergeShutdown terminate").orDie)
+      .mergeHaltRight(ZStream.fromZIO(shutdownSignal.await.map(Right(_))))
+      .collectLeft
 
   type HttpHeader = (String, String)
 

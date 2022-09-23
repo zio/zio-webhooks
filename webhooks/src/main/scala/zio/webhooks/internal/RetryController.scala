@@ -100,55 +100,54 @@ private[webhooks] final case class RetryController(
     inputQueue.offerAll(events)
 
   def start: UIO[Any] = {
-    val handleRetryEvents = mergeShutdown(ZStream.fromQueue(inputQueue), shutdownSignal).ensuring(Console.printLine("terminate").orDie).foreach { event =>
-      val webhookId = event.key.webhookId
-      for {
-        _ <- Console.printLine("event "+ event).orDie
-        retryQueue <- retryDispatchers.modifyZIO { map =>
-                        map.get(webhookId) match {
-                          case Some(dispatcher) =>
-                            ZIO.succeed((dispatcher.retryQueue, map))
-                          case None             =>
-                            for {
-                              retryQueue     <- Queue.bounded[WebhookEvent](config.retry.capacity)
-                              now            <- clock.instant
-                              retryDispatcher = RetryDispatcher(
-                                                  clock,
-                                                  config,
-                                                  errorHub,
-                                                  eventRepo,
-                                                  fatalPromise,
-                                                  httpClient,
-                                                  retryStates,
-                                                  retryQueue,
-                                                  serializePayload,
-                                                  shutdownSignal,
-                                                  webhookId,
-                                                  webhooksProxy
-                                                )
-                              _              <- retryStates.updateZIO(states =>
-                                                  ZIO.succeed(
-                                                    states + (webhookId -> RetryState(
-                                                      activeSinceTime = now,
-                                                      backoff = None,
-                                                      failureCount = 0,
-                                                      isActive = false,
-                                                      lastRetryTime = now,
-                                                      timeoutDuration = config.retry.timeout,
-                                                      timerKillSwitch = None
-                                                    ))
-                                                  )
-                                                )
-                              _              <- retryDispatcher.start
-                            } yield (retryQueue, map + (webhookId -> retryDispatcher))
-                        }
-                      }
-        isShutDown <- shutdownSignal.isDone
-        _ <- Console.printLine("shutdown signal is done").orDie
-        _          <- retryQueue.offer(event).race(shutdownSignal.await).unless(isShutDown)
-      } yield ()
-    }
-    inputQueue.poll *> startupLatch.countDown *> handleRetryEvents
+    val handleRetryEvents =
+      mergeShutdown(ZStream.fromQueue(inputQueue), shutdownSignal).tap(ZIO.succeed(_)).foreach {
+        event =>
+          val webhookId = event.key.webhookId
+          for {
+            retryQueue <- retryDispatchers.modifyZIO { map =>
+                            map.get(webhookId) match {
+                              case Some(dispatcher) =>
+                                ZIO.succeed((dispatcher.retryQueue, map))
+                              case None             =>
+                                for {
+                                  retryQueue     <- Queue.bounded[WebhookEvent](config.retry.capacity)
+                                  now            <- clock.instant
+                                  retryDispatcher = RetryDispatcher(
+                                                      clock,
+                                                      config,
+                                                      errorHub,
+                                                      eventRepo,
+                                                      fatalPromise,
+                                                      httpClient,
+                                                      retryStates,
+                                                      retryQueue,
+                                                      serializePayload,
+                                                      shutdownSignal,
+                                                      webhookId,
+                                                      webhooksProxy
+                                                    )
+                                  _              <- retryStates.updateZIO(states =>
+                                                      ZIO.succeed(
+                                                        states + (webhookId -> RetryState(
+                                                          activeSinceTime = now,
+                                                          backoff = None,
+                                                          failureCount = 0,
+                                                          isActive = false,
+                                                          lastRetryTime = now,
+                                                          timeoutDuration = config.retry.timeout,
+                                                          timerKillSwitch = None
+                                                        ))
+                                                      )
+                                                    )
+                                  _              <- retryDispatcher.start
+                                } yield (retryQueue, map + (webhookId -> retryDispatcher))
+                            }
+                          }
+            _          <- retryQueue.offer(event).race(shutdownSignal.await).unlessZIO(shutdownSignal.isDone)
+          } yield ()
+      }
+    inputQueue.poll *> startupLatch.countDown *> handleRetryEvents.race(shutdownSignal.await)
   }
 
   private def suspendRetries(timestamp: Instant): UIO[Map[WebhookId, RetryState]] =

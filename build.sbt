@@ -54,7 +54,7 @@ lazy val zioWebhooksCore = module("zio-webhooks-core", "webhooks")
       "dev.zio"                       %% "zio-streams" % zioVersion,
       "dev.zio"                       %% "zio-test"    % zioVersion,
       "com.softwaremill.sttp.client3" %% "core"        % sttpVersion,
-      "com.softwaremill.sttp.client3" %% "zio"        % sttpVersion
+      "com.softwaremill.sttp.client3" %% "zio"         % sttpVersion
     )
   )
   .settings(

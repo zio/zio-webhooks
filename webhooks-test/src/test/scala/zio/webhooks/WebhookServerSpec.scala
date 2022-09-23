@@ -1,27 +1,25 @@
 package zio.webhooks
 
 import zio._
-
 import zio.json._
 import zio.stream._
 import zio.test.Assertion._
-import zio.test.TestAspect.{ failing, timeout }
+import zio.test.TestAspect.{failing, timeout}
 import zio.test._
-
 import zio.webhooks.WebhookError._
 import zio.webhooks.WebhookServerSpecUtil._
 import zio.webhooks.WebhookUpdate.WebhookChanged
-import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
+import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
+import zio.webhooks.internal.DequeueUtils._
 import zio.webhooks.internal.PersistentRetries
 import zio.webhooks.testkit.TestWebhookHttpClient._
 import zio.webhooks.testkit._
-import zio.webhooks.internal.DequeueUtils._
+
 import java.time.Instant
-import zio.test.{ TestClock, TestConsole, ZIOSpecDefault }
 
 object WebhookServerSpec extends ZIOSpecDefault {
   val spec =
-    suite("WebhookServerSpec")(
+    (suite("WebhookServerSpec")(
       suite("batching disabled")(
         suite("webhooks with at-most-once delivery")(
           test("dispatches correct request given event") {
@@ -215,13 +213,11 @@ object WebhookServerSpec extends ZIOSpecDefault {
 
             for {
               capacity   <- ZIO.service[WebhookServerConfig].map(_.webhookQueueCapacity)
-//              clock      <- ZIO.environment[Clock]
+              clock      <- ZIO.clock
               testEvents  = createPlaintextEvents(capacity + 2)(webhook.id) // + 2 because the first one gets taken
               testResult <- webhooksTestScenario(
                               initialStubResponses = ZStream
-                                .fromZIO(ZIO.right(WebhookHttpResponse(200)).delay(1.minute))
-//                                .provideEnvironment(clock)
-                              ,
+                                .fromZIO(ZIO.right(WebhookHttpResponse(200)).delay(1.minute)),
                               webhooks = List(webhook),
                               events = List.empty,
                               ScenarioInterest.Events
@@ -897,7 +893,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
           // TODO: write unit tests for persistent retry backoff when needed
         )
       ).provide(mockEnv, WebhookServerConfig.default)
-    ) @@ timeout(20.seconds) @@ TestAspect.sequential @@ TestAspect.withLiveClock
+    )) @@ timeout(30.seconds)
 }
 
 object WebhookServerSpecUtil {

@@ -33,6 +33,7 @@ object BasicExample extends ZIOAppDefault {
         None
       )
     }
+    .schedule(Schedule.spaced(100.milli))
 
   // reliable endpoint
   private val httpApp = Http.collectZIO[Request] {
