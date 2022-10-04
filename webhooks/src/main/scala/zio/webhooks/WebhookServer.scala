@@ -194,7 +194,7 @@ final class WebhookServer private (
     eventRepo.subscribeToNewEvents.flatMap { eventDequeue =>
       for {
         // signal that the server is ready to accept new webhook events
-        _               <- eventDequeue.poll *> startupLatch.countDown
+        _               <- eventDequeue.isEmpty *> startupLatch.countDown
         deliverFunc      = (dispatch: WebhookDispatch, _: Queue[WebhookEvent]) => deliver(dispatch)
         batchDispatcher <- ZIO.foreach(config.batchingCapacity)(
                              BatchDispatcher

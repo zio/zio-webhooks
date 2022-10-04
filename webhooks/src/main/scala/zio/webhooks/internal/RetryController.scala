@@ -146,7 +146,7 @@ private[webhooks] final case class RetryController(
           _          <- retryQueue.offer(event).race(shutdownSignal.await).unlessZIO(shutdownSignal.isDone)
         } yield ()
       }
-    inputQueue.poll *> startupLatch.countDown *> handleRetryEvents.race(shutdownSignal.await)
+    inputQueue.poll *> startupLatch.countDown *> handleRetryEvents
   }
 
   private def suspendRetries(timestamp: Instant): UIO[Map[WebhookId, RetryState]] =

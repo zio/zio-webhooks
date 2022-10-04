@@ -2,16 +2,15 @@ package zio.webhooks
 
 import zhttp.http._
 import zhttp.service.Server
-import zio._
 import zio.Console.{ printError, printLine }
+import zio.{ Random, _ }
 import zio.json._
-import zio.Random
 import zio.stream._
-import zio.test._
 import zio.test.TestAspect.{ sequential, timeout }
+import zio.test._
 import zio.webhooks.WebhookServerIntegrationSpecUtil._
-import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.testkit._
 
 object WebhookServerIntegrationSpec extends ZIOSpecDefault {
@@ -30,25 +29,26 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                    .foreach(size => printLine(s"delivered so far: $size").orDie)
                    .fork
             _ <- ZIO.scoped {
-                   WebhookServer.start.flatMap {
-                     _ =>
-                       for {
-                         reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
-                         // create events for webhooks with single delivery, at-most-once semantics
-                         _                <- singleAtMostOnceEvents(n)
-                                               // pace events so we don't overwhelm the endpoint
-                                               .schedule(Schedule.spaced(50.micros).jittered)
-                                               .foreach(TestWebhookEventRepo.createEvent)
-                         // create events for webhooks with batched delivery, at-most-once semantics
-                         // no need to pace events as batching minimizes requests sent
-                         _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
-                         // wait to get half
-                         _                <- printLine("delivered").orDie
-                         _                <- delivered.changes.filter(_.size == n / 2).runHead
-                         _                <- printLine("reliableEndpoint").orDie
-                         _                <- reliableEndpoint.interrupt.fork
-                         _                <- printLine("reliableEndpoint inter").orDie
-                       } yield ()
+                   WebhookServer.start *> {
+                     for {
+                       reliableEndpoint <-
+                         httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
+                       // create events for webhooks with single delivery, at-most-once semantics
+                       _                <- singleAtMostOnceEvents(n)
+                                             // pace events so we don't overwhelm the endpoint
+                                             .schedule(Schedule.spaced(50.micros).jittered)
+                                             .foreach(TestWebhookEventRepo.createEvent)
+                                             .delay(100.millis) // give time for endpoint to be ready
+                       // create events for webhooks with batched delivery, at-most-once semantics
+                       // no need to pace events as batching minimizes requests sent
+                       _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                       // wait to get half
+                       _                <- printLine("delivered").orDie
+                       _                <- delivered.changes.filter(_.size == n / 2).runHead
+                       _                <- printLine("reliableEndpoint").orDie
+                       _                <- reliableEndpoint.interrupt.fork
+                       _                <- printLine("reliableEndpoint inter").orDie
+                     } yield ()
                    }
                  }
             _ <- printLine("RestartingWebhookServer").orDie
@@ -81,7 +81,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                          } yield ()
                        )
         } yield assertCompletes)
-      } @@ timeout(3.minutes) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole,
+      } @@ timeout(30.seconds) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole,
       test("slow subscribers do not slow down fast ones") {
         val webhookCount     = 100
         val eventsPerWebhook = 1000
