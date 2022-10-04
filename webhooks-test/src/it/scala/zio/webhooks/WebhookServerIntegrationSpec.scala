@@ -6,7 +6,7 @@ import zio.Console.{ printError, printLine }
 import zio.{ Random, _ }
 import zio.json._
 import zio.stream._
-import zio.test.TestAspect.{ sequential, timeout }
+import zio.test.TestAspect._
 import zio.test._
 import zio.webhooks.WebhookServerIntegrationSpecUtil._
 import zio.webhooks.backends.sttp.WebhookSttpClient
@@ -80,7 +80,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                          } yield ()
                        )
         } yield assertCompletes)
-      } @@ timeout(30.seconds) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole,
+      } @@ timeout(3.minutes) @@ withLiveClock @@ withLiveConsole,
       test("slow subscribers do not slow down fast ones") {
         val webhookCount     = 100
         val eventsPerWebhook = 1000
