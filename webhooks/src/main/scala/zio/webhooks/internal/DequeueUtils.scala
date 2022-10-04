@@ -42,7 +42,7 @@ private[webhooks] object DequeueUtils {
                 else loop(max - length)
               }
             }
-          loop(max).as(Chunk.from(buffer))
+          loop(max).as(Chunk.fromIterable(buffer))
         }
     }
 

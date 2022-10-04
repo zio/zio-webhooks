@@ -790,7 +790,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                       _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                       _         <- responses.offerAll(List(Left(None), Left(None)))
                       _         <- ZIO.scoped {
-                                     WebhookServer.start.flatMap { _ =>
+                                     WebhookServer.start *> {
                                        for {
                                          _ <- TestWebhookRepo.setWebhook(webhook)
                                          _ <- TestWebhookEventRepo.createEvent(event)
@@ -828,7 +828,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                       _         <- TestWebhookHttpClient.setResponse(_ => Some(responses))
                       _         <- responses.offerAll(List(Left(None), Left(None), Right(WebhookHttpResponse(200))))
                       _         <- ZIO.scoped {
-                                     WebhookServer.start.flatMap { _ =>
+                                     WebhookServer.start *> {
                                        for {
                                          _ <- TestWebhookRepo.setWebhook(webhook)
                                          _ <- TestWebhookEventRepo.createEvent(event)
@@ -836,9 +836,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                                        } yield ()
                                      }
                                    }
-                      _         <- ZIO.scoped {
-                                     WebhookServer.start.flatMap(_ => requests.take.forkScoped)
-                                   }
+                      _         <- ZIO.scoped(WebhookServer.start *> requests.take.forkScoped)
                     } yield assertCompletes
                 }
               }
