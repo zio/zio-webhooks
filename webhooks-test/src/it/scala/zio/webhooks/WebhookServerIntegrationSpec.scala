@@ -31,8 +31,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
             _ <- ZIO.scoped {
                    WebhookServer.start *> {
                      for {
-                       reliableEndpoint <-
-                         httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
+                       reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
                        // create events for webhooks with single delivery, at-most-once semantics
                        _                <- singleAtMostOnceEvents(n)
                                              // pace events so we don't overwhelm the endpoint
@@ -41,13 +40,13 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                                              .delay(100.millis) // give time for endpoint to be ready
                        // create events for webhooks with batched delivery, at-most-once semantics
                        // no need to pace events as batching minimizes requests sent
-                       _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                       _ <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
                        // wait to get half
-                       _                <- printLine("delivered").orDie
-                       _                <- delivered.changes.filter(_.size == n / 2).runHead
-                       _                <- printLine("reliableEndpoint").orDie
-                       _                <- reliableEndpoint.interrupt.fork
-                       _                <- printLine("reliableEndpoint inter").orDie
+                       _ <- printLine("delivered").orDie
+                       _ <- delivered.changes.filter(_.size == n / 2).runHead
+                       _ <- printLine("reliableEndpoint").orDie
+                       _ <- reliableEndpoint.interrupt.fork
+                       _ <- printLine("reliableEndpoint inter").orDie
                      } yield ()
                    }
                  }
