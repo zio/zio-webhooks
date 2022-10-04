@@ -4,12 +4,12 @@ import zhttp.http._
 import zhttp.service.Server
 import zio._
 import zio.stream.ZStream
-import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
-import zio.webhooks.{WebhooksProxy, _}
+import zio.webhooks.{ WebhooksProxy, _ }
 import zio.ZIOAppDefault
-import zio.Console.{printLine, printLineError}
+import zio.Console.{ printLine, printLineError }
 
 /**
  * An example of manually starting a server. The server is shut down as its release action,

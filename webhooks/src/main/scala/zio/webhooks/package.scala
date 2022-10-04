@@ -1,6 +1,6 @@
 package zio
 
-import zio.stream.{UStream, ZStream}
+import zio.stream.{ UStream, ZStream }
 
 package object webhooks {
 

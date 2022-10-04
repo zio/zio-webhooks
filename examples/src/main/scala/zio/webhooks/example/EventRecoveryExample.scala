@@ -4,12 +4,12 @@ import zhttp.http._
 import zhttp.service.Server
 import zio._
 import zio.stream.ZStream
-import zio.webhooks.backends.{InMemoryWebhookStateRepo, JsonPayloadSerialization}
+import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
-import zio.webhooks.{WebhooksProxy, _}
-import zio.{Clock, Random, ZIOAppDefault}
-import zio.Console.{printLine, printLineError}
+import zio.webhooks.{ WebhooksProxy, _ }
+import zio.{ Clock, Random, ZIOAppDefault }
+import zio.Console.{ printLine, printLineError }
 
 /**
  * An example of a webhook server performing event recovery on restart for a webhook with

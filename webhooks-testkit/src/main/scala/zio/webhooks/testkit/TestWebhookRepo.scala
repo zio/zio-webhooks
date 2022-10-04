@@ -2,7 +2,7 @@ package zio.webhooks.testkit
 
 import zio._
 import zio.prelude.NonEmptySet
-import zio.stream.{UStream, ZStream}
+import zio.stream.{ UStream, ZStream }
 import zio.webhooks.WebhookUpdate._
 import zio.webhooks.WebhooksProxy.UpdateMode
 import zio.webhooks._

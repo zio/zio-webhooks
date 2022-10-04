@@ -1,5 +1,5 @@
 package zio.webhooks.internal
-import zio.{ Chunk, Dequeue, UIO, ZIO, Trace }
+import zio.{ Chunk, Dequeue, Trace, UIO, ZIO }
 
 import scala.collection.mutable.ListBuffer
 
