@@ -43,11 +43,11 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                          // no need to pace events as batching minimizes requests sent
                          _                <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
                          // wait to get half
-                         _ <- printLine("delivered").orDie
+                         _                <- printLine("delivered").orDie
                          _                <- delivered.changes.filter(_.size == n / 2).runHead
-                         _ <- printLine("reliableEndpoint").orDie
+                         _                <- printLine("reliableEndpoint").orDie
                          _                <- reliableEndpoint.interrupt.fork
-                         _ <- printLine("reliableEndpoint inter").orDie
+                         _                <- printLine("reliableEndpoint inter").orDie
                        } yield ()
                    }
                  }
@@ -78,7 +78,6 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                                               .map(delivered => ((0 until n.toInt).toSet diff delivered).toList.sorted)
                                               .debug("not delivered")
                                               .when(deliveredSize < n)
-                           _ <- printLine("complete 1").orDie
                          } yield ()
                        )
         } yield assertCompletes)
@@ -128,9 +127,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                                      .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printError(_)))
                                      .forkScoped
                               _ <- eventStreams.foreach(TestWebhookEventRepo.createEvent).forkScoped
-                              _ <- printLine("1")
                               _ <- delivered.changes.filter(_.size == eventsPerWebhook).runHead
-                              _ <- printLine("complete 2")
                             } yield assertCompletes
                           }
                         }

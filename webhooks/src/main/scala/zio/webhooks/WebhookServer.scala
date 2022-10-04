@@ -216,9 +216,7 @@ final class WebhookServer private (
    * Listens for new retries and starts retrying delivers to a webhook.
    */
   private def startRetryMonitoring =
-    retryController.start
-      .ensuring(shutdownLatch.countDown)
-      .forkScoped
+    retryController.start.ensuring(shutdownLatch.countDown).forkScoped
 
   /**
    * Waits until all work in progress is finished, persists retries, then shuts down.
