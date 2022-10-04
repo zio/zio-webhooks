@@ -3,14 +3,13 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.console._
-import zio.duration._
-import zio.magic._
-import zio.stream.UStream
+import zio.stream.ZStream
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
+import zio.{ Clock, Random, ZIOAppDefault }
+import zio.Console.{ printLine, printLineError }
 
 /**
  * Differs from the [[BasicExample]] in that the zio-http server responds with a non-200 status some
@@ -18,9 +17,9 @@ import zio.webhooks.testkit._
  * retrying events for a webhook with at-least-once delivery semantics one-by-one until the server
  * successfully marks all `n` events delivered.
  */
-object BasicExampleWithRetrying extends App {
+object BasicExampleWithRetrying extends ZIOAppDefault {
 
-  private lazy val events = UStream
+  private lazy val events = ZStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -34,23 +33,20 @@ object BasicExampleWithRetrying extends App {
     .take(n)
 
   // a flaky server answers with 200 60% of the time, 404 the other
-  private lazy val httpApp = HttpApp.collectM {
-    case request @ Method.POST -> Root / "endpoint" =>
-      val payload = request.getBodyAsString
+  private lazy val httpApp = Http.collectZIO[Request] {
+    case request @ Method.POST -> !! / "endpoint" =>
       for {
-        n        <- random.nextIntBounded(100)
-        tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response <- ZIO
-                      .foreach(payload) { payload =>
-                        if (n < 60)
-                          putStrLn(tsString + payload + " Response: OK") *>
-                            UIO(Response.status(Status.OK))
-                        else
-                          putStrLn(tsString + payload + " Response: NOT_FOUND") *>
-                            UIO(Response.status(Status.NOT_FOUND))
-                      }
-                      .orDie
-      } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
+        n        <- Random.nextIntBounded(100)
+        tsString <- Clock.instant.map(_.toString).map(ts => s"[$ts]: ")
+        response <- request.body.asString.flatMap { payload =>
+                      if (n < 60)
+                        printLine(tsString + payload + " Response: Ok") *>
+                          ZIO.succeed(Response.status(Status.Ok))
+                      else
+                        printLine(tsString + payload + " Response: NotFound") *>
+                          ZIO.succeed(Response.status(Status.NotFound))
+                    }.orDie
+      } yield response
   }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
@@ -62,16 +58,19 @@ object BasicExampleWithRetrying extends App {
 
   private def program =
     for {
-      _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _ <- printLine("starting http")
+      _ <- httpEndpointServer.start(port, httpApp).forkScoped
+      _ <- WebhookServer.getErrors.flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).forkScoped
+      _ <- printLine("set webhook")
       _ <- TestWebhookRepo.setWebhook(webhook)
+      _ <- printLine("scheduling events")
       _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-      _ <- clock.sleep(Duration.Infinity)
+      _ <- Clock.sleep(Duration.Infinity)
     } yield ()
 
-  def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run =
     program
-      .injectCustom(
+      .provideSome[Scope](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

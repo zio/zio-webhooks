@@ -11,6 +11,6 @@ final case class InMemoryWebhookStateRepo private (ref: Ref[Option[String]]) ext
 }
 
 object InMemoryWebhookStateRepo {
-  val live: ULayer[Has[WebhookStateRepo]] =
-    Ref.make[Option[String]](Option.empty).map(InMemoryWebhookStateRepo(_)).toLayer
+  val live: ULayer[WebhookStateRepo] =
+    ZLayer.fromZIO(Ref.make[Option[String]](Option.empty).map(InMemoryWebhookStateRepo(_)))
 }

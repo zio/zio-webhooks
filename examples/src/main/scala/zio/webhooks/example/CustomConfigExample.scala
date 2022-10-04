@@ -3,14 +3,13 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.console._
-import zio.duration._
-import zio.magic._
-import zio.stream.UStream
+import zio.stream.ZStream
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
+import zio.{ Clock, Random, ZIOAppDefault }
+import zio.Console.{ printLine, printLineError }
 
 /**
  * Differs from the [[BasicExampleWithRetrying]] in that a custom configuration is provided.
@@ -18,9 +17,9 @@ import zio.webhooks.testkit._
  * batches when delivery fails. A max retry backoff of 2 seconds should be seen when running this
  * example.
  */
-object CustomConfigExample extends App {
+object CustomConfigExample extends ZIOAppDefault {
 
-  private lazy val customConfig: ULayer[Has[WebhookServerConfig]] =
+  private lazy val customConfig: ULayer[WebhookServerConfig] =
     ZLayer.succeed(
       WebhookServerConfig(
         errorSlidingCapacity = 64,
@@ -37,7 +36,7 @@ object CustomConfigExample extends App {
       )
     )
 
-  private lazy val events = UStream
+  private lazy val events = ZStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -51,23 +50,20 @@ object CustomConfigExample extends App {
     .take(n)
 
   // server answers with 200 40% of the time, 404 the other
-  private lazy val httpApp = HttpApp.collectM {
-    case request @ Method.POST -> Root / "endpoint" =>
-      val payload = request.getBodyAsString
+  private lazy val httpApp = Http.collectZIO[Request] {
+    case request @ Method.POST -> !! / "endpoint" =>
       for {
-        n        <- random.nextIntBounded(100)
-        tsString <- clock.instant.map(_.toString).map(ts => s"[$ts]: ")
-        response <- ZIO
-                      .foreach(payload) { payload =>
-                        if (n < 40)
-                          putStrLn(tsString + payload + " Response: OK") *>
-                            UIO(Response.status(Status.OK))
-                        else
-                          putStrLn(tsString + payload + " Response: NOT_FOUND") *>
-                            UIO(Response.status(Status.NOT_FOUND))
-                      }
-                      .orDie
-      } yield response.getOrElse(Response.fromHttpError(HttpError.BadRequest("empty body")))
+        n        <- Random.nextIntBounded(100)
+        tsString <- Clock.instant.map(_.toString).map(ts => s"[$ts]: ")
+        response <- request.body.asString.flatMap { payload =>
+                      if (n < 40)
+                        printLine(tsString + payload + " Response: Ok") *>
+                          ZIO.succeed(Response.status(Status.Ok))
+                      else
+                        printLine(tsString + payload + " Response: NotFound") *>
+                          ZIO.succeed(Response.status(Status.NotFound))
+                    }.orDie
+      } yield response
   }
 
   // just an alias for a zio-http server to disambiguate it with the webhook server
@@ -80,15 +76,15 @@ object CustomConfigExample extends App {
   private def program =
     for {
       _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
+      _ <- WebhookServer.getErrors.flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
       _ <- TestWebhookRepo.setWebhook(webhook)
       _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
-      _ <- zio.clock.sleep(Duration.Infinity)
+      _ <- zio.Clock.sleep(Duration.Infinity)
     } yield ()
 
-  def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
+  override def run =
     program
-      .injectCustom(
+      .provideSome[Scope](
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,
@@ -109,4 +105,5 @@ object CustomConfigExample extends App {
     WebhookDeliveryMode.BatchedAtLeastOnce,
     None
   )
+
 }
