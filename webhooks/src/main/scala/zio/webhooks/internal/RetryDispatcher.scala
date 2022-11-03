@@ -8,7 +8,6 @@ import zio.webhooks._
  * A [[RetryDispatcher]] performs retry delivery for a single webhook.
  */
 private[webhooks] final case class RetryDispatcher(
-  private val clock: Clock,
   private val config: WebhookServerConfig,
   private val errorHub: Hub[WebhookError],
   private val eventRepo: WebhookEventRepo,
@@ -38,7 +37,7 @@ private[webhooks] final case class RetryDispatcher(
                          runTimer         = timerKillSwitch.await
                                               .timeoutTo(false)(_ => true)(currentState.timeoutDuration)
                                               .flatMap(markWebhookUnavailable(webhookId).unless(_))
-                         _               <- runTimer.fork.provideLayer(ZLayer.succeed(clock))
+                         _               <- runTimer.fork
                        } yield currentState.copy(isActive = true, timerKillSwitch = Some(timerKillSwitch))
       } yield retryStates.updated(webhookId, nextState)
     }
@@ -57,7 +56,7 @@ private[webhooks] final case class RetryDispatcher(
   private def markWebhookUnavailable(webhookId: WebhookId): IO[WebhookError, Unit] =
     for {
       _                 <- eventRepo.setAllAsFailedByWebhookId(webhookId)
-      unavailableStatus <- clock.instant.map(WebhookStatus.Unavailable)
+      unavailableStatus <- Clock.instant.map(WebhookStatus.Unavailable)
       _                 <- webhooksProxy.setWebhookStatus(webhookId, unavailableStatus)
     } yield ()
 
@@ -82,7 +81,7 @@ private[webhooks] final case class RetryDispatcher(
                     case Right(WebhookHttpResponse(200)) =>
                       for {
                         _   <- markDispatch(dispatch, WebhookEventStatus.Delivered)
-                        now <- clock.instant
+                        now <- Clock.instant
                         _   <- retryStates.updateZIO { retryStates =>
                                  val newState = retryStates(dispatch.webhookId).resetBackoff(now)
                                  for {
@@ -99,7 +98,7 @@ private[webhooks] final case class RetryDispatcher(
                     // move the retry state to the next backoff duration
                     case _                               =>
                       for {
-                        timestamp <- clock.instant
+                        timestamp <- Clock.instant
                         _         <- retryStates.updateZIO { retryStates =>
                                        retryQueue.offerAll(dispatch.events).fork *>
                                          ZIO.succeed(
@@ -163,7 +162,6 @@ private[webhooks] final case class RetryDispatcher(
                            .onError(fatalPromise.fail)
                            .fork
                            .unless(isShutdown)
-                           .provideLayer(ZLayer.succeed(clock))
     } yield ()
   }
 }

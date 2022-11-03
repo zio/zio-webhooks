@@ -12,7 +12,6 @@ import java.time.Instant
  * dispatchers and state for each webhook.
  */
 private[webhooks] final case class RetryController(
-  private val clock: zio.Clock,
   private val config: WebhookServerConfig,
   private val errorHub: Hub[WebhookError],
   private val eventRepo: WebhookEventRepo,
@@ -54,11 +53,10 @@ private[webhooks] final case class RetryController(
     loadedState: PersistentRetries.PersistentRetryState
   ): IO[WebhookError, (RetryDispatcher, RetryState)] =
     for {
-      now   <- clock.instant
+      now   <- Clock.instant
       retry <- Queue.bounded[WebhookEvent](config.retry.capacity).map { retryQueue =>
                  (
                    RetryDispatcher(
-                     clock,
                      config,
                      errorHub,
                      eventRepo,
@@ -111,9 +109,8 @@ private[webhooks] final case class RetryController(
                             case None             =>
                               for {
                                 retryQueue     <- Queue.bounded[WebhookEvent](config.retry.capacity)
-                                now            <- clock.instant
+                                now            <- Clock.instant
                                 retryDispatcher = RetryDispatcher(
-                                                    clock,
                                                     config,
                                                     errorHub,
                                                     eventRepo,
