@@ -78,7 +78,6 @@ lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
 
 lazy val webhooksTestkit = module("zio-webhooks-testkit", "webhooks-testkit")
   .settings(
-    publish / skip := true,
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio-test"     % zioVersion % "test",
       "dev.zio" %% "zio-test-sbt" % zioVersion % "test"
