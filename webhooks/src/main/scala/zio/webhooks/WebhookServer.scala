@@ -5,7 +5,7 @@ import zio.stream.ZStream
 import zio.webhooks.WebhookDeliverySemantics._
 import zio.webhooks.WebhookError._
 import zio.webhooks.internal._
-import zio.{ Clock, Console, _ }
+import zio.{ Clock, _ }
 
 /**
  * A [[WebhookServer]] is a stateful server that subscribes to [[WebhookEvent]]s and reliably
@@ -21,9 +21,7 @@ import zio.{ Clock, Console, _ }
  * management, ensuring `shutdown` is called by the finalizer.
  */
 final class WebhookServer private (
-  private val clock: Clock,
   private val config: WebhookServerConfig,
-  private val console: Console,
   private val eventRepo: WebhookEventRepo,
   private val httpClient: WebhookHttpClient,
   private val stateRepo: WebhookStateRepo,
@@ -94,7 +92,7 @@ final class WebhookServer private (
                         }
                       }
       accepted     <- webhookQueue.offer(event)
-      _            <- console
+      _            <- Console
                         .printLine(
                           s"""Slow webhook detected with id "${webhookId.value}"""" +
                             " and event " + event
@@ -166,25 +164,24 @@ final class WebhookServer private (
    *
    * This ensures retries are persistent with respect to server restarts.
    */
-  private def startEventRecovery =
-    ({
-      for {
-        _ <- stateRepo.loadState.flatMap(
-               ZIO
-                 .foreachDiscard(_)(jsonState =>
-                   ZIO
-                     .fromEither(jsonState.fromJson[PersistentRetries])
-                     .mapError(message => InvalidStateError(jsonState, message))
-                     .flatMap(retryController.loadRetries)
-                 )
-                 .catchAll(errorHub.publish)
-             )
-        f <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal)
-               .foreach(retryController.enqueueRetry)
-               .ensuring(shutdownLatch.countDown)
-               .forkScoped
-      } yield f
-    } <* startupLatch.countDown)
+  private def startEventRecovery = {
+    for {
+      _ <- stateRepo.loadState.flatMap(
+             ZIO
+               .foreachDiscard(_)(jsonState =>
+                 ZIO
+                   .fromEither(jsonState.fromJson[PersistentRetries])
+                   .mapError(message => InvalidStateError(jsonState, message))
+                   .flatMap(retryController.loadRetries)
+               )
+               .catchAll(errorHub.publish)
+           )
+      f <- mergeShutdown(eventRepo.recoverEvents, shutdownSignal)
+             .foreach(retryController.enqueueRetry)
+             .ensuring(shutdownLatch.countDown)
+             .forkScoped
+    } yield f
+  } <* startupLatch.countDown
 
   /**
    * Starts server subscription to new [[WebhookEvent]]s. Counts down on the `startupLatch`,
@@ -225,7 +222,7 @@ final class WebhookServer private (
     for {
       _               <- shutdownSignal.succeed(())
       _               <- shutdownLatch.await
-      persistentState <- clock.instant.flatMap(retryController.persistRetries)
+      persistentState <- Clock.instant.flatMap(retryController.persistRetries)
       _               <- stateRepo.setState(persistentState.toJson)
     } yield ()
 
@@ -244,9 +241,7 @@ object WebhookServer {
    */
   private def create: URIO[Scope with Env, WebhookServer] =
     for {
-      clock            <- ZIO.clock
       config           <- ZIO.service[WebhookServerConfig]
-      console          <- ZIO.console
       eventRepo        <- ZIO.service[WebhookEventRepo]
       httpClient       <- ZIO.service[WebhookHttpClient]
       serializePayload <- ZIO.service[SerializePayload]
@@ -262,7 +257,6 @@ object WebhookServer {
       shutdownLatch    <- CountDownLatch.make(3)
       shutdownSignal   <- Promise.make[Nothing, Unit]
       retries           = RetryController(
-                            clock,
                             config,
                             errorHub,
                             eventRepo,
@@ -279,9 +273,7 @@ object WebhookServer {
                           )
       webhookQueues    <- Ref.Synchronized.make(Map.empty[WebhookId, Queue[WebhookEvent]])
     } yield new WebhookServer(
-      clock,
       config,
-      console,
       eventRepo,
       httpClient,
       webhookState,
