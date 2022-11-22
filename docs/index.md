@@ -1,9 +1,10 @@
 ---
-id: about_index
-title:  "About ZIO Webhooks"
+id: index
+title: "Introduction to ZIO Webhooks"
+sidebar_label: "ZIO Webhooks"
 ---
 
-A microlibrary for reliable and persistent webhook delivery.
+ZIO Webhooks is a microlibrary for reliable and persistent webhook delivery.
 
 Below is a state diagram for each webhook handled by a server. Note that there
 aren't any initial or final states as the server doesn't manage the entire
@@ -21,4 +22,12 @@ stateDiagram-v2
     Retrying --> Unavailable : continuous failure for duration D
     Unavailable --> Enabled : enabled externally
     Unavailable --> Disabled : disabled externally
+```
+ 
+## Installation
+
+Include ZIO Webhooks in your project by adding the following to your `build.sbt`:
+
+```scala
+libraryDependencies += "dev.zio" %% "zio-webhooks" % "@VERSION@"
 ```
