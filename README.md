@@ -36,15 +36,15 @@ call `shutdown` on a server created manually. Either way, users will have to imp
 
 # Documentation
 
-[ZIO Webhooks Microsite](https://zio.github.io/zio-webhooks/)
+[ZIO Webhooks Microsite](https://zio.dev/zio-webhooks/)
 
 # Contributing
 
-[Documentation for contributors](https://zio.github.io/zio-webhooks/docs/about/about_contributing)
+[Documentation for contributors](https://zio.dev/about/contributing)
 
 ## Code of Conduct
 
-See the [Code of Conduct](https://zio.github.io/zio-webhooks/docs/about/about_coc)
+See the [Code of Conduct](https://zio.dev/about/code-of-conduct)
 
 ## Support
 
