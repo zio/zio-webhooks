@@ -92,7 +92,7 @@ setTrapExit() {
   trap onSbtRunnerExit EXIT
 }
 
-# this seems to cover the bases on OSX, and someone will
+# this seems to cover the bases on macOS, and someone will
 # have to tell me about the others.
 get_script_path() {
   local path="$1"
