@@ -120,7 +120,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                               _ <- server.subscribeToErrors
                                      .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printError(_)))
                                      .forkScoped
-                              _ <- eventStreams.foreach(TestWebhookEventRepo.createEvent).forkScoped
+                              _ <- eventStreams.foreach(TestWebhookEventRepo.createEvent).delay(1.second).forkScoped
                               _ <- delivered.changes.filter(_.size == eventsPerWebhook).runHead
                             } yield assertCompletes
                           }
