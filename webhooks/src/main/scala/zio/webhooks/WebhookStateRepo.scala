@@ -23,9 +23,9 @@ trait WebhookStateRepo {
 
 object WebhookStateRepo {
   // accessors
-  def loadState: URIO[Has[WebhookStateRepo], Option[String]] =
-    ZIO.serviceWith[WebhookStateRepo](_.loadState)
+  def loadState: URIO[WebhookStateRepo, Option[String]] =
+    ZIO.serviceWithZIO[WebhookStateRepo](_.loadState)
 
-  def saveState(state: String): URIO[Has[WebhookStateRepo], Unit] =
-    ZIO.serviceWith[WebhookStateRepo](_.setState(state))
+  def saveState(state: String): URIO[WebhookStateRepo, Unit] =
+    ZIO.serviceWithZIO[WebhookStateRepo](_.setState(state))
 }

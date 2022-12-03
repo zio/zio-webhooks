@@ -2,8 +2,9 @@ package zio.webhooks.testkit
 
 import zio._
 import zio.prelude.NonEmptySet
-import zio.stream.UStream
+import zio.stream.{ UStream, ZStream }
 import zio.webhooks._
+import zio.webhooks.internal.DequeueUtils
 
 import scala.util.control.NoStackTrace
 
@@ -14,34 +15,34 @@ trait TestWebhookEventRepo {
 
   def enqueueNew: UIO[Unit]
 
-  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]]
+  def subscribeToEvents: URIO[Scope, Dequeue[WebhookEvent]]
 }
 
 object TestWebhookEventRepo {
 
   // Accessor Methods
 
-  def createEvent(event: WebhookEvent): URIO[Has[TestWebhookEventRepo], Unit] =
-    ZIO.serviceWith(_.createEvent(event))
+  def createEvent(event: WebhookEvent): URIO[TestWebhookEventRepo, Unit] =
+    ZIO.serviceWithZIO(_.createEvent(event))
 
-  def dumpEventIds: URIO[Has[TestWebhookEventRepo], Set[(Long, WebhookEventStatus)]] =
-    ZIO.serviceWith(_.dumpEventIds)
+  def dumpEventIds: URIO[TestWebhookEventRepo, Set[(Long, WebhookEventStatus)]] =
+    ZIO.serviceWithZIO(_.dumpEventIds)
 
-  def enqueueNew: URIO[Has[TestWebhookEventRepo], Unit] =
-    ZIO.serviceWith(_.enqueueNew)
+  def enqueueNew: URIO[TestWebhookEventRepo, Unit] =
+    ZIO.serviceWithZIO(_.enqueueNew)
 
-  def subscribeToEvents: URManaged[Has[TestWebhookEventRepo], Dequeue[WebhookEvent]] =
-    ZManaged.service[TestWebhookEventRepo].flatMap(_.subscribeToEvents)
+  def subscribeToEvents: URIO[Scope with TestWebhookEventRepo, Dequeue[WebhookEvent]] =
+    ZIO.serviceWithZIO[TestWebhookEventRepo](_.subscribeToEvents)
 
   // Layer Definitions
 
-  val test: ULayer[Has[WebhookEventRepo] with Has[TestWebhookEventRepo]] = {
-    for {
-      ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
-      hub <- Hub.unbounded[WebhookEvent]
-      impl = TestWebhookEventRepoImpl(ref, hub)
-    } yield Has.allOf[WebhookEventRepo, TestWebhookEventRepo](impl, impl)
-  }.toLayerMany
+  val test: ULayer[WebhookEventRepo with TestWebhookEventRepo] =
+    ZLayer.fromZIO {
+      for {
+        ref <- Ref.make(Map.empty[WebhookEventKey, WebhookEvent])
+        hub <- Hub.unbounded[WebhookEvent]
+      } yield TestWebhookEventRepoImpl(ref, hub)
+    }
 }
 
 final private case class TestWebhookEventRepoImpl(
@@ -57,10 +58,10 @@ final private case class TestWebhookEventRepoImpl(
     ref.get.map(_.map { case (key, ev) => (key.eventId.value, ev.status) }.toSet)
 
   def enqueueNew: UIO[Unit]                              =
-    ref.get.flatMap(map => ZIO.foreach_(map.values.filter(_.isNew))(hub.publish))
+    ref.get.flatMap(map => ZIO.foreachDiscard(map.values.filter(_.isNew))(hub.publish))
 
   def recoverEvents: UStream[WebhookEvent] =
-    UStream.fromIterableM(ref.get.map(_.values.filter(_.isDelivering)))
+    ZStream.fromIterableZIO(ref.get.map(_.values.filter(_.isDelivering)))
 
   def setAllAsFailedByWebhookId(webhookId: WebhookId): UIO[Unit] =
     for {
@@ -104,9 +105,9 @@ final private case class TestWebhookEventRepoImpl(
                 }
     } yield ()
 
-  def subscribeToEvents: UManaged[Dequeue[WebhookEvent]] =
+  def subscribeToEvents: URIO[Scope, Dequeue[WebhookEvent]] =
     hub.subscribe
 
-  def subscribeToNewEvents: UManaged[Dequeue[WebhookEvent]] =
-    subscribeToEvents.map(_.filterOutput(_.isNew))
+  def subscribeToNewEvents: URIO[Scope, Dequeue[WebhookEvent]] =
+    subscribeToEvents.map(d => DequeueUtils.filterOutput[WebhookEvent](d, _.isNew))
 }

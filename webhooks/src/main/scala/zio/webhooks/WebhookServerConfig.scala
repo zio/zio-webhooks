@@ -1,7 +1,6 @@
 package zio.webhooks
 
 import zio._
-import zio.duration._
 
 import java.time.Duration
 
@@ -23,7 +22,7 @@ final case class WebhookServerConfig(
 )
 
 object WebhookServerConfig {
-  val default: ULayer[Has[WebhookServerConfig]] = ZLayer.succeed(
+  val default: ULayer[WebhookServerConfig] = ZLayer.succeed(
     WebhookServerConfig(
       errorSlidingCapacity = 128,
       maxRequestsInFlight = 256,
@@ -39,8 +38,8 @@ object WebhookServerConfig {
     )
   )
 
-  val defaultWithBatching: ULayer[Has[WebhookServerConfig]] =
-    default.map(serverConfig => Has(serverConfig.get.copy(batchingCapacity = Some(128))))
+  val defaultWithBatching: ULayer[WebhookServerConfig] =
+    default.update(serverConfig => serverConfig.copy(batchingCapacity = Some(128)))
 
   /**
    * Retry configuration settings for each webhook.
