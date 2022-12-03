@@ -126,6 +126,6 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                           }
                         }
         } yield testResult
-      } @@ timeout(5.minutes) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
+      } @@ timeout(10.minutes) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
     ).provide(integrationEnv) @@ sequential
 }
