@@ -2,7 +2,7 @@ package zio.webhooks
 
 import zhttp.http._
 import zhttp.service.Server
-import zio.stream.{ SubscriptionRef, ZStream }
+import zio.stream.{ SubscriptionRef, UStream, ZStream }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.testkit.{ TestWebhookEventRepo, TestWebhookRepo }
@@ -14,7 +14,7 @@ object WebhookServerIntegrationSpecUtil {
   lazy val port = 8081
 
   // limit max backoff to 1 second so tests don't take too long
-  def customConfig =
+  def customConfig: ZLayer[Any, Nothing, WebhookServerConfig] =
     WebhookServerConfig.default.update { config =>
       config.copy(
         retry = config.retry.copy(
@@ -38,16 +38,16 @@ object WebhookServerIntegrationSpecUtil {
           )
       }
 
-  def singleAtMostOnceEvents(n: Long) =
+  def singleAtMostOnceEvents(n: Long): UStream[WebhookEvent] =
     events(webhookIdRange = (0, 250)).take(n / 4)
 
-  def batchedAtMostOnceEvents(n: Long) =
+  def batchedAtMostOnceEvents(n: Long): UStream[WebhookEvent] =
     events(webhookIdRange = (250, 500)).drop(n.toInt / 4).take(n / 4)
 
-  def singleAtLeastOnceEvents(n: Long) =
+  def singleAtLeastOnceEvents(n: Long): UStream[WebhookEvent] =
     events(webhookIdRange = (500, 750)).drop(n.toInt / 2).take(n / 4)
 
-  def batchedAtLeastOnceEvents(n: Long) =
+  def batchedAtLeastOnceEvents(n: Long): UStream[WebhookEvent] =
     events(webhookIdRange = (750, 1000)).drop(3 * n.toInt / 4).take(n / 4)
 
   type IntegrationEnv = WebhookEventRepo
@@ -77,7 +77,7 @@ object WebhookServerIntegrationSpecUtil {
       )
       .orDie
 
-  def reliableEndpoint(delivered: SubscriptionRef[Set[Int]]) =
+  def reliableEndpoint(delivered: SubscriptionRef[Set[Int]]): Http[Any, Throwable, Request, Response] =
     Http.collectZIO[Request] {
       case request @ Method.POST -> !! / "endpoint" / (id @ _) =>
         for {
@@ -98,7 +98,7 @@ object WebhookServerIntegrationSpecUtil {
         } yield response
     }
 
-  def slowEndpointsExceptFirst(delivered: SubscriptionRef[Set[Int]]) =
+  def slowEndpointsExceptFirst(delivered: SubscriptionRef[Set[Int]]): Http[Any, Throwable, Request, Response] =
     Http.collectZIO[Request] {
       case request @ Method.POST -> !! / "endpoint" / id if id == "0" =>
         for {

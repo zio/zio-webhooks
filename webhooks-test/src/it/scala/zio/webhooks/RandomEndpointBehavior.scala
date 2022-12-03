@@ -8,6 +8,18 @@ import zio._
 import zio.json._
 import WebhookServerIntegrationSpecUtil.port
 
+sealed trait RandomEndpointBehavior extends Product with Serializable { self =>
+  import RandomEndpointBehavior._
+
+  def start(delivered: SubscriptionRef[Set[Int]]) =
+    self match {
+      case RandomEndpointBehavior.Down  =>
+        ZIO.unit
+      case RandomEndpointBehavior.Flaky =>
+        httpEndpointServer.start(port, flakyBehavior(delivered))
+    }
+}
+
 object RandomEndpointBehavior {
   case object Down  extends RandomEndpointBehavior
   case object Flaky extends RandomEndpointBehavior
@@ -57,17 +69,5 @@ object RandomEndpointBehavior {
                  f.interrupt.delay(10.seconds)
              }
       } yield ()
-    }
-}
-
-sealed trait RandomEndpointBehavior extends Product with Serializable { self =>
-  import RandomEndpointBehavior._
-
-  def start(delivered: SubscriptionRef[Set[Int]]) =
-    self match {
-      case RandomEndpointBehavior.Down  =>
-        ZIO.unit
-      case RandomEndpointBehavior.Flaky =>
-        httpEndpointServer.start(port, flakyBehavior(delivered))
     }
 }
