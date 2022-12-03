@@ -17,13 +17,13 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
   val spec =
     suite("WebhookServerIntegrationSpec")(
       test("all events are delivered eventually") {
-        val n = 10000L // number of events
+        val numEvents = 10000L
 
         def testDelivered(delivered: SubscriptionRef[Set[Int]]) =
           for {
             _ <- ZIO.foreachDiscard(testWebhooks)(TestWebhookRepo.setWebhook)
             _ <- delivered.changes.collect {
-                   case set if set.size % 100 == 0 || set.size / n.toDouble >= 0.99 =>
+                   case set if set.size % 100 == 0 || set.size / numEvents.toDouble >= 0.99 =>
                      set.size.toString
                  }
                    .foreach(size => printLine(s"delivered so far: $size").orDie)
@@ -33,17 +33,17 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                      for {
                        reliableEndpoint <- httpEndpointServer.start(port, reliableEndpoint(delivered)).fork
                        // create events for webhooks with single delivery, at-most-once semantics
-                       _                <- singleAtMostOnceEvents(n)
+                       _                <- singleAtMostOnceEvents(numEvents)
                                              // pace events so we don't overwhelm the endpoint
                                              .schedule(Schedule.spaced(50.micros).jittered)
                                              .foreach(TestWebhookEventRepo.createEvent)
-                                             .delay(100.millis) // give time for endpoint to be ready
+                                             .delay(1000.millis) // give time for endpoint to be ready
                        // create events for webhooks with batched delivery, at-most-once semantics
                        // no need to pace events as batching minimizes requests sent
-                       _ <- batchedAtMostOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+                       _ <- batchedAtMostOnceEvents(numEvents).foreach(TestWebhookEventRepo.createEvent)
                        // wait to get half
                        _ <- printLine("delivered").orDie
-                       _ <- delivered.changes.filter(_.size == n / 2).runHead
+                       _ <- delivered.changes.filter(_.size == numEvents / 2).runHead
                        _ <- printLine("reliableEndpoint").orDie
                        _ <- reliableEndpoint.interrupt.fork
                        _ <- printLine("reliableEndpoint inter").orDie
@@ -55,15 +55,15 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
             _ <- RestartingWebhookServer.start.fork
             _ <- RandomEndpointBehavior.run(delivered).fork
             // send events for webhooks with at-least-once semantics
-            _ <- singleAtLeastOnceEvents(n)
+            _ <- singleAtLeastOnceEvents(numEvents)
                    .schedule(Schedule.spaced(25.micros))
                    .foreach(TestWebhookEventRepo.createEvent)
-            _ <- batchedAtLeastOnceEvents(n).foreach(TestWebhookEventRepo.createEvent)
+            _ <- batchedAtLeastOnceEvents(numEvents).foreach(TestWebhookEventRepo.createEvent)
             // wait to get second half
-            _ <- delivered.changes.filter(_.size == n).runHead
+            _ <- delivered.changes.filter(_.size == numEvents).runHead
           } yield ()
 
-        (for {
+        for {
           delivered <- SubscriptionRef.make(Set.empty[Int])
           _         <- testDelivered(delivered).ensuring(
                          // dump repo and events not delivered on timeout
@@ -72,15 +72,15 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                            _             <- TestWebhookEventRepo.dumpEventIds
                                               .map(_.toList.sortBy(_._1))
                                               .debug("all IDs in repo")
-                                              .when(deliveredSize < n)
+                                              .when(deliveredSize < numEvents)
                            _             <- delivered.get
-                                              .map(delivered => ((0 until n.toInt).toSet diff delivered).toList.sorted)
+                                              .map(delivered => ((0 until numEvents.toInt).toSet diff delivered).toList.sorted)
                                               .debug("not delivered")
-                                              .when(deliveredSize < n)
+                                              .when(deliveredSize < numEvents)
                          } yield ()
                        )
-        } yield assertCompletes)
-      } @@ timeout(3.minutes) @@ withLiveClock @@ withLiveConsole,
+        } yield assertCompletes
+      } @@ timeout(5.minutes) @@ withLiveClock @@ withLiveConsole,
       test("slow subscribers do not slow down fast ones") {
         val webhookCount     = 100
         val eventsPerWebhook = 1000
@@ -114,7 +114,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
             ): _*
           )
 
-        (for {
+        for {
           delivered  <- SubscriptionRef.make(Set.empty[Int])
           _          <- delivered.changes.map(_.size).foreach(size => printLine(s"delivered so far: $size").orDie).fork
           _          <- httpEndpointServer.start(port, slowEndpointsExceptFirst(delivered)).fork
@@ -130,8 +130,8 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                             } yield assertCompletes
                           }
                         }
-        } yield testResult)
-      } @@ timeout(3.minutes) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
+        } yield testResult
+      } @@ timeout(5.minutes) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
     ).provide(integrationEnv) @@ sequential
 }
 
