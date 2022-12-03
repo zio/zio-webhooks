@@ -26,6 +26,16 @@ package object webhooks {
     }
   }
 
+  // backport for 2.12
+  private[webhooks] implicit class EitherOps[A, B](either: Either[A, B]) {
+
+    def orElseThat[A1 >: A, B1 >: B](or: => Either[A1, B1]): Either[A1, B1] =
+      either match {
+        case Right(_) => either
+        case _        => or
+      }
+  }
+
   private[webhooks] def mergeShutdown[A](stream: UStream[A], shutdownSignal: Promise[Nothing, Unit]): UStream[A] =
     stream
       .map(Left(_))
