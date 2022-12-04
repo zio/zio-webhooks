@@ -92,13 +92,12 @@ final class WebhookServer private (
                         }
                       }
       accepted     <- webhookQueue.offer(event)
-      _            <- Console
-                        .printLine(
+      _            <- ZIO
+                        .logDebug(
                           s"""Slow webhook detected with id "${webhookId.value}"""" +
                             " and event " + event
                         )
                         .unless(accepted)
-                        .orDie
     } yield ()
   }
 

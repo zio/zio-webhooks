@@ -26,7 +26,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                                            // pace events so we don't overwhelm the endpoint
                                            .schedule(Schedule.spaced(50.micros).jittered)
                                            .foreach(TestWebhookEventRepo.createEvent)
-                                           .delay(1000.millis) // give the reliable endpoint a second to be ready
+                                           .delay(2.seconds) // give the reliable endpoint time to get ready
                      // no need to pace events as batching minimizes requests sent
                      _ <- batchedAtMostOnceEvents(numEvents).foreach(TestWebhookEventRepo.createEvent)
                      // wait to get half
@@ -67,7 +67,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                             _      <- server.subscribeToErrors
                                         .flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printError(_)))
                                         .forkScoped
-                            _      <- eventStreams.foreach(TestWebhookEventRepo.createEvent).delay(1.second).forkScoped
+                            _      <- eventStreams.foreach(TestWebhookEventRepo.createEvent).delay(2.seconds).forkScoped
                             _      <- delivered.changes.filter(_.size == eventsPerWebhook).runHead
                           } yield assertCompletes
                         }
