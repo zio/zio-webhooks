@@ -209,7 +209,7 @@ object WebhookServerSpec extends ZIOSpecDefault {
                 } yield assert(secondRequest)(isNone)
               }
             } @@ withLiveClock,
-            test("writes warning to console when delivering to a slow webhook, i.e. queue gets full") {
+            test("writes warning to log when delivering to a slow webhook, i.e. queue gets full") {
               val webhook = singleWebhook(id = 0, WebhookStatus.Enabled, WebhookDeliveryMode.SingleAtMostOnce)
 
               for {
@@ -223,9 +223,9 @@ object WebhookServerSpec extends ZIOSpecDefault {
                                 ScenarioInterest.Events
                               ) { (_, _) =>
                                 for {
-                                  _ <- ZIO.foreachDiscard(testEvents)(TestWebhookEventRepo.createEvent)
-                                  _ <- TestConsole.output.repeatUntil(_.nonEmpty)
-                                } yield assertCompletes
+                                  _   <- ZIO.foreachDiscard(testEvents)(TestWebhookEventRepo.createEvent)
+                                  log <- ZTestLogger.logOutput.repeatUntil(_.nonEmpty)
+                                } yield assertTrue(log.head.logLevel == LogLevel.Debug)
                               }
               } yield testResult
             } @@ timeout(50.millis) @@ flaky
