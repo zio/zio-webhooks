@@ -116,7 +116,15 @@ lazy val docs = project
     scalacOptions -= "-Xfatal-warnings",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio" % zioVersion
-    )
+    ),
+    projectName := "ZIO Webhook",
+    badgeInfo := Some(
+      BadgeInfo(
+        artifact = "zio-webhook_2.12",
+        projectStage = ProjectStage.Development
+      )
+    ),
+    docsPublishBranch := "series/2.x"
   )
   .dependsOn(zioWebhooksCore)
   .enablePlugins(WebsitePlugin)
