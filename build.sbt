@@ -110,20 +110,13 @@ def module(moduleName: String, fileName: String): Project =
 lazy val docs = project
   .in(file("zio-webhooks-docs"))
   .settings(
-    publish / skip := true,
     moduleName := "zio-webhooks-docs",
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
-    libraryDependencies ++= Seq(
-      "dev.zio" %% "zio" % zioVersion
-    ),
+    libraryDependencies ++= Seq("dev.zio" %% "zio" % zioVersion),
     projectName := "ZIO Webhook",
-    badgeInfo := Some(
-      BadgeInfo(
-        artifact = "zio-webhook_2.12",
-        projectStage = ProjectStage.Development
-      )
-    ),
+    mainModuleName := (zioWebhooksCore / moduleName).value,
+    projectStage := ProjectStage.Development,
     docsPublishBranch := "series/2.x"
   )
   .dependsOn(zioWebhooksCore)
