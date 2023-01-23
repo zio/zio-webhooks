@@ -27,12 +27,12 @@ There are two ways to start a webhook server: as part of the managed constructio
 examples. The managed approach is recommended as it guarantees the server shuts down gracefully. Make sure to
 call `shutdown` on a server created manually. Either way, users will have to implement the following dependencies that are part of `WebhookServer`'s environment:
 
-* [`WebhookRepo`](/webhooks/src/main/scala/zio/webhooks/WebhookRepo.scala) - to get webhooks and update webhook status;
-* [`WebhookEventRepo`](/webhooks/src/main/scala/zio/webhooks/WebhookEventRepo.scala) - to subscribe to events and
+* [`WebhookRepo`](docs/../webhooks/src/main/scala/zio/webhooks/WebhookRepo.scala) - to get webhooks and update webhook status;
+* [`WebhookEventRepo`](docs/../webhooks/src/main/scala/zio/webhooks/WebhookEventRepo.scala) - to subscribe to events and
   update event status;
-* [`WebhookHttpClient`](/webhooks/src/main/scala/zio/webhooks/WebhookHttpClient.scala) - to deliver events via HTTP POST
-  ([WebhookSttpClient](/webhooks/src/main/scala/zio/webhooks/backends/sttp/WebhookSttpClient.scala) is provided and ready to use);
-* [`WebhookServerConfig`](/webhooks/src/main/scala/zio/webhooks/WebhookServerConfig.scala) - to specify settings for
+* [`WebhookHttpClient`](docs/../webhooks/src/main/scala/zio/webhooks/WebhookHttpClient.scala) - to deliver events via HTTP POST
+  (docs/[WebhookSttpClient](../webhooks/src/main/scala/zio/webhooks/backends/sttp/WebhookSttpClient.scala) is provided and ready to use);
+* [`WebhookServerConfig`](docs/../webhooks/src/main/scala/zio/webhooks/WebhookServerConfig.scala) - to specify settings for
   error hub capacity, retrying, and batching; and
 * `SerializePayload` - for specifying custom serialization of single and batched event payloads of some content type.
 
@@ -51,13 +51,13 @@ stateDiagram-v2
  
 # Example Programs
 
-* [Basic example](/examples/src/main/scala/zio/webhooks/example/BasicExample.scala) - most basic usage with the default configuration.
-* [Basic example with batching](/examples/src/main/scala/zio/webhooks/example/BasicExampleWithBatching.scala) - same as the basic example but with batching enabled.
-* [Basic example with retrying](/examples/src/main/scala/zio/webhooks/example/BasicExampleWithRetrying.scala) - shows how the server retries when an endpoint fails sometimes.
-* [Custom config example](/examples/src/main/scala/zio/webhooks/example/CustomConfigExample.scala) - a custom configuration example that also showcases batched retries.
-* [Event recovery example](/examples/src/main/scala/zio/webhooks/example/EventRecoveryExample.scala) - shows how the server continues retries after being restarted.
-* [Manual server example](/examples/src/main/scala/zio/webhooks/example/ManualServerExample.scala) - shows how to create, start, and shut down a server programmatically.
-* [Shutdown on first error](/examples/src/main/scala/zio/webhooks/example/ShutdownOnFirstError.scala) - shows how to shut down the server on the first error encountered.
+* [Basic example](docs/../examples/src/main/scala/zio/webhooks/example/BasicExample.scala) - most basic usage with the default configuration.
+* [Basic example with batching](docs/../examples/src/main/scala/zio/webhooks/example/BasicExampleWithBatching.scala) - same as the basic example but with batching enabled.
+* [Basic example with retrying](docs/../examples/src/main/scala/zio/webhooks/example/BasicExampleWithRetrying.scala) - shows how the server retries when an endpoint fails sometimes.
+* [Custom config example](docs/../examples/src/main/scala/zio/webhooks/example/CustomConfigExample.scala) - a custom configuration example that also showcases batched retries.
+* [Event recovery example](docs/../examples/src/main/scala/zio/webhooks/example/EventRecoveryExample.scala) - shows how the server continues retries after being restarted.
+* [Manual server example](docs/../examples/src/main/scala/zio/webhooks/example/ManualServerExample.scala) - shows how to create, start, and shut down a server programmatically.
+* [Shutdown on first error](docs/../examples/src/main/scala/zio/webhooks/example/ShutdownOnFirstError.scala) - shows how to shut down the server on the first error encountered.
 
 ## Documentation
 
