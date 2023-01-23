@@ -41,7 +41,7 @@ lazy val `zio-webhooks` =
   project
     .in(file("."))
     .settings(publish / skip := true)
-    .aggregate(zioWebhooksCore, zioWebhooksTest, webhooksTestkit, examples)
+    .aggregate(zioWebhooksCore, zioWebhooksTest, webhooksTestkit, examples, docs)
 
 lazy val zioWebhooksCore = module("zio-webhooks-core", "webhooks")
   .enablePlugins(BuildInfoPlugin)
@@ -102,9 +102,7 @@ def module(moduleName: String, fileName: String): Project =
   Project(moduleName, file(fileName))
     .settings(stdSettings(moduleName))
     .settings(
-      libraryDependencies ++= Seq(
-        "dev.zio" %% "zio" % zioVersion
-      )
+      libraryDependencies ++= Seq("dev.zio" %% "zio" % zioVersion)
     )
 
 lazy val docs = project
@@ -114,9 +112,10 @@ lazy val docs = project
     scalacOptions -= "-Yno-imports",
     scalacOptions -= "-Xfatal-warnings",
     libraryDependencies ++= Seq("dev.zio" %% "zio" % zioVersion),
-    projectName := "ZIO Webhook",
+    projectName := "ZIO Webhooks",
     mainModuleName := (zioWebhooksCore / moduleName).value,
     projectStage := ProjectStage.Development,
+    ScalaUnidoc / unidoc / unidocProjectFilter := inProjects(zioWebhooksCore),
     docsPublishBranch := "series/2.x"
   )
   .dependsOn(zioWebhooksCore)
