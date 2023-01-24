@@ -26,7 +26,7 @@ jobs:
     - name: Lint code
       run: sbt check
     - name: Run tests
-      run: sbt ++${{ matrix.scala }}! test IntegrationTest/test
+      run: sbt ++${{ matrix.scala }} test IntegrationTest/test
 
   website:
     runs-on: ubuntu-20.04
