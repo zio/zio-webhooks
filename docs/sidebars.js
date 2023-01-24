@@ -1,6 +1,12 @@
 const sidebars = {
   sidebar: [
-    "index"
+    {
+      type: "category",
+      label: "ZIO Webhook",
+      collapsed: false,
+      link: { type: "doc", id: "index" },
+      items: [ ]
+    }
   ]
 };
 
