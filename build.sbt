@@ -35,7 +35,7 @@ val zioVersion        = "2.0.4"
 val zioHttpVersion    = "2.0.0-RC11"
 val zioJson           = "0.4.1"
 val zioPreludeVersion = "1.0.0-RC16"
-val sttpVersion       = "3.8.3"
+val sttpVersion       = "3.8.15"
 
 lazy val `zio-webhooks` =
   project
