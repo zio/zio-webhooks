@@ -8,7 +8,7 @@ import zio.webhooks._
 
 private[webhooks] final class BatchDispatcher private (
   private val batchingCapacity: Int,
-  private val batchQueues: Ref.Synchronized[Map[BatchKey, Queue[WebhookEvent]]],
+  private val batchQueues: RefM[Map[BatchKey, Queue[WebhookEvent]]],
   private val deliver: (WebhookDispatch, Queue[WebhookEvent]) => UIO[Unit],
   private val fatalPromise: Promise[Cause[Nothing], Nothing],
   private val inputQueue: Queue[WebhookEvent],
@@ -36,17 +36,17 @@ private[webhooks] final class BatchDispatcher private (
     inputQueue.offer(event).unit
 
   def start: UIO[Any] =
-    mergeShutdown(ZStream.fromQueue(inputQueue), shutdownSignal).groupByKey { ev =>
+    mergeShutdown(UStream.fromQueue(inputQueue), shutdownSignal).groupByKey { ev =>
       val (webhookId, contentType) = ev.webhookIdAndContentType
       BatchKey(webhookId, contentType)
     } {
       case (batchKey, events) =>
-        ZStream.fromZIO(
+        ZStream.fromEffect(
           for {
-            batchQueue <- batchQueues.modifyZIO { map =>
+            batchQueue <- batchQueues.modify { map =>
                             map.get(batchKey) match {
                               case Some(queue) =>
-                                ZIO.succeed((queue, map))
+                                UIO((queue, map))
                               case None        =>
                                 for (queue <- Queue.bounded[WebhookEvent](batchingCapacity))
                                   yield (queue, map + (batchKey -> queue))
@@ -70,7 +70,7 @@ private[webhooks] object BatchDispatcher {
     webhooks: WebhooksProxy
   ): UIO[BatchDispatcher] =
     for {
-      batchQueue <- Ref.Synchronized.make(Map.empty[BatchKey, Queue[WebhookEvent]])
+      batchQueue <- RefM.make(Map.empty[BatchKey, Queue[WebhookEvent]])
       inputQueue <- Queue.bounded[WebhookEvent](1)
       dispatcher  = new BatchDispatcher(
                       capacity,

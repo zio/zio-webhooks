@@ -1,7 +1,8 @@
 package zio.webhooks
 
 import zio._
-import zio.Duration
+import zio.clock.Clock
+import zio.duration.Duration
 import zio.prelude.NonEmptySet
 import zio.stream.UStream
 import zio.webhooks.WebhooksProxy.UpdateMode
@@ -25,13 +26,13 @@ final case class WebhooksProxy private (
   def getWebhookById(webhookId: WebhookId): UIO[Webhook] =
     for {
       option  <- cache.get.map(_.get(webhookId))
-      webhook <- option.map(ZIO.succeed(_)).getOrElse(webhookRepo.getWebhookById(webhookId))
+      webhook <- option.map(UIO(_)).getOrElse(webhookRepo.getWebhookById(webhookId))
     } yield webhook
 
   private def pollForUpdates(pollingFunction: PollingFunction): UIO[Unit] =
     for {
       keys <- cache.get.map(map => NonEmptySet.fromIterableOption(map.keys))
-      _    <- ZIO.foreachDiscard(keys)(pollingFunction(_).flatMap(cache.set))
+      _    <- ZIO.foreach_(keys)(pollingFunction(_).flatMap(cache.set))
     } yield ()
 
   def setWebhookStatus(webhookId: WebhookId, status: WebhookStatus): UIO[Unit] =
@@ -42,7 +43,7 @@ final case class WebhooksProxy private (
       _ <- webhookRepo.setWebhookStatus(webhookId, status)
     } yield ()
 
-  private[webhooks] def start: UIO[Any] =
+  private[webhooks] def start: URIO[Clock, Any] =
     updateMode match {
       case UpdateMode.Polling(pollingInterval, pollingFunction) =>
         pollForUpdates(pollingFunction).repeat(Schedule.fixed(pollingInterval))
@@ -58,14 +59,12 @@ final case class WebhooksProxy private (
 }
 
 object WebhooksProxy {
-  type Env = WebhookRepo with UpdateMode
+  type Env = Has[WebhookRepo] with Has[UpdateMode] with Clock
 
-  val live: URLayer[Env, WebhooksProxy] =
-    ZLayer.fromZIO {
-      ZIO.environmentWithZIO[Env](env => start(env.get[WebhookRepo], env.get[UpdateMode]))
-    }
+  val live: URLayer[Env, Has[WebhooksProxy]] =
+    ZIO.services[WebhookRepo, UpdateMode].flatMap((start _).tupled).toLayer
 
-  private def start(webhookRepo: WebhookRepo, updateMode: UpdateMode): UIO[WebhooksProxy] =
+  private def start(webhookRepo: WebhookRepo, updateMode: UpdateMode): URIO[Clock, WebhooksProxy] =
     for {
       cache <- Ref.make(Map.empty[WebhookId, Webhook])
       proxy  = WebhooksProxy(cache, webhookRepo, updateMode)
