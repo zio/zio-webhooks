@@ -31,10 +31,11 @@ inThisBuild(
 addCommandAlias("fmt", "all scalafmtSbt scalafmt test:scalafmt")
 addCommandAlias("check", "all scalafmtSbtCheck scalafmtCheck test:scalafmtCheck")
 
-val zioVersion        = "2.0.2"
-val zioHttpVersion    = "2.0.0-RC11"
-val zioJson           = "0.3.0"
-val zioPreludeVersion = "1.0.0-RC15"
+val zioVersion        = "1.0.16"
+val zioHttpVersion    = "1.0.0.0-RC17"
+val zioJson           = "0.1.5"
+val zioMagicVersion   = "0.3.12"
+val zioPreludeVersion = "1.0.0-RC8-1"
 val sttpVersion       = "3.8.0"
 
 lazy val `zio-webhooks` =
@@ -54,7 +55,7 @@ lazy val zioWebhooksCore = module("zio-webhooks-core", "webhooks")
       "dev.zio"                       %% "zio-streams" % zioVersion,
       "dev.zio"                       %% "zio-test"    % zioVersion,
       "com.softwaremill.sttp.client3" %% "core"        % sttpVersion,
-      "com.softwaremill.sttp.client3" %% "zio"         % sttpVersion
+      "com.softwaremill.sttp.client3" %% "zio1"        % sttpVersion
     )
   )
   .settings(
@@ -67,10 +68,11 @@ lazy val zioWebhooksTest = module("zio-webhooks-test", "webhooks-test")
     Defaults.itSettings,
     publish / skip := true,
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio-test"     % zioVersion     % "it,test",
-      "dev.zio" %% "zio-test-sbt" % zioVersion     % "it,test",
-      "dev.zio" %% "zio-json"     % zioJson        % "it",
-      "io.d11"  %% "zhttp"        % zioHttpVersion % "it"
+      "dev.zio"              %% "zio-test"     % zioVersion      % "it,test",
+      "dev.zio"              %% "zio-test-sbt" % zioVersion      % "it,test",
+      "dev.zio"              %% "zio-json"     % zioJson         % "it",
+      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion % "it,test",
+      "io.d11"               %% "zhttp"        % zioHttpVersion  % "it"
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )
@@ -91,9 +93,10 @@ lazy val examples = module("zio-webhooks-examples", "examples")
     publish / skip := true,
     fork := true,
     libraryDependencies ++= Seq(
-      "dev.zio" %% "zio-test"     % zioVersion % "test",
-      "dev.zio" %% "zio-test-sbt" % zioVersion % "test",
-      "io.d11"  %% "zhttp"        % zioHttpVersion
+      "dev.zio"              %% "zio-test"     % zioVersion % "test",
+      "dev.zio"              %% "zio-test-sbt" % zioVersion % "test",
+      "io.d11"               %% "zhttp"        % zioHttpVersion,
+      "io.github.kitlangton" %% "zio-magic"    % zioMagicVersion
     ),
     testFrameworks := Seq(new TestFramework("zio.test.sbt.ZTestFramework"))
   )

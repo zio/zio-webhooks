@@ -1,20 +1,20 @@
 package zio.webhooks.internal
 
 import zio._
-import zio.Clock
+import zio.clock.Clock
 import zio.webhooks._
 
 /**
  * A [[RetryDispatcher]] performs retry delivery for a single webhook.
  */
 private[webhooks] final case class RetryDispatcher(
-  private val clock: Clock,
+  private val clock: Clock.Service,
   private val config: WebhookServerConfig,
   private val errorHub: Hub[WebhookError],
   private val eventRepo: WebhookEventRepo,
   private val fatalPromise: Promise[Cause[Nothing], Nothing],
   private val httpClient: WebhookHttpClient,
-  private val retryStates: Ref.Synchronized[Map[WebhookId, RetryState]],
+  private val retryStates: RefM[Map[WebhookId, RetryState]],
   retryQueue: Queue[WebhookEvent],
   private val serializePayload: SerializePayload,
   private val shutdownSignal: Promise[Nothing, Unit],
@@ -27,11 +27,11 @@ private[webhooks] final case class RetryDispatcher(
    * the timeout duration. The timer is killed when retrying is deactivated.
    */
   private[internal] def activateWithTimeout: UIO[Unit] =
-    retryStates.updateZIO { retryStates =>
+    retryStates.update { retryStates =>
       val currentState = retryStates(webhookId)
       for {
         nextState <- if (currentState.isActive)
-                       ZIO.succeed(currentState)
+                       UIO(currentState)
                      else
                        for {
                          timerKillSwitch <- Promise.make[Nothing, Unit]
@@ -83,7 +83,7 @@ private[webhooks] final case class RetryDispatcher(
                       for {
                         _   <- markDispatch(dispatch, WebhookEventStatus.Delivered)
                         now <- clock.instant
-                        _   <- retryStates.updateZIO { retryStates =>
+                        _   <- retryStates.update { retryStates =>
                                  val newState = retryStates(dispatch.webhookId).resetBackoff(now)
                                  for {
                                    queueEmpty       <- retryQueue.size.map(_ <= 0)
@@ -91,7 +91,7 @@ private[webhooks] final case class RetryDispatcher(
                                                          .foreach(batchQueue)(_.size.map(_ <= 0))
                                                          .map(_.getOrElse(true))
                                    allEmpty          = queueEmpty && batchExistsEmpty
-                                   newState         <- if (allEmpty) newState.deactivate else ZIO.succeed(newState)
+                                   newState         <- if (allEmpty) newState.deactivate else UIO(newState)
                                  } yield retryStates.updated(dispatch.webhookId, newState)
                                }
                       } yield ()
@@ -100,9 +100,9 @@ private[webhooks] final case class RetryDispatcher(
                     case _                               =>
                       for {
                         timestamp <- clock.instant
-                        _         <- retryStates.updateZIO { retryStates =>
+                        _         <- retryStates.update { retryStates =>
                                        retryQueue.offerAll(dispatch.events).fork *>
-                                         ZIO.succeed(
+                                         UIO(
                                            retryStates.updated(
                                              webhookId,
                                              retryStates(webhookId).increaseBackoff(timestamp, config.retry)
@@ -130,7 +130,7 @@ private[webhooks] final case class RetryDispatcher(
                                       retryState.backoff.map(retryQueue.take.delay(_)).getOrElse(retryQueue.take)
                                     }
                            event <- shutdownSignal.await.disconnect.raceEither(take.disconnect).map(_.toOption)
-                           _     <- ZIO.foreachDiscard(event) { event =>
+                           _     <- ZIO.foreach_(event) { event =>
                                       val webhookId = event.key.webhookId
                                       for {
                                         _           <- activateWithTimeout
@@ -150,7 +150,7 @@ private[webhooks] final case class RetryDispatcher(
                                         _           <- if (webhook.isEnabled)
                                                          deliverEvent
                                                        else
-                                                         retryStates.updateZIO { retries =>
+                                                         retryStates.update { retries =>
                                                            retries(webhook.id).deactivate
                                                              .map(retries.updated(webhook.id, _))
                                                          }
@@ -159,7 +159,7 @@ private[webhooks] final case class RetryDispatcher(
                          } yield ()
       isShutdown      <- shutdownSignal.isDone
       _               <- handleEvent
-                           .repeatUntilZIO(_ => shutdownSignal.isDone)
+                           .repeatUntilM(_ => shutdownSignal.isDone)
                            .onError(fatalPromise.fail)
                            .fork
                            .unless(isShutdown)
