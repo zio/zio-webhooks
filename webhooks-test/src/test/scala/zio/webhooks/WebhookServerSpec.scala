@@ -759,13 +759,12 @@ object WebhookServerSpec extends ZIOSpecDefault {
                                        List(Right(WebhookHttpResponse(200)), Right(WebhookHttpResponse(200)))
                                      )
                         event1    <- ZIO.scoped {
-                                       WebhookServer.start.flatMap { _ =>
-                                         for {
-                                           _      <- TestWebhookRepo.setWebhook(webhook)
-                                           _      <- TestWebhookEventRepo.createEvent(testEvents(0))
-                                           event1 <- events.take.as(true)
-                                         } yield event1
-                                       }
+                                       for {
+                                         _      <- WebhookServer.start
+                                         _      <- TestWebhookRepo.setWebhook(webhook)
+                                         _      <- TestWebhookEventRepo.createEvent(testEvents(0))
+                                         event1 <- events.take.as(true)
+                                       } yield event1
                                      }
                         _         <- TestWebhookEventRepo.createEvent(testEvents(1))
                         take      <- events.take.timeout(1.second)

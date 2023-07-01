@@ -1,8 +1,7 @@
 package zio.webhooks
 
-import zio.stream.ZStream
+import zio.stream.{UStream, ZStream}
 import zio.Chunk
-
 import WebhookServerIntegrationSpecUtil.port
 
 final case class SlowWebhookSetup(
@@ -21,8 +20,8 @@ final case class SlowWebhookSetup(
   }
 
   // 100 streams with 1000 events each
-  val eventStreams: ZStream[Any, Nothing, WebhookEvent] =
-    ZStream.mergeAllUnbounded()(
+  val eventStreams: UStream[WebhookEvent] =
+    ZStream.mergeAll(16)(
       (0L until webhookCount.toLong).map(webhookId =>
         ZStream
           .iterate(0L)(_ + 1)

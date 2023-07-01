@@ -72,7 +72,7 @@ object WebhookServerIntegrationSpec extends ZIOSpecDefault {
                           } yield assertCompletes
                         }
         } yield testResult
-      } @@ timeout(5.minutes) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
+      } @@ timeout(7.minutes) @@ TestAspect.withLiveClock @@ TestAspect.withLiveConsole
     ).provide(integrationEnv) @@ sequential
 
   private def dumpRepoAndUndeliveredEvents(delivered: SubscriptionRef[Set[RuntimeFlags]]) =
