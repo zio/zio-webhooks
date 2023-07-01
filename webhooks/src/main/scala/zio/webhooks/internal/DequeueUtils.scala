@@ -19,7 +19,7 @@ private[webhooks] object DequeueUtils {
 
       override def take(implicit trace: Trace): UIO[A] =
         d.take.flatMap { b =>
-          if (f(b)) ZIO.succeedNow(b)
+          if (f(b)) ZIO.succeed(b)
           else take
         }
 
