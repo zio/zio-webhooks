@@ -3,22 +3,23 @@ package zio.webhooks.example
 import zhttp.http._
 import zhttp.service.Server
 import zio._
-import zio.stream.ZStream
+import zio.console._
+import zio.duration._
+import zio.magic._
+import zio.stream.UStream
 import zio.webhooks.backends.{ InMemoryWebhookStateRepo, JsonPayloadSerialization }
 import zio.webhooks.{ WebhooksProxy, _ }
 import zio.webhooks.backends.sttp.WebhookSttpClient
 import zio.webhooks.testkit._
-import zio.{ Random, ZIOAppDefault }
-import zio.Console.{ printLine, printLineError }
 
 /**
  * Differs from the [[BasicExample]] in that events are batched with the default batching setting
  * of 128 elements per batch. The server dispatches all events queued up for each webhook since the
  * last delivery and sends them in a batch.
  */
-object BasicExampleWithBatching extends ZIOAppDefault {
+object BasicExampleWithBatching extends App {
 
-  private lazy val events = ZStream
+  private lazy val events = UStream
     .iterate(0L)(_ + 1)
     .map { i =>
       WebhookEvent(
@@ -30,14 +31,15 @@ object BasicExampleWithBatching extends ZIOAppDefault {
       )
     }
 
-  private val httpApp = Http.collectZIO[Request] {
-    case request @ Method.POST -> !! / "endpoint" =>
+  private val httpApp = HttpApp.collectM {
+    case request @ Method.POST -> Root / "endpoint" =>
       for {
-        randomDelay <- Random.nextIntBetween(10, 20).map(_.millis)
-        response    <- request.body.asString.flatMap { str =>
-                         printLine(s"""SERVER RECEIVED PAYLOAD: "$str"""")
-                       }
-                         .as(Response.status(Status.Ok))
+        randomDelay <- random.nextIntBetween(10, 20).map(_.millis)
+        response    <- ZIO
+                         .foreach(request.getBodyAsString) { str =>
+                           putStrLn(s"""SERVER RECEIVED PAYLOAD: "$str"""")
+                         }
+                         .as(Response.status(Status.OK))
                          .delay(randomDelay)
       } yield response
   }
@@ -50,14 +52,14 @@ object BasicExampleWithBatching extends ZIOAppDefault {
   private def program =
     for {
       _ <- httpEndpointServer.start(port, httpApp).fork
-      _ <- WebhookServer.getErrors.flatMap(ZStream.fromQueue(_).map(_.toString).foreach(printLineError(_))).fork
+      _ <- WebhookServer.getErrors.use(UStream.fromQueue(_).map(_.toString).foreach(putStrLnErr(_))).fork
       _ <- TestWebhookRepo.setWebhook(webhook)
       _ <- events.schedule(Schedule.spaced(50.micros).jittered).foreach(TestWebhookEventRepo.createEvent)
     } yield ()
 
-  override def run =
+  def run(args: List[String]): URIO[zio.ZEnv, ExitCode] =
     program
-      .provideSome[Scope](
+      .injectCustom(
         InMemoryWebhookStateRepo.live,
         JsonPayloadSerialization.live,
         TestWebhookRepo.test,

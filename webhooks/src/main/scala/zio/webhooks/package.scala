@@ -1,6 +1,6 @@
 package zio
 
-import zio.stream.{ UStream, ZStream }
+import zio.stream.UStream
 
 package object webhooks {
 
@@ -29,7 +29,7 @@ package object webhooks {
   private[webhooks] def mergeShutdown[A](stream: UStream[A], shutdownSignal: Promise[Nothing, Unit]): UStream[A] =
     stream
       .map(Left(_))
-      .mergeHaltRight(ZStream.fromZIO(shutdownSignal.await.map(Right(_))))
+      .mergeTerminateRight(UStream.fromEffect(shutdownSignal.await.map(Right(_))))
       .collectLeft
 
   type HttpHeader = (String, String)

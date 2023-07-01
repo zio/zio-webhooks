@@ -34,5 +34,5 @@ trait WebhookEventRepo {
   /**
    * Used by the server to subscribe to new webhook events.
    */
-  def subscribeToNewEvents: URIO[Scope, Dequeue[WebhookEvent]]
+  def subscribeToNewEvents: UManaged[Dequeue[WebhookEvent]]
 }
