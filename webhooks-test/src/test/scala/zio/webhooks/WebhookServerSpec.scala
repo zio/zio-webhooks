@@ -308,9 +308,9 @@ object WebhookServerSpec extends DefaultRunnableSpec {
             ) { (events, _) =>
               UStream
                 .fromQueue(events)
-                .filter(_.status == WebhookEventStatus.Failed)
+                .collect { case e if e.status == WebhookEventStatus.Failed => Right(e) }
                 .take(n.toLong)
-                .mergeTerminateLeft(UStream.repeatEffect(TestClock.adjust(7.days)))
+                .mergeTerminateLeft(UStream.repeatEffect(TestClock.adjust(7.days)).map(Left(_)))
                 .runDrain *> assertCompletesM
             }
           },
